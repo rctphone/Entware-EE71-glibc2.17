@@ -71,7 +71,7 @@ CMAKE_OPTIONS += \
 	-DSTATIC_UBOX=ON \
 	-DBUILD_TESTS=OFF \
 	-DHOST_CPU=$(PKGARCH) \
-	-DLOCK_FILE=/opt/tmp/opkg.lock \
+	-DLOCK_FILE=/tmp/opkg.lock \
 	-DPATH_SPEC="$(TARGET_INIT_PATH)" \
 	-DVERSION="$(PKG_SOURCE_VERSION) ($(PKG_SOURCE_DATE))"
 
@@ -84,13 +84,13 @@ CMAKE_HOST_OPTIONS += \
 
 define Package/opkg/install
 #	$(INSTALL_DIR) $(1)/usr/lib/opkg
-	$(INSTALL_DIR) $(1)/opt/bin
+	$(INSTALL_DIR) $(1)/usr/bin
 #	$(INSTALL_DIR) $(1)/etc/opkg
 #	$(INSTALL_DIR) $(1)/etc/uci-defaults
 #	$(INSTALL_DATA) ./files/customfeeds.conf $(1)/etc/opkg/customfeeds.conf
 #	$(INSTALL_DATA) ./files/opkg$(2).conf $(1)/etc/opkg.conf
 #	$(INSTALL_BIN) ./files/20_migrate-feeds $(1)/etc/uci-defaults/
-	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/opt/bin/opkg-cl $(1)/opt/bin/opkg
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/bin/opkg-cl $(1)/usr/bin/opkg
 #  ifneq ($(CONFIG_SIGNATURE_CHECK),)
 #	echo "option check_signature" >> $(1)/etc/opkg.conf
 #  endif

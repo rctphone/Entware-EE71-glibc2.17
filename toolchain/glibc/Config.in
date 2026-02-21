@@ -6,6 +6,9 @@ choice
 	help
 	  Select the version of glibc you wish to use.
 
+	config GLIBC_USE_VERSION_2_17
+		bool "glibc 2.17"
+
 	config GLIBC_USE_VERSION_2_23
 		bool "glibc 2.23"
 

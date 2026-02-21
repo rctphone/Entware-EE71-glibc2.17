@@ -170,7 +170,7 @@ ifeq ($(CONFIG_arm),y)
   ifneq ($(CONFIG_SOFT_FLOAT),y)
     GCC_CONFIGURE+= \
 		--with-fpu=$(word 2, $(subst +, ",$(CONFIG_CPU_TYPE))) \
-		--with-float=hard
+		--with-float=softfp
   endif
 
   # Do not let TARGET_CFLAGS get poisoned by extra CPU optimization flags

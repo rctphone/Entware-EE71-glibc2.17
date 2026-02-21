@@ -29,14 +29,14 @@ define Package/openssl/add-module
   $(eval OSSL_PKG:=$(if $(4),$(4),libopenssl-$(MOD_NAME)))
   $(info Package/openssl/add-module 1='$(1)'; 2='$(2)'; 3='$(3)' 4='$(4)')
   $(info MOD_TYPE='$(MOD_TYPE)'; MOD_NAME='$(MOD_NAME)'; MOD_DIR='$(MOD_DIR)' OSSL_PKG='$(OSSL_PKG)')
-  Package/$(OSSL_PKG)/conffiles:=/opt/etc/ssl/modules.cnf.d/$(MOD_NAME).cnf
+  Package/$(OSSL_PKG)/conffiles:=/etc/ssl/modules.cnf.d/$(MOD_NAME).cnf
 
   define Package/$(OSSL_PKG)/install
 	$$(INSTALL_DIR)  $$(1)/$(MOD_DIR)
 	$$(INSTALL_BIN)  $$(PKG_INSTALL_DIR)/$(MOD_DIR)/$(MOD_NAME).so \
 			 $$(1)/$(MOD_DIR)
-	$$(INSTALL_DIR)  $$(1)/opt/etc/ssl/modules.cnf.d
-	$$(INSTALL_DATA) ./files/$(MOD_NAME).cnf $$(1)/opt/etc/ssl/modules.cnf.d/
+	$$(INSTALL_DIR)  $$(1)/etc/ssl/modules.cnf.d
+	$$(INSTALL_DATA) ./files/$(MOD_NAME).cnf $$(1)/etc/ssl/modules.cnf.d/
   endef
 
 #  define Package/$(OSSL_PKG)/postinst
@@ -75,6 +75,6 @@ endef
 # 1 = provider name
 # 2 = [ package name, defaults to libopenssl-$(1) ]
 define Package/openssl/add-provider
-  $(call Package/openssl/add-module,provider,$(1),/opt/lib/$(MODULES_DIR),$(2))
+  $(call Package/openssl/add-module,provider,$(1),/usr/lib/$(MODULES_DIR),$(2))
 endef
 

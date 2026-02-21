@@ -1,0 +1,32 @@
+From: EE71 <ee71@local>
+Subject: [PATCH] Fix --no-whole-archive configure test during bootstrap
+
+During cross-compilation bootstrap, no C library exists in the sysroot
+yet. The configure test for --no-whole-archive tries to link a test
+binary which fails because the linker cannot find the dynamic linker
+(ld-linux.so.3).
+
+Fix by using -static in the test so the linker doesn't look for the
+dynamic linker.
+
+--- a/configure.in
++++ b/configure.in
+@@ -1793,7 +1793,7 @@ __throw () {}
+ EOF
+ dnl No \ in command here because it ends up inside ''.
+ if AC_TRY_COMMAND([${CC-cc} $CFLAGS $CPPFLAGS $LDFLAGS
+-			    -nostdlib -nostartfiles -Wl,--no-whole-archive
++			    -nostdlib -nostartfiles -static -Wl,--no-whole-archive
+ 			    -o conftest conftest.c 1>&AS_MESSAGE_LOG_FD]); then
+   libc_cv_ld_no_whole_archive=yes
+ else
+--- a/configure
++++ b/configure
+@@ -6919,7 +6919,7 @@ __throw () {}
+ EOF
+ if { ac_try='${CC-cc} $CFLAGS $CPPFLAGS $LDFLAGS
+-			    -nostdlib -nostartfiles -Wl,--no-whole-archive
++			    -nostdlib -nostartfiles -static -Wl,--no-whole-archive
+ 			    -o conftest conftest.c 1>&5'
+   { { eval echo "\"\$as_me\":${as_lineno-$LINENO}: \"$ac_try\""; } >&5
+   (eval $ac_try) 2>&5

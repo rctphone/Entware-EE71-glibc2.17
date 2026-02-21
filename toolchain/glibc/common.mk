@@ -16,6 +16,10 @@ PKG_SOURCE_URL:=@GNU/glibc
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.bz2
 PKG_CPE_ID:=cpe:/a:gnu:glibc
 
+ifeq ($(PKG_VERSION),2.17)
+  PKG_HASH:=80f5acd0bbc573ad80579ae98c789143c75f13fb39e4dbd2449c086774b8315c
+endif
+
 ifeq ($(PKG_VERSION),2.23)
   PKG_HASH:=f39f068ce7d749608ff15182b7da28627dd129eaba2687e28bec876d26135629
 endif
@@ -51,11 +55,18 @@ endif
 # -Os miscompiles w. 2.24 gcc5/gcc6
 # only -O2 tested by upstream changeset
 # "Optimize i386 syscall inlining for GCC 5"
+#
+# glibc 2.17 needs extra warning suppression when built with GCC 8+
+# (same flags used by crosstool-ng 1.26.0 for glibc 2.17)
+GLIBC_2_17_EXTRA_CFLAGS:=$(if $(CONFIG_GLIBC_USE_VERSION_2_17), \
+	-Wno-missing-attributes -Wno-array-bounds -Wno-array-parameter \
+	-Wno-stringop-overflow -Wno-maybe-uninitialized)
+
 GLIBC_CONFIGURE:= \
 	unset LD_LIBRARY_PATH; \
 	BUILD_CC="$(HOSTCC)" \
 	$(TARGET_CONFIGURE_OPTS) \
-	CFLAGS="-O2 $(filter-out -O%,$(call qstrip,$(TARGET_CFLAGS)))" \
+	CFLAGS="-O2 $(filter-out -O%,$(call qstrip,$(TARGET_CFLAGS))) $(GLIBC_2_17_EXTRA_CFLAGS)" \
 	libc_cv_slibdir="/lib" \
 	use_ldconfig=no \
 	$(HOST_BUILD_DIR)/$(GLIBC_PATH)configure \
@@ -73,6 +84,7 @@ GLIBC_CONFIGURE:= \
 		  $(if $(CONFIG_PKG_CC_STACKPROTECTOR_STRONG),--enable-stack-protector=strong) \
 		  $(if $(CONFIG_PKG_CC_STACKPROTECTOR_ALL),--enable-stack-protector=all) \
 		  $(if $(CONFIG_PKG_RELRO_FULL),--enable-bind-now) \
+		  $(if $(CONFIG_GLIBC_USE_VERSION_2_17),--enable-obsolete-rpc) \
 		  $(if $(CONFIG_GLIBC_USE_VERSION_2_23),--enable-obsolete-rpc) \
 		  $(if $(CONFIG_GLIBC_USE_VERSION_2_27),--enable-obsolete-rpc) \
 		  $(if $(CONFIG_GLIBC_USE_VERSION_2_27),--enable-obsolete-nsl) \

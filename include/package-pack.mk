@@ -6,7 +6,7 @@ ifndef DUMP
   include $(INCLUDE_DIR)/feeds.mk
 endif
 
-IPKG_STATE_DIR:=$(TARGET_DIR)/opt/lib/opkg
+IPKG_STATE_DIR:=$(TARGET_DIR)/usr/lib/opkg
 
 define description_escape
 $(subst `,\`,$(subst $$,\$$,$(subst ",\",$(subst \,\\,$(1)))))
@@ -482,8 +482,8 @@ endif
 				[ -f "$$(IDIR_$(1))/$$$$x" ] || keepfiles="$$$${keepfiles:+$$$$keepfiles }$$$$x"; \
 			done; \
 			[ -z "$$$$keepfiles" ] || { \
-				mkdir -p $$(IDIR_$(1))/opt/lib/upgrade/keep.d; \
-				for x in $$$$keepfiles; do echo $$$$x >> $$(IDIR_$(1))/opt/lib/upgrade/keep.d/$(1); done; \
+				mkdir -p $$(IDIR_$(1))/usr/lib/upgrade/keep.d; \
+				for x in $$$$keepfiles; do echo $$$$x >> $$(IDIR_$(1))/usr/lib/upgrade/keep.d/$(1); done; \
 			}; \
 		)
     endif
@@ -520,16 +520,16 @@ ifeq ($(CONFIG_USE_APK),)
 	$(FAKEROOT) $(STAGING_DIR_HOST)/bin/bash $(SCRIPT_DIR)/ipkg-build -m "$(FILE_MODES)" $$(IDIR_$(1)) $$(PDIR_$(1))
 else
 	mkdir -p $$(ADIR_$(1))/
-	mkdir -p $$(IDIR_$(1))/opt/lib/apk/packages/
+	mkdir -p $$(IDIR_$(1))/usr/lib/apk/packages/
 
 	(cd $$(ADIR_$(1)); $($(1)_COMMANDS))
 
 	( \
 		echo "#!/bin/sh"; \
 		echo "[ \"\$$$${IPKG_NO_SCRIPT}\" = \"1\" ] && exit 0"; \
-		echo "[ -s "/opt/lib/functions.sh" ] || exit 0"; \
-		echo ". /opt/lib/functions.sh"; \
-		echo 'export root="/opt"'; \
+		echo "[ -s "/lib/functions.sh" ] || exit 0"; \
+		echo ". /lib/functions.sh"; \
+		echo 'export root=""'; \
 		echo 'export pkgname="$(1)$$(ABIV_$(1))"'; \
 		echo "add_group_and_user"; \
 		echo "default_postinst"; \
@@ -552,9 +552,9 @@ else
 
 	( \
 		echo "#!/bin/sh"; \
-		echo "[ -s "/opt/lib/functions.sh" ] || exit 0"; \
-		echo ". /opt/lib/functions.sh"; \
-		echo 'export root="/opt"'; \
+		echo "[ -s "/lib/functions.sh" ] || exit 0"; \
+		echo ". /lib/functions.sh"; \
+		echo 'export root=""'; \
 		echo 'export pkgname="$(1)$$(ABIV_$(1))"'; \
 		echo "default_prerm"; \
 		[ ! -f $$(ADIR_$(1))/prerm-pkg ] || sed '/^\s*#!/d' "$$(ADIR_$(1))/prerm-pkg"; \
@@ -562,27 +562,27 @@ else
 
 	[ ! -f $$(ADIR_$(1))/postrm ] || sed -zi 's/^\s*#!/#!/' "$$(ADIR_$(1))/postrm";
 
-	if [ -n "$(USERID)" ]; then echo $(USERID) > $$(IDIR_$(1))/opt/lib/apk/packages/$(1)$$(ABIV_$(1)).rusers; fi;
-	if [ -n "$(ALTERNATIVES)" ]; then echo $(ALTERNATIVES) > $$(IDIR_$(1))/opt/lib/apk/packages/$(1)$$(ABIV_$(1)).alternatives; fi;
-	(cd $$(IDIR_$(1)) && find . -type f,l -printf "/%P\n" | sort > $(TMP_DIR)/$(1).list && mv $(TMP_DIR)/$(1).list $$(IDIR_$(1))/opt/lib/apk/packages/$(1)$$(ABIV_$(1)).list)
+	if [ -n "$(USERID)" ]; then echo $(USERID) > $$(IDIR_$(1))/usr/lib/apk/packages/$(1)$$(ABIV_$(1)).rusers; fi;
+	if [ -n "$(ALTERNATIVES)" ]; then echo $(ALTERNATIVES) > $$(IDIR_$(1))/usr/lib/apk/packages/$(1)$$(ABIV_$(1)).alternatives; fi;
+	(cd $$(IDIR_$(1)) && find . -type f,l -printf "/%P\n" | sort > $(TMP_DIR)/$(1).list && mv $(TMP_DIR)/$(1).list $$(IDIR_$(1))/usr/lib/apk/packages/$(1)$$(ABIV_$(1)).list)
 	# Move conffiles to IDIR and build conffiles_static with csums
 	if [ -f $$(ADIR_$(1))/conffiles ]; then \
-		mv -f $$(ADIR_$(1))/conffiles $$(IDIR_$(1))/opt/lib/apk/packages/$(1)$$(ABIV_$(1)).conffiles; \
-		for file in $$$$(cat $$(IDIR_$(1))/opt/lib/apk/packages/$(1)$$(ABIV_$(1)).conffiles); do \
+		mv -f $$(ADIR_$(1))/conffiles $$(IDIR_$(1))/usr/lib/apk/packages/$(1)$$(ABIV_$(1)).conffiles; \
+		for file in $$$$(cat $$(IDIR_$(1))/usr/lib/apk/packages/$(1)$$(ABIV_$(1)).conffiles); do \
 			[ -f $$(IDIR_$(1))/$$$$file ] || continue; \
 			csum=$$$$($(MKHASH) sha256 $$(IDIR_$(1))/$$$$file); \
-			echo $$$$file $$$$csum >> $$(IDIR_$(1))/opt/lib/apk/packages/$(1)$$(ABIV_$(1)).conffiles_static; \
+			echo $$$$file $$$$csum >> $$(IDIR_$(1))/usr/lib/apk/packages/$(1)$$(ABIV_$(1)).conffiles_static; \
 		done; \
 	fi
 
 	# Some package (base-files) manually append stuff to conffiles
 	# Append stuff from it and delete the CONTROL directory since everything else should be migrated
 	if [ -f $$(IDIR_$(1))/CONTROL/conffiles ]; then \
-		echo $$$$(IDIR_$(1))/CONTROL/conffiles >> $$(IDIR_$(1))/opt/lib/apk/packages/$(1)$$(ABIV_$(1)).conffiles; \
+		echo $$$$(IDIR_$(1))/CONTROL/conffiles >> $$(IDIR_$(1))/usr/lib/apk/packages/$(1)$$(ABIV_$(1)).conffiles; \
 		for file in $$$$(cat $$(IDIR_$(1))/CONTROL/conffiles); do \
 			[ -f $$(IDIR_$(1))/$$$$file ] || continue; \
 			csum=$$$$($(MKHASH) sha256 $$(IDIR_$(1))/$$$$file); \
-			echo $$$$file $$$$csum >> $$(IDIR_$(1))/opt/lib/apk/packages/$(1)$$(ABIV_$(1)).conffiles_static; \
+			echo $$$$file $$$$csum >> $$(IDIR_$(1))/usr/lib/apk/packages/$(1)$$(ABIV_$(1)).conffiles_static; \
 		done; \
 		rm -rf $$(IDIR_$(1))/CONTROL/conffiles; \
 	fi

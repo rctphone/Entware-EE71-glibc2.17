@@ -236,7 +236,7 @@ ifeq ($(LIBC),glibc)
   endif
 endif
 
-TARGET_LDFLAGS:= -Wl,--dynamic-linker=/opt/lib/$(DYNLINKER) -Wl,-rpath=/opt/lib
+TARGET_LDFLAGS:= -Wl,--dynamic-linker=/lib/$(DYNLINKER) -Wl,-rpath-link=$(STAGING_DIR)/usr/lib
 
 ifeq ($(CONFIG_ARCH_64BIT),y)
   LIB_SUFFIX:=64
@@ -291,7 +291,7 @@ ifeq ($(CONFIG_SOFT_FLOAT),y)
 else
   SOFT_FLOAT_CONFIG_OPTION:=
   ifeq ($(CONFIG_arm),y)
-    TARGET_CFLAGS+= -mfloat-abi=hard
+    TARGET_CFLAGS+= -mfloat-abi=softfp
   endif
 endif
 

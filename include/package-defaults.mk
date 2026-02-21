@@ -77,7 +77,7 @@ else
     DISABLE_NLS:=--disable-nls
 endif
 
-CONFIGURE_PREFIX:=/opt
+CONFIGURE_PREFIX:=/usr
 CONFIGURE_ARGS = \
 		--target=$(GNU_TARGET_NAME) \
 		--host=$(GNU_TARGET_NAME) \
@@ -90,9 +90,9 @@ CONFIGURE_ARGS = \
 		--bindir=$(CONFIGURE_PREFIX)/bin \
 		--sbindir=$(CONFIGURE_PREFIX)/sbin \
 		--libexecdir=$(CONFIGURE_PREFIX)/lib \
-		--sysconfdir=/opt/etc \
+		--sysconfdir=/etc \
 		--datadir=$(CONFIGURE_PREFIX)/share \
-		--localstatedir=/opt/var \
+		--localstatedir=/var \
 		--mandir=$(CONFIGURE_PREFIX)/share/man \
 		--infodir=$(CONFIGURE_PREFIX)/share/info \
 		$(DISABLE_NLS) \

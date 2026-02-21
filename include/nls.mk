@@ -4,10 +4,10 @@
 
 # iconv full
 ifeq ($(CONFIG_BUILD_NLS),y)
-	ICONV_PREFIX:=$(STAGING_DIR)/opt/lib/libiconv-full
+	ICONV_PREFIX:=$(STAGING_DIR)/usr/lib/libiconv-full
 	ICONV_FULL:=1
 
-	INTL_PREFIX:=$(STAGING_DIR)/opt/lib/libintl-full
+	INTL_PREFIX:=$(STAGING_DIR)/usr/lib/libintl-full
 	INTL_FULL:=1
 
 	CMAKE_OPTIONS += -DCMAKE_PREFIX_PATH="$(ICONV_PREFIX);$(INTL_PREFIX)"
