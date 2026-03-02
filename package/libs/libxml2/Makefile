@@ -1,19 +1,23 @@
 # Entware specifics: added -DHAVE_GETENTROPY=OFF
+# EE71: pinned to 2.13.x — last series with SONAME libxml2.so.2
+# (2.14+ bumped soname to libxml2.so.16, breaking OEM binary compat)
+# Based on Entware commit c04cb877 (2.13.6 structure)
 
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=libxml2
-PKG_VERSION:=2.15.1
+PKG_VERSION:=2.13.9
 PKG_RELEASE:=1
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.xz
 PKG_SOURCE_URL:=@GNOME/libxml2/$(basename $(PKG_VERSION))
-PKG_HASH:=c008bac08fd5c7b4a87f7b8a71f283fa581d80d80ff8d2efd3b26224c39bc54c
+PKG_HASH:=a2c9ae7b770da34860050c309f903221c67830c86e4a7e760692b803df95143a
 
 PKG_LICENSE:=MIT
-PKG_LICENSE_FILES:=Copyright
+PKG_LICENSE_FILES:=COPYING
 PKG_CPE_ID:=cpe:/a:xmlsoft:libxml2
 HOST_BUILD_DEPENDS := libiconv-full/host
+PKG_FLAGS:=essential
 
 include $(INCLUDE_DIR)/host-build.mk
 include $(INCLUDE_DIR)/package.mk
@@ -24,9 +28,8 @@ define Package/libxml2
   SECTION:=libs
   CATEGORY:=Libraries
   TITLE:=Gnome XML library
-  URL:=https://gitlab.gnome.org/GNOME/libxml2
+  URL:=http://xmlsoft.org/
   DEPENDS:=+libpthread +zlib $(ICONV_DEPENDS)
-  ABI_VERSION:=16
 endef
 
 define Package/libxml2/description
@@ -38,7 +41,7 @@ define Package/libxml2-dev
   CATEGORY:=Development
   SUBMENU:=Libraries
   TITLE:=Development files for libxml2
-  URL:=https://gitlab.gnome.org/GNOME/libxml2
+  URL:=http://xmlsoft.org/
   DEPENDS:=+libxml2
 endef
 
@@ -52,7 +55,7 @@ define Package/libxml2-utils
   SECTION:=utils
   CATEGORY:=Utilities
   TITLE:=XML command line utilities (xmllint...)
-  URL:=https://gitlab.gnome.org/GNOME/libxml2
+  URL:=http://xmlsoft.org/
   DEPENDS:=+libxml2
 endef
 
@@ -64,7 +67,7 @@ endef
 CMAKE_HOST_OPTIONS += \
 	-DBUILD_SHARED_LIBS=OFF \
 	-DLIBXML2_WITH_C14N=ON \
-	-DLIBXML2_WITH_CATALOG=ON \
+	-DLIBXML2_WITH_CATALOG=OFF \
 	-DLIBXML2_WITH_DEBUG=ON \
 	-DLIBXML2_WITH_FTP=OFF \
 	-DLIBXML2_WITH_HTML=ON \
@@ -102,7 +105,7 @@ CMAKE_HOST_OPTIONS += \
 CMAKE_OPTIONS += \
 	-DBUILD_SHARED_LIBS=ON \
 	-DLIBXML2_WITH_C14N=ON \
-	-DLIBXML2_WITH_CATALOG=ON \
+	-DLIBXML2_WITH_CATALOG=OFF \
 	-DLIBXML2_WITH_DEBUG=ON \
 	-DLIBXML2_WITH_FTP=OFF \
 	-DLIBXML2_WITH_HTML=ON \
@@ -142,28 +145,31 @@ CMAKE_OPTIONS += \
 
 define Build/InstallDev
 	$(INSTALL_DIR) $(2)/bin
-	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/opt/bin/xml2-config \
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/bin/xml2-config \
 		$(2)/bin/$(GNU_TARGET_NAME)-xml2-config
-	$(SED) 's,^\(prefix\|exec_prefix\)=.*,\1=$(STAGING_DIR)/opt,g' \
+	$(SED) 's,^\(prefix\|exec_prefix\)=.*,\1=$(STAGING_DIR)/usr,g' \
 		$(2)/bin/$(GNU_TARGET_NAME)-xml2-config
 	$(LN) $(GNU_TARGET_NAME)-xml2-config $(2)/bin/xml2-config
 
-	$(INSTALL_DIR) $(1)/opt/bin
-	$(CP) $(PKG_INSTALL_DIR)/opt/bin/xmlcatalog $(1)/opt/bin/
-	$(CP) $(PKG_INSTALL_DIR)/opt/bin/xmllint $(1)/opt/bin/
+	$(INSTALL_DIR) $(1)/usr/bin
+	$(CP) $(PKG_INSTALL_DIR)/usr/bin/xmlcatalog $(1)/usr/bin/
+	$(CP) $(PKG_INSTALL_DIR)/usr/bin/xmllint $(1)/usr/bin/
 
-	$(INSTALL_DIR) $(1)/opt/include
-	$(CP) $(PKG_INSTALL_DIR)/opt/include/libxml2 $(1)/opt/include/
+	$(INSTALL_DIR) $(1)/usr/include
+	$(CP) $(PKG_INSTALL_DIR)/usr/include/libxml2 $(1)/usr/include/
 
-	$(INSTALL_DIR) $(1)/opt/lib
-	$(CP) $(PKG_INSTALL_DIR)/opt/lib/libxml2.so* $(1)/opt/lib/
+	$(INSTALL_DIR) $(1)/usr/lib
+	$(CP) $(PKG_INSTALL_DIR)/usr/lib/libxml2.so* $(1)/usr/lib/
 
-	$(INSTALL_DIR) $(1)/opt/lib/cmake/libxml2
-	$(CP) $(PKG_INSTALL_DIR)/opt/lib/cmake/libxml2/*.cmake \
-		$(1)/opt/lib/cmake/libxml2
+	$(INSTALL_DIR) $(1)/usr/lib/cmake/libxml2
+	$(CP) $(PKG_INSTALL_DIR)/usr/lib/cmake/libxml2-$(PKG_VERSION)/*.cmake \
+		$(1)/usr/lib/cmake/libxml2
 
-	$(INSTALL_DIR) $(1)/opt/lib/pkgconfig
-	$(INSTALL_DATA) $(PKG_INSTALL_DIR)/opt/lib/pkgconfig/libxml-2.0.pc $(1)/opt/lib/pkgconfig/
+	$(INSTALL_DIR) $(1)/usr/lib/pkgconfig
+	$(INSTALL_DATA) $(PKG_INSTALL_DIR)/usr/lib/pkgconfig/libxml-2.0.pc $(1)/usr/lib/pkgconfig/
+
+	$(INSTALL_DIR) $(2)/share/aclocal/
+	$(INSTALL_DATA) $(PKG_INSTALL_DIR)/usr/share/aclocal/* $(2)/share/aclocal
 endef
 
 define Host/Install
@@ -173,34 +179,37 @@ define Host/Install
 endef
 
 define Package/libxml2/install
-	$(INSTALL_DIR) $(1)/opt/lib
-	$(CP) $(PKG_INSTALL_DIR)/opt/lib/libxml2.so.* $(1)/opt/lib/
+	$(INSTALL_DIR) $(1)/usr/lib
+	$(CP) $(PKG_INSTALL_DIR)/usr/lib/libxml2.so.* $(1)/usr/lib/
 endef
 
 define Package/libxml2-dev/install
-	$(INSTALL_DIR) $(1)/opt/bin
-	$(CP) $(PKG_INSTALL_DIR)/opt/bin/xml2-config $(1)/opt/bin/
-	$(SED) "s,$(STAGING_DIR),,g" $(1)/opt/bin/xml2-config
+	$(INSTALL_DIR) $(1)/usr/bin
+	$(CP) $(PKG_INSTALL_DIR)/usr/bin/xml2-config $(1)/usr/bin/
+	$(SED) "s,$(STAGING_DIR),,g" $(1)/usr/bin/xml2-config
 
-	$(INSTALL_DIR) $(1)/opt/include/
-	$(CP) $(PKG_INSTALL_DIR)/opt/include/* $(1)/opt/include/
+	$(INSTALL_DIR) $(1)/usr/include/
+	$(CP) $(PKG_INSTALL_DIR)/usr/include/* $(1)/usr/include/
 
-	$(INSTALL_DIR) $(1)/opt/lib
-	$(CP) $(PKG_INSTALL_DIR)/opt/lib/libxml2.so $(1)/opt/lib/
+	$(INSTALL_DIR) $(1)/usr/lib
+	$(CP) $(PKG_INSTALL_DIR)/usr/lib/libxml2.so $(1)/usr/lib/
 
-	$(INSTALL_DIR) $(1)/opt/lib/{cmake,pkgconfig}
-	$(CP) $(PKG_INSTALL_DIR)/opt/lib/{cmake,pkgconfig} $(1)/opt/lib/
-	$(SED) "s,$(STAGING_DIR),,g" $(1)/opt/lib/pkgconfig/*.pc
+	$(INSTALL_DIR) $(1)/usr/lib/{cmake,pkgconfig}
+	$(CP) $(PKG_INSTALL_DIR)/usr/lib/{cmake,pkgconfig} $(1)/usr/lib/
+	$(SED) "s,$(STAGING_DIR),,g" $(1)/usr/lib/pkgconfig/*.pc
+
+	$(INSTALL_DIR) $(1)/usr/share/aclocal
+	$(CP) $(PKG_INSTALL_DIR)/usr/share/aclocal/* $(1)/usr/share/aclocal
 
 	# XXX Entware specific: fix paths
 	$(SED) 's,/lib/libiconv-full,,g' \
-		$(1)/opt/bin/xml2-config $(1)/opt/lib/pkgconfig/*.pc
+		$(1)/usr/bin/xml2-config $(1)/usr/lib/pkgconfig/*.pc
 endef
 
 define Package/libxml2-utils/install
-	$(INSTALL_DIR) $(1)/opt/bin
-	$(CP) $(PKG_INSTALL_DIR)/opt/bin/xmllint $(1)/opt/bin/
-	$(CP) $(PKG_INSTALL_DIR)/opt/bin/xmlcatalog $(1)/opt/bin/
+	$(INSTALL_DIR) $(1)/usr/bin
+	$(CP) $(PKG_INSTALL_DIR)/usr/bin/xmllint $(1)/usr/bin/
+	$(CP) $(PKG_INSTALL_DIR)/usr/bin/xmlcatalog $(1)/usr/bin/
 endef
 
 $(eval $(call HostBuild))

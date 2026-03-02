@@ -27,6 +27,7 @@ PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-$(BUILD_VARIANT)/$(PKG_NAME)-$(PKG_UPSTR
 PKG_INSTALL:=1
 PKG_BUILD_PARALLEL:=1
 PKG_BUILD_FLAGS:=lto
+PKG_FLAGS:=essential
 PKG_ASLR_PIE_REGULAR:=1
 PKG_CONFIG_DEPENDS:= CONFIG_PACKAGE_dnsmasq_$(BUILD_VARIANT)_dhcp \
 	CONFIG_PACKAGE_dnsmasq_$(BUILD_VARIANT)_dhcpv6 \
@@ -89,8 +90,8 @@ and nftset, Conntrack support & NO_ID enabled by default.
 endef
 
 define Package/dnsmasq/conffiles
-/opt/etc/dnsmasq.conf
-/opt/etc/dnsmasq.d/
+/etc/dnsmasq.conf
+/etc/dnsmasq.d/
 endef
 
 define Package/dnsmasq-full/config
@@ -160,15 +161,15 @@ MAKE_FLAGS := \
 	CFLAGS="$(TARGET_CFLAGS) $(TARGET_CPPFLAGS)" \
 	LDFLAGS="$(TARGET_LDFLAGS)" \
 	COPTS="$(COPTS)" \
-	PREFIX="/opt"
+	PREFIX="/usr"
 
 define Package/dnsmasq/install
-	$(INSTALL_DIR) $(1)/opt/sbin
-	$(CP) $(PKG_INSTALL_DIR)/opt/sbin/dnsmasq $(1)/opt/sbin/
-	$(INSTALL_DIR) $(1)/opt/etc
-	$(INSTALL_CONF) $(PKG_BUILD_DIR)/dnsmasq.conf.example $(1)/opt/etc/dnsmasq.conf
-	$(INSTALL_DIR) $(1)/opt/etc/init.d
-	$(INSTALL_BIN) ./files/S56dnsmasq $(1)/opt/etc/init.d/
+	$(INSTALL_DIR) $(1)/usr/sbin
+	$(CP) $(PKG_INSTALL_DIR)/usr/sbin/dnsmasq $(1)/usr/sbin/
+	$(INSTALL_DIR) $(1)/etc
+	$(INSTALL_CONF) $(PKG_BUILD_DIR)/dnsmasq.conf.example $(1)/etc/dnsmasq.conf
+	$(INSTALL_DIR) $(1)/etc/init.d
+	$(INSTALL_BIN) ./files/S56dnsmasq $(1)/etc/init.d/
 endef
 
 Package/dnsmasq-dhcpv6/install = $(Package/dnsmasq/install)
@@ -176,8 +177,8 @@ Package/dnsmasq-dhcpv6/install = $(Package/dnsmasq/install)
 define Package/dnsmasq-full/install
 $(call Package/dnsmasq/install,$(1))
 ifneq ($(CONFIG_PACKAGE_dnsmasq_full_dnssec),)
-	$(INSTALL_DIR) $(1)/opt/share/dnsmasq
-	$(INSTALL_CONF) $(PKG_BUILD_DIR)/trust-anchors.conf $(1)/opt/share/dnsmasq
+	$(INSTALL_DIR) $(1)/usr/share/dnsmasq
+	$(INSTALL_CONF) $(PKG_BUILD_DIR)/trust-anchors.conf $(1)/usr/share/dnsmasq
 endif
 endef
 

@@ -30,6 +30,7 @@ PKG_FIXUP:=autoreconf
 
 PKG_INSTALL:=1
 PKG_BUILD_FLAGS:=gc-sections no-lto
+PKG_FLAGS:=essential
 PKG_BUILD_PARALLEL:=1
 PKG_LICENSE:=GPL-2.0
 PKG_CPE_ID:=cpe:/a:netfilter:iptables
@@ -47,13 +48,13 @@ define Package/iptables
   SUBMENU:=Firewall
   URL:=https://netfilter.org/
   ALTERNATIVES:=\
-    200:/opt/bin/iptables-xml:/opt/sbin/xtables-multi \
-    200:/opt/sbin/iptables:/opt/sbin/xtables-multi \
-    200:/opt/sbin/iptables-restore:/opt/sbin/xtables-multi \
-    200:/opt/sbin/iptables-save:/opt/sbin/xtables-multi \
-    200:/opt/sbin/ip6tables:/opt/sbin/xtables-multi \
-    200:/opt/sbin/ip6tables-restore:/opt/sbin/xtables-multi \
-    200:/opt/sbin/ip6tables-save:/opt/sbin/xtables-multi
+    200:/usr/bin/iptables-xml:/usr/sbin/xtables-multi \
+    200:/usr/sbin/iptables:/usr/sbin/xtables-multi \
+    200:/usr/sbin/iptables-restore:/usr/sbin/xtables-multi \
+    200:/usr/sbin/iptables-save:/usr/sbin/xtables-multi \
+    200:/usr/sbin/ip6tables:/usr/sbin/xtables-multi \
+    200:/usr/sbin/ip6tables-restore:/usr/sbin/xtables-multi \
+    200:/usr/sbin/ip6tables-save:/usr/sbin/xtables-multi
 ifdef CONFIG_PACKAGE_opt-ndmsv2
   PKGARCH:=$(BOARD)_kn
 endif
@@ -115,7 +116,7 @@ CONFIGURE_ARGS += \
 	--enable-static \
 	--enable-devel \
 	--with-kernel="$(LINUX_DIR)/user_headers" \
-	--with-xtlibdir=/opt/lib/iptables \
+	--with-xtlibdir=/usr/lib/iptables \
 	$(if $(CONFIG_IPV6),,--disable-ipv6)
 
 MAKE_FLAGS := \
@@ -126,39 +127,39 @@ MAKE_FLAGS := \
 
 ifndef CONFIG_PACKAGE_opt-ndmsv2
   define Build/InstallDev
-	$(INSTALL_DIR) $(1)/opt/include
-	$(INSTALL_DIR) $(1)/opt/include/iptables
-	$(INSTALL_DIR) $(1)/opt/include/net/netfilter
+	$(INSTALL_DIR) $(1)/usr/include
+	$(INSTALL_DIR) $(1)/usr/include/iptables
+	$(INSTALL_DIR) $(1)/usr/include/net/netfilter
 
 	# XXX: iptables header fixup, some headers are not installed by iptables anymore
-	$(CP) $(PKG_BUILD_DIR)/include/iptables/*.h $(1)/opt/include/iptables/
-	$(CP) $(PKG_BUILD_DIR)/include/iptables.h $(1)/opt/include/
-	$(CP) $(PKG_BUILD_DIR)/include/ip6tables.h $(1)/opt/include/
-	$(CP) $(PKG_BUILD_DIR)/include/libipulog $(1)/opt/include/
-	$(CP) $(PKG_BUILD_DIR)/include/libiptc $(1)/opt/include/
+	$(CP) $(PKG_BUILD_DIR)/include/iptables/*.h $(1)/usr/include/iptables/
+	$(CP) $(PKG_BUILD_DIR)/include/iptables.h $(1)/usr/include/
+	$(CP) $(PKG_BUILD_DIR)/include/ip6tables.h $(1)/usr/include/
+	$(CP) $(PKG_BUILD_DIR)/include/libipulog $(1)/usr/include/
+	$(CP) $(PKG_BUILD_DIR)/include/libiptc $(1)/usr/include/
 
-	$(CP) $(PKG_INSTALL_DIR)/opt/include/* $(1)/opt/include/
-	$(INSTALL_DIR) $(1)/opt/lib
-	$(CP) $(PKG_INSTALL_DIR)/opt/lib/libxtables.so* $(1)/opt/lib/
-	$(CP) $(PKG_INSTALL_DIR)/opt/lib/libip*tc.so* $(1)/opt/lib/
-	$(INSTALL_DIR) $(1)/opt/lib/pkgconfig
-	$(CP) $(PKG_INSTALL_DIR)/opt/lib/pkgconfig/xtables.pc $(1)/opt/lib/pkgconfig/
-	$(CP) $(PKG_INSTALL_DIR)/opt/lib/pkgconfig/libip*tc.pc $(1)/opt/lib/pkgconfig/
+	$(CP) $(PKG_INSTALL_DIR)/usr/include/* $(1)/usr/include/
+	$(INSTALL_DIR) $(1)/usr/lib
+	$(CP) $(PKG_INSTALL_DIR)/usr/lib/libxtables.so* $(1)/usr/lib/
+	$(CP) $(PKG_INSTALL_DIR)/usr/lib/libip*tc.so* $(1)/usr/lib/
+	$(INSTALL_DIR) $(1)/usr/lib/pkgconfig
+	$(CP) $(PKG_INSTALL_DIR)/usr/lib/pkgconfig/xtables.pc $(1)/usr/lib/pkgconfig/
+	$(CP) $(PKG_INSTALL_DIR)/usr/lib/pkgconfig/libip*tc.pc $(1)/usr/lib/pkgconfig/
 
 	# XXX: needed by firewall3
-	$(CP) $(PKG_BUILD_DIR)/extensions/libiptext*.so $(1)/opt/lib/
+	$(CP) $(PKG_BUILD_DIR)/extensions/libiptext*.so $(1)/usr/lib/
   endef
 endif
 
 define Package/iptables/install
-	$(INSTALL_DIR) $(1)/opt/sbin
-	$(CP) $(PKG_INSTALL_DIR)/opt/sbin/xtables-multi $(1)/opt/sbin/
-	$(INSTALL_DIR) $(1)/opt/lib
-	$(CP) $(PKG_INSTALL_DIR)/opt/lib/libip*tc.so* $(1)/opt/lib/
-	$(CP) $(PKG_BUILD_DIR)/extensions/libiptext{,4,6}.so $(1)/opt/lib/
-	$(CP) $(PKG_INSTALL_DIR)/opt/lib/libxtables.so* $(1)/opt/lib/
-	$(INSTALL_DIR) $(1)/opt/lib/iptables
-	$(CP) $(PKG_BUILD_DIR)/extensions/libxt_*.so $(1)/opt/lib/iptables/
+	$(INSTALL_DIR) $(1)/usr/sbin
+	$(CP) $(PKG_INSTALL_DIR)/usr/sbin/xtables-multi $(1)/usr/sbin/
+	$(INSTALL_DIR) $(1)/usr/lib
+	$(CP) $(PKG_INSTALL_DIR)/usr/lib/libip*tc.so* $(1)/usr/lib/
+	$(CP) $(PKG_BUILD_DIR)/extensions/libiptext{,4,6}.so $(1)/usr/lib/
+	$(CP) $(PKG_INSTALL_DIR)/usr/lib/libxtables.so* $(1)/usr/lib/
+	$(INSTALL_DIR) $(1)/usr/lib/iptables
+	$(CP) $(PKG_BUILD_DIR)/extensions/libxt_*.so $(1)/usr/lib/iptables/
 endef
 
 $(eval $(call BuildPackage,iptables))

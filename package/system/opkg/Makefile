@@ -10,7 +10,7 @@ include $(INCLUDE_DIR)/kernel.mk
 
 PKG_NAME:=opkg
 PKG_RELEASE:=1
-#PKG_FLAGS:=essential
+PKG_FLAGS:=essential
 
 PKG_SOURCE_PROTO:=git
 PKG_SOURCE_URL=$(PROJECT_GIT)/project/opkg-lede.git
@@ -57,11 +57,9 @@ define Package/opkg/description
   opkg knows how to install both .ipk and .deb packages.
 endef
 
-#define Package/opkg/conffiles
-#/etc/opkg.conf
-#/etc/opkg/keys/
-#/etc/opkg/customfeeds.conf
-#endef
+define Package/opkg/conffiles
+/etc/opkg.conf
+endef
 
 TARGET_CFLAGS += -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE -D_FILE_OFFSET_BITS=64
 EXTRA_CFLAGS += $(TARGET_CPPFLAGS)
@@ -69,6 +67,7 @@ EXTRA_CFLAGS += $(TARGET_CPPFLAGS)
 CMAKE_OPTIONS += \
 	-DSTATIC=ON \
 	-DSTATIC_UBOX=ON \
+	-DCMAKE_C_FLAGS="$(TARGET_CFLAGS) $(EXTRA_CFLAGS) -I$(STAGING_DIR)/usr/include" \
 	-DBUILD_TESTS=OFF \
 	-DHOST_CPU=$(PKGARCH) \
 	-DLOCK_FILE=/tmp/opkg.lock \
@@ -83,19 +82,10 @@ CMAKE_HOST_OPTIONS += \
 	-DVERSION="$(PKG_SOURCE_VERSION) ($(PKG_SOURCE_DATE))"
 
 define Package/opkg/install
-#	$(INSTALL_DIR) $(1)/usr/lib/opkg
 	$(INSTALL_DIR) $(1)/usr/bin
-#	$(INSTALL_DIR) $(1)/etc/opkg
-#	$(INSTALL_DIR) $(1)/etc/uci-defaults
-#	$(INSTALL_DATA) ./files/customfeeds.conf $(1)/etc/opkg/customfeeds.conf
-#	$(INSTALL_DATA) ./files/opkg$(2).conf $(1)/etc/opkg.conf
-#	$(INSTALL_BIN) ./files/20_migrate-feeds $(1)/etc/uci-defaults/
 	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/bin/opkg-cl $(1)/usr/bin/opkg
-#  ifneq ($(CONFIG_SIGNATURE_CHECK),)
-#	echo "option check_signature" >> $(1)/etc/opkg.conf
-#  endif
-#	$(INSTALL_DIR) $(1)/usr/sbin
-#	$(INSTALL_BIN) ./files/opkg-key $(1)/usr/sbin/
+	$(INSTALL_DIR) $(1)/etc/opkg
+	$(INSTALL_DATA) ./files/opkg.conf $(1)/etc/opkg.conf
 endef
 
 define Host/Install

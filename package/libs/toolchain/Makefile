@@ -14,7 +14,7 @@ PKG_RELEASE:=12
 PKG_MAINTAINER:=Felix Fietkau <nbd@nbd.name>
 PKG_LICENSE:=GPL-3.0-with-GCC-exception
 
-#PKG_FLAGS:=hold essential nonshared
+PKG_FLAGS:=essential
 
 include $(INCLUDE_DIR)/package.mk
 
@@ -540,91 +540,91 @@ Build/Compile = $(Build/Compile/Default)
 ifeq ($(CONFIG_EXTERNAL_TOOLCHAIN),)
 
   define Package/libgcc/install
-	$(INSTALL_DIR) $(1)/opt/lib
-	$(CP) $(TOOLCHAIN_DIR)/lib/libgcc_s.so.* $(1)/opt/lib/
+	$(INSTALL_DIR) $(1)/lib
+	$(CP) $(TOOLCHAIN_DIR)/lib/libgcc_s.so.* $(1)/lib/
   endef
 
   define Package/libatomic/install
-	$(INSTALL_DIR) $(1)/opt/lib
-	$(CP) $(TOOLCHAIN_DIR)/lib/libatomic.so.* $(1)/opt/lib/
+	$(INSTALL_DIR) $(1)/usr/lib
+	$(CP) $(TOOLCHAIN_DIR)/lib/libatomic.so.* $(1)/usr/lib/
   endef
 
   define Package/libquadmath/install
-	$(INSTALL_DIR) $(1)/opt/lib
-	$(CP) $(TOOLCHAIN_DIR)/lib/libquadmath.so.* $(1)/opt/lib/
+	$(INSTALL_DIR) $(1)/usr/lib
+	$(CP) $(TOOLCHAIN_DIR)/lib/libquadmath.so.* $(1)/usr/lib/
   endef
 
   define Package/libgfortran/install
-	$(INSTALL_DIR) $(1)/opt/lib
-	$(CP) $(TOOLCHAIN_DIR)/lib/libgfortran.so.* $(1)/opt/lib/
+	$(INSTALL_DIR) $(1)/usr/lib
+	$(CP) $(TOOLCHAIN_DIR)/lib/libgfortran.so.* $(1)/usr/lib/
   endef
 
   define Package/libssp/install
-	$(INSTALL_DIR) $(1)/opt/lib
-	$(CP) $(TOOLCHAIN_DIR)/lib/libssp.so.* $(1)/opt/lib/
+	$(INSTALL_DIR) $(1)/usr/lib
+	$(CP) $(TOOLCHAIN_DIR)/lib/libssp.so.* $(1)/usr/lib/
   endef
 
   define Package/libstdcpp/install
-	$(INSTALL_DIR) $(1)/opt/lib
-	$(CP) $(TOOLCHAIN_DIR)/lib/libstdc++.so.* $(1)/opt/lib/
-	rm -rf $(1)/opt/lib/*-gdb.py
+	$(INSTALL_DIR) $(1)/usr/lib
+	$(CP) $(TOOLCHAIN_DIR)/lib/libstdc++.so.* $(1)/usr/lib/
+	rm -rf $(1)/usr/lib/*-gdb.py
   endef
 
   define Package/libasan/install
-	$(INSTALL_DIR) $(1)/opt/lib
-	$(CP) $(TOOLCHAIN_DIR)/lib/libasan.so.* $(1)/opt/lib/
+	$(INSTALL_DIR) $(1)/usr/lib
+	$(CP) $(TOOLCHAIN_DIR)/lib/libasan.so.* $(1)/usr/lib/
   endef
 
   define Package/libtsan/install
-	$(INSTALL_DIR) $(1)/opt/lib
-	$(CP) $(TOOLCHAIN_DIR)/lib/libtsan.so.* $(1)/opt/lib/
+	$(INSTALL_DIR) $(1)/usr/lib
+	$(CP) $(TOOLCHAIN_DIR)/lib/libtsan.so.* $(1)/usr/lib/
   endef
 
   define Package/liblsan/install
-	$(INSTALL_DIR) $(1)/opt/lib
-	$(CP) $(TOOLCHAIN_DIR)/lib/liblsan.so.* $(1)/opt/lib/
+	$(INSTALL_DIR) $(1)/usr/lib
+	$(CP) $(TOOLCHAIN_DIR)/lib/liblsan.so.* $(1)/usr/lib/
   endef
 
   define Package/libubsan/install
-	$(INSTALL_DIR) $(1)/opt/lib
-	$(CP) $(TOOLCHAIN_DIR)/lib/libubsan.so.* $(1)/opt/lib/
+	$(INSTALL_DIR) $(1)/usr/lib
+	$(CP) $(TOOLCHAIN_DIR)/lib/libubsan.so.* $(1)/usr/lib/
   endef
 
   define Package/glibc/install
-	$(INSTALL_DIR) $(1)/opt/etc
-	$(CP) ./glibc-files/etc/* $(1)/opt/etc
-	$(INSTALL_DIR) $(1)/opt/lib
+	$(INSTALL_DIR) $(1)/etc
+	$(CP) ./glibc-files/etc/* $(1)/etc
+	$(INSTALL_DIR) $(1)/lib
 	$(CP) \
 		$(TOOLCHAIN_DIR)/lib/ld*.so.* \
 		$(TOOLCHAIN_DIR)/lib/ld-$(LIBC_SO_VERSION).so \
 		$(TOOLCHAIN_DIR)/lib/libmemusage.so \
 		$(TOOLCHAIN_DIR)/lib/libpcprofile.so \
-		$(1)/opt/lib/
+		$(1)/lib/
 	# keep libcrypt
 	for file in libanl libc libcidn libcrypt libdl libm libnsl libnss_dns libnss_files libresolv libutil; do \
 		for file in $(TOOLCHAIN_DIR)/lib/$$$$file.so.* $(TOOLCHAIN_DIR)/lib/$$$$file-$(LIBC_SO_VERSION).so; do \
 			if [ -e "$$$$file" ]; then \
-				$(CP) $$$$file $(1)/opt/lib/; \
+				$(CP) $$$$file $(1)/lib/; \
 			fi; \
 		done; \
 	done
 ifneq ($(CONFIG_TARGET_x86_64),)
-	$(CP) $(TOOLCHAIN_DIR)/lib/libmvec-$(LIBC_SO_VERSION).so $(1)/opt/lib
-	$(CP) $(TOOLCHAIN_DIR)/lib/libmvec.so.* $(1)/opt/lib
+	$(CP) $(TOOLCHAIN_DIR)/lib/libmvec-$(LIBC_SO_VERSION).so $(1)/lib
+	$(CP) $(TOOLCHAIN_DIR)/lib/libmvec.so.* $(1)/lib
     endif
   endef
 
   LD_MUSL_NAME = $(notdir $(firstword $(wildcard $(TOOLCHAIN_DIR)/lib/libc.so*)))
 
   define Package/musl/install
-	$(INSTALL_DIR) $(1)/opt/lib $(1)/opt/bin
+	$(INSTALL_DIR) $(1)/usr/lib $(1)/usr/bin
 	$(CP) \
 		$(TOOLCHAIN_DIR)/lib/ld-musl-*.so* \
-		$(1)/opt/lib/
+		$(1)/usr/lib/
 	$(CP) \
 		$(TOOLCHAIN_DIR)/lib/libc.so* \
-		$(1)/opt/lib/
-	$(LN) ../lib/$(LD_MUSL_NAME) $(1)/opt/bin/ldd
+		$(1)/usr/lib/
+	$(LN) ../lib/$(LD_MUSL_NAME) $(1)/usr/bin/ldd
   endef
 
   define Package/libc/install
@@ -633,67 +633,65 @@ ifneq ($(CONFIG_TARGET_x86_64),)
   endef
 
   define Package/libc/install_lib
-	$(CP) $(filter-out %/libdl_pic.a %/libpthread_pic.a %/libresolv_pic.a,$(wildcard $(TOOLCHAIN_DIR)/lib/lib*.a)) $(1)/opt/lib/
-	$(if $(wildcard $(TOOLCHAIN_DIR)/lib/libc_so.a),$(CP) $(TOOLCHAIN_DIR)/lib/libc_so.a $(1)/opt/lib/libc_pic.a)
+	$(INSTALL_DIR) $(1)/usr/lib
+	$(CP) $(filter-out %/libdl_pic.a %/libpthread_pic.a %/libresolv_pic.a,$(wildcard $(TOOLCHAIN_DIR)/lib/lib*.a)) $(1)/usr/lib/
+	$(if $(wildcard $(TOOLCHAIN_DIR)/lib/libc_so.a),$(CP) $(TOOLCHAIN_DIR)/lib/libc_so.a $(1)/usr/lib/libc_pic.a)
 	$(if $(LIBGCC_MAP), \
-		$(CP) $(LIBGCC_A) $(1)/opt/lib/libgcc_s_pic.a; \
-		$(CP) $(LIBGCC_MAP) $(1)/opt/lib/libgcc_s_pic.map \
+		$(CP) $(LIBGCC_A) $(1)/usr/lib/libgcc_s_pic.a; \
+		$(CP) $(LIBGCC_MAP) $(1)/usr/lib/libgcc_s_pic.map \
 	)
   endef
 
   define Package/libpthread/install
-	$(INSTALL_DIR) $(1)/opt/lib
+	$(INSTALL_DIR) $(1)/lib
   ifneq ($(CONFIG_USE_MUSL),y)
 	$(CP) \
 		$(TOOLCHAIN_DIR)/lib/libpthread.so.* \
 		$(TOOLCHAIN_DIR)/lib/libpthread-$(LIBC_SO_VERSION).so \
-		$(1)/opt/lib/
+		$(1)/lib/
   endif
   endef
 
   define Package/libthread-db/install
-	$(INSTALL_DIR) $(1)/opt/lib
+	$(INSTALL_DIR) $(1)/lib
 	$(CP) \
-		$(TOOLCHAIN_DIR)/lib/libthread_db.so.* $(1)/opt/lib
+		$(TOOLCHAIN_DIR)/lib/libthread_db.so.* $(1)/lib
 	$(CP) \
-		$(TOOLCHAIN_DIR)/lib/libthread_db-*.so $(1)/opt/lib
+		$(TOOLCHAIN_DIR)/lib/libthread_db-*.so $(1)/lib
   endef
 
   define Package/libpthread/install_lib
-	$(if $(wildcard $(TOOLCHAIN_DIR)/lib/libpthread_so.a),$(CP) $(TOOLCHAIN_DIR)/lib/libpthread_so.a $(1)/opt/lib/libpthread_pic.a)
+	$(if $(wildcard $(TOOLCHAIN_DIR)/lib/libpthread_so.a),$(CP) $(TOOLCHAIN_DIR)/lib/libpthread_so.a $(1)/usr/lib/libpthread_pic.a)
   endef
 
   define Package/librt/install
-	$(INSTALL_DIR) $(1)/opt/lib
+	$(INSTALL_DIR) $(1)/lib
   ifneq ($(CONFIG_USE_MUSL),y)
 	$(CP) \
 		$(TOOLCHAIN_DIR)/lib/librt.so.* \
 		$(TOOLCHAIN_DIR)/lib/librt-$(LIBC_SO_VERSION).so \
-		$(1)/opt/lib/
+		$(1)/lib/
   endif
   endef
 
   define Package/ldd/install
-	$(INSTALL_DIR) $(1)/opt/bin/
-	$(CP) $(TOOLCHAIN_DIR)/bin/ldd $(1)/opt/bin/
-	sed -i 's,^#!.*,#!/bin/sh,' $(1)/opt/bin/ldd
+	$(INSTALL_DIR) $(1)/usr/bin/
+	$(CP) $(TOOLCHAIN_DIR)/bin/ldd $(1)/usr/bin/
+	sed -i 's,^#!.*,#!/bin/sh,' $(1)/usr/bin/ldd
   ifeq ($(CONFIG_USE_GLIBC),y)
-	$(SED) 's|/lib/ld.so.1|/opt/lib/ld.so.1|g; \
-		s|/lib/ld-linux.so.3|/opt/lib/ld-linux.so.3|g; \
-		s|/lib/ld-linux.so.2|/opt/lib/ld-linux.so.2|g; \
-		s|/lib/ld-linux-aarch64.so.1|/opt/lib/ld-linux-aarch64.so.1|g; \
-		s|/lib64/ld-linux-x86-64.so.2|/opt/lib/ld-linux-x86-64.so.2|g' $(1)/opt/bin/ldd
+	# EE71: dynamic linker stays at /lib/ (standard glibc path, not Entware /opt/lib)
+	#$(SED) 's|...|...|g' $(1)/usr/bin/ldd
   endif
   endef
 
   define Package/ldconfig/install
-	$(INSTALL_DIR) $(1)/opt/sbin/
-	$(CP) $(TOOLCHAIN_DIR)/sbin/ldconfig $(1)/opt/sbin/
+	$(INSTALL_DIR) $(1)/usr/sbin/
+	$(CP) $(TOOLCHAIN_DIR)/sbin/ldconfig $(1)/usr/sbin/
   endef
 
   define Package/gconv-modules/install
-	$(INSTALL_DIR) $(1)/opt/lib/gconv
-	$(CP) $(TOOLCHAIN_DIR)/lib/gconv/* $(1)/opt/lib/gconv/
+	$(INSTALL_DIR) $(1)/usr/lib/gconv
+	$(CP) $(TOOLCHAIN_DIR)/lib/gconv/* $(1)/usr/lib/gconv/
   endef
 
 else
