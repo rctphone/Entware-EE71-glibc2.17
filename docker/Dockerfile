@@ -2,8 +2,8 @@
 # Based on Entware's official Docker setup (github.com/Entware/docker)
 # Native toolchain: GCC 13.4.0, binutils 2.34, glibc 2.17
 #
-# Build:  docker build -f Dockerfile.entware -t ee71-entware .
-# Usage:  ./build_entware.sh setup && ./build_entware.sh toolchain
+# Build:  docker build -f docker/Dockerfile -t ee71-entware .
+# Usage:  ./docker/build.sh setup && ./docker/build.sh toolchain
 
 # Main build environment
 FROM debian:bookworm-slim
