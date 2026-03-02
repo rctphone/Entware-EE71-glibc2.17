@@ -1,0 +1,184 @@
+#!/bin/sh
+# /usr/bin/vpn_apply — read /etc/vpn.conf and enforce VPN state
+# Called by: CGIs (enable/disable), init script (boot), manual
+# Single source of truth: /etc/vpn.conf (VPN=wg|ss|off)
+# Route All is always on when VPN is enabled.
+
+VPN_CONF="/etc/vpn.conf"
+WG_CONF="/etc/wireguard/wg0.conf"
+WG_MODULE="/usr/lib/modules/$(uname -r)/kernel/drivers/net/wireguard.ko"
+WG_BIN="/usr/bin/wg"
+WG_QUICK="/usr/bin/wg-quick"
+WG_IFACE="wg0"
+SS_CONF="/etc/shadowsocks.json"
+SS_REDIR="/usr/bin/ss-redir"
+SS_TUNNEL="/usr/bin/ss-tunnel"
+SS_REDIR_PID="/tmp/ss-redir.pid"
+SS_TUNNEL_PID="/tmp/ss-tunnel.pid"
+# Detect LAN subnet from bridge0 (e.g. 192.168.1.0/24)
+LAN_IP=$(ifconfig bridge0 2>/dev/null | sed -n 's/.*inet addr:\([^ ]*\).*/\1/p')
+LAN_IP="${LAN_IP:-192.168.1.1}"
+LAN_NET=$(echo "$LAN_IP" | sed 's/\.[0-9]*$/.0\/24/')
+
+# --- Read config ---
+VPN="off"
+[ -f "$VPN_CONF" ] && . "$VPN_CONF"
+
+# --- WireGuard helpers ---
+wg_is_up() {
+    ip link show "$WG_IFACE" >/dev/null 2>&1
+}
+
+wg_stop() {
+    # Clean route_all rules
+    iptables -t nat -D POSTROUTING -o "$WG_IFACE" -j MASQUERADE 2>/dev/null
+    iptables -D FORWARD -i "$WG_IFACE" -j ACCEPT 2>/dev/null
+    iptables -D FORWARD -o "$WG_IFACE" -j ACCEPT 2>/dev/null
+    ip rule del from "$LAN_NET" lookup 51 2>/dev/null
+    ip route del default dev "$WG_IFACE" table 51 2>/dev/null
+    ENDPOINT_IP=$(sed -n 's/^Endpoint[[:space:]]*=[[:space:]]*\([^:]*\).*/\1/p' "$WG_CONF" 2>/dev/null | head -1)
+    [ -n "$ENDPOINT_IP" ] && ip rule del to "$ENDPOINT_IP" lookup main 2>/dev/null
+    ip rule del to "$LAN_NET" lookup main 2>/dev/null
+
+    if [ -x "$WG_QUICK" ] && [ -x /bin/bash ]; then
+        "$WG_QUICK" down "$WG_CONF" 2>/dev/null
+    else
+        ip link set "$WG_IFACE" down 2>/dev/null
+        ip link del dev "$WG_IFACE" 2>/dev/null
+    fi
+    rmmod wireguard 2>/dev/null
+}
+
+wg_start() {
+    [ -f "$WG_CONF" ] || return 1
+
+    # Load module
+    if ! lsmod 2>/dev/null | grep -q wireguard; then
+        [ -f "$WG_MODULE" ] && insmod "$WG_MODULE" 2>/dev/null || return 1
+    fi
+
+    if [ -x "$WG_QUICK" ] && [ -x /bin/bash ]; then
+        "$WG_QUICK" up "$WG_CONF" 2>/dev/null
+    else
+        ip link add dev "$WG_IFACE" type wireguard 2>/dev/null
+        # wg setconf doesn't accept Address/DNS — strip them
+        grep -vi '^\(Address\|DNS\|MTU\|Table\|PreUp\|PostUp\|PreDown\|PostDown\|SaveConfig\)[[:space:]]*=' "$WG_CONF" > /tmp/.wg_stripped
+            "$WG_BIN" setconf "$WG_IFACE" /tmp/.wg_stripped 2>/dev/null
+        rm -f /tmp/.wg_stripped
+        ADDR=$(sed -n 's/^Address[[:space:]]*=[[:space:]]*//p' "$WG_CONF" | head -1)
+        [ -n "$ADDR" ] && ip addr add "$ADDR" dev "$WG_IFACE" 2>/dev/null
+        ip link set "$WG_IFACE" up 2>/dev/null
+    fi
+    wg_is_up
+}
+
+# --- ShadowSocks helpers ---
+ss_is_up() {
+    pidof ss-redir >/dev/null 2>&1
+}
+
+ss_stop() {
+    # Kill processes
+    [ -f "$SS_REDIR_PID" ] && kill $(cat "$SS_REDIR_PID" 2>/dev/null) 2>/dev/null
+    [ -f "$SS_TUNNEL_PID" ] && kill $(cat "$SS_TUNNEL_PID" 2>/dev/null) 2>/dev/null
+    rm -f "$SS_REDIR_PID" "$SS_TUNNEL_PID"
+    killall ss-redir 2>/dev/null
+    killall ss-tunnel 2>/dev/null
+
+    # Clean iptables — remove only SS-specific rules (match by exact spec)
+    SS_PORT=$(sed -n 's/.*"local_port"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' "$SS_CONF" 2>/dev/null)
+    SS_PORT="${SS_PORT:-1080}"
+    SS_SERVER=$(sed -n 's/.*"server"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$SS_CONF" 2>/dev/null)
+    iptables -t nat -D PREROUTING -p tcp -s "$LAN_NET" -j REDIRECT --to-ports "$SS_PORT" 2>/dev/null
+    iptables -t nat -D PREROUTING -p udp --dport 53 -s "$LAN_NET" -j REDIRECT --to-ports "$((SS_PORT + 1))" 2>/dev/null
+    [ -n "$SS_SERVER" ] && iptables -t nat -D PREROUTING -d "$SS_SERVER" -j RETURN 2>/dev/null
+    iptables -t nat -D PREROUTING -d "$LAN_NET" -j RETURN 2>/dev/null
+}
+
+ss_start() {
+    [ -f "$SS_CONF" ] || return 1
+    [ -x "$SS_REDIR" ] || return 1
+
+    "$SS_REDIR" -c "$SS_CONF" -f "$SS_REDIR_PID" 2>/dev/null
+
+    SS_PORT=$(sed -n 's/.*"local_port"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' "$SS_CONF")
+    SS_PORT="${SS_PORT:-1080}"
+    SS_SERVER=$(sed -n 's/.*"server"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$SS_CONF")
+
+    if [ -x "$SS_TUNNEL" ]; then
+        "$SS_TUNNEL" -c "$SS_CONF" -l "$((SS_PORT + 1))" -L "8.8.8.8:53" -u -f "$SS_TUNNEL_PID" 2>/dev/null
+    fi
+
+    sleep 1
+    ss_is_up
+}
+
+# --- Route All (always applied when VPN is up) ---
+route_all_wg() {
+    ENDPOINT_IP=$(sed -n 's/^Endpoint[[:space:]]*=[[:space:]]*\([^:]*\).*/\1/p' "$WG_CONF" 2>/dev/null | head -1)
+    # Idempotent: remove old rules first
+    iptables -t nat -D POSTROUTING -o "$WG_IFACE" -j MASQUERADE 2>/dev/null
+    iptables -D FORWARD -i "$WG_IFACE" -j ACCEPT 2>/dev/null
+    iptables -D FORWARD -o "$WG_IFACE" -j ACCEPT 2>/dev/null
+    ip rule del from "$LAN_NET" lookup 51 2>/dev/null
+    ip route del default dev "$WG_IFACE" table 51 2>/dev/null
+    [ -n "$ENDPOINT_IP" ] && ip rule del to "$ENDPOINT_IP" lookup main 2>/dev/null
+    ip rule del to "$LAN_NET" lookup main 2>/dev/null
+    # Add fresh
+    ip rule add to "$LAN_NET" lookup main pref 100 2>/dev/null
+    [ -n "$ENDPOINT_IP" ] && ip rule add to "$ENDPOINT_IP" lookup main pref 101 2>/dev/null
+    ip route add default dev "$WG_IFACE" table 51 2>/dev/null
+    ip rule add from "$LAN_NET" lookup 51 pref 200 2>/dev/null
+    iptables -t nat -A POSTROUTING -o "$WG_IFACE" -j MASQUERADE 2>/dev/null
+    iptables -A FORWARD -i "$WG_IFACE" -j ACCEPT 2>/dev/null
+    iptables -A FORWARD -o "$WG_IFACE" -j ACCEPT 2>/dev/null
+}
+
+route_all_ss() {
+    SS_PORT=$(sed -n 's/.*"local_port"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' "$SS_CONF")
+    SS_PORT="${SS_PORT:-1080}"
+    SS_SERVER=$(sed -n 's/.*"server"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$SS_CONF")
+    # Idempotent: remove old rules first
+    iptables -t nat -D PREROUTING -d "$LAN_NET" -j RETURN 2>/dev/null
+    [ -n "$SS_SERVER" ] && iptables -t nat -D PREROUTING -d "$SS_SERVER" -j RETURN 2>/dev/null
+    iptables -t nat -D PREROUTING -p tcp -s "$LAN_NET" -j REDIRECT --to-ports "$SS_PORT" 2>/dev/null
+    iptables -t nat -D PREROUTING -p udp --dport 53 -s "$LAN_NET" -j REDIRECT --to-ports "$((SS_PORT + 1))" 2>/dev/null
+    # Add fresh
+    iptables -t nat -I PREROUTING 1 -d "$LAN_NET" -j RETURN 2>/dev/null
+    [ -n "$SS_SERVER" ] && iptables -t nat -I PREROUTING 2 -d "$SS_SERVER" -j RETURN 2>/dev/null
+    iptables -t nat -A PREROUTING -p tcp -s "$LAN_NET" -j REDIRECT --to-ports "$SS_PORT" 2>/dev/null
+    iptables -t nat -A PREROUTING -p udp --dport 53 -s "$LAN_NET" -j REDIRECT --to-ports "$((SS_PORT + 1))" 2>/dev/null
+}
+
+# --- Apply ---
+# Stop whatever shouldn't be running
+case "$VPN" in
+    wg) ss_is_up && ss_stop ;;
+    ss) wg_is_up && wg_stop ;;
+    *)  ss_is_up && ss_stop; wg_is_up && wg_stop ;;
+esac
+
+# Start what should be running + always route all traffic
+case "$VPN" in
+    wg)
+        wg_is_up || wg_start
+        # Always sync config (reload peers, keys, etc)
+        if wg_is_up && [ -x "$WG_BIN" ] && [ -f "$WG_CONF" ]; then
+            grep -vi "^\(Address\|DNS\|MTU\|Table\|PreUp\|PostUp\|PreDown\|PostDown\|SaveConfig\)[[:space:]]*=" "$WG_CONF" > /tmp/.wg_stripped
+            "$WG_BIN" syncconf "$WG_IFACE" /tmp/.wg_stripped 2>/dev/null
+            rm -f /tmp/.wg_stripped
+        fi
+        wg_is_up && route_all_wg
+        ;;
+    ss)
+        ss_is_up || ss_start
+        ss_is_up && route_all_ss
+        ;;
+esac
+
+# Report
+case "$VPN" in
+    wg) wg_is_up && echo "vpn_apply: wg up" || echo "vpn_apply: wg failed" ;;
+    ss) ss_is_up && echo "vpn_apply: ss up" || echo "vpn_apply: ss failed" ;;
+    *)  echo "vpn_apply: vpn off" ;;
+esac

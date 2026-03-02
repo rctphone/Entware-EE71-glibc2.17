@@ -1,0 +1,84 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          apply_qcmap_fix
+# Required-Start:    $remote_fs
+# Default-Start:     2 3 4 5
+# Short-Description: Patch QCMAP_ConnectionManager zero-length netlink bug
+### END INIT INFO
+
+# 12-byte ARM32 patch at file offset 0x1C4C4 (vaddr 0x244C4)
+# Fixes infinite busy loop when netlink attribute has length=0
+#
+# Original: sub r2,r2,r4,lsl#3 / add r7,r7,r8 / cmp r2,#2
+# Patched:  cmp r8,#0 / subsne r2,r2,r4,lsl#3 / addne r7,r7,r8
+
+QCMAP_BIN="/usr/bin/QCMAP_ConnectionManager"
+OFFSET=116932  # 0x1C4C4
+
+# Original bytes (hex): 842142E0 087087E0 020052E3
+ORIG_HEX="842142e0087087e0020052e3"
+# Patched bytes (hex):  000058E3 8421521008708710
+PATCH_HEX="000058e38421521008708710"
+
+case "$1" in
+  start)
+    if [ ! -f "$QCMAP_BIN" ]; then
+        echo "[ERR] QCMAP binary not found: $QCMAP_BIN"
+        exit 1
+    fi
+
+    # Read 12 bytes at offset using dd+hexdump
+    CURRENT=$(dd if="$QCMAP_BIN" bs=1 skip=$OFFSET count=12 2>/dev/null | \
+              hexdump -v -e '12/1 "%02x"' 2>/dev/null)
+
+    if [ "$CURRENT" = "$PATCH_HEX" ]; then
+        echo "qcmap_fix: already patched"
+        exit 0
+    fi
+
+    if [ "$CURRENT" != "$ORIG_HEX" ]; then
+        echo "[ERR] qcmap_fix: unexpected bytes at offset $OFFSET: $CURRENT"
+        echo "  Expected original: $ORIG_HEX"
+        echo "  Binary may be a different version."
+        exit 1
+    fi
+
+    # Backup original
+    if [ ! -f "${QCMAP_BIN}.orig" ]; then
+        cp "$QCMAP_BIN" "${QCMAP_BIN}.orig"
+        echo "qcmap_fix: backed up original to ${QCMAP_BIN}.orig"
+    fi
+
+    # Apply patch using printf + dd
+    printf '\x00\x00\x58\xe3\x84\x21\x52\x10\x08\x70\x87\x10' | \
+        dd of="$QCMAP_BIN" bs=1 seek=$OFFSET conv=notrunc 2>/dev/null
+
+    # Verify
+    VERIFY=$(dd if="$QCMAP_BIN" bs=1 skip=$OFFSET count=12 2>/dev/null | \
+             hexdump -v -e '12/1 "%02x"' 2>/dev/null)
+    if [ "$VERIFY" = "$PATCH_HEX" ]; then
+        echo "qcmap_fix: patch applied successfully"
+        # Restart QCMAP to load patched binary
+        PID=$(pidof QCMAP_ConnectionManager 2>/dev/null || true)
+        if [ -n "$PID" ]; then
+            kill "$PID" 2>/dev/null
+            # QCMAP is respawned by init automatically
+            echo "qcmap_fix: QCMAP restarted (was PID $PID)"
+        fi
+    else
+        echo "[ERR] qcmap_fix: verification failed after patching"
+        # Restore backup
+        cp "${QCMAP_BIN}.orig" "$QCMAP_BIN"
+        echo "qcmap_fix: restored original from backup"
+        exit 1
+    fi
+    ;;
+  stop)
+    echo "qcmap_fix: no stop action (patch is persistent)"
+    ;;
+  *)
+    echo "Usage: $0 {start|stop}" >&2
+    exit 1
+    ;;
+esac
+exit 0

@@ -1,0 +1,4 @@
+protocol:1
+name:MTS LTE
+apn:internet.mts.ru
+dial:*99#

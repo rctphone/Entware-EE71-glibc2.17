@@ -1,0 +1,4 @@
+protocol:1
+name:Yota LTE
+apn:internet.yota
+dial:*99#

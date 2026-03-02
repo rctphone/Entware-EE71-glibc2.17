@@ -1,0 +1,162 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          ttl_fix
+# Required-Start:    $remote_fs $syslog $networking
+# Required-Stop:     $remote_fs $syslog
+# Default-Start:     2 3 4 5
+# Default-Stop:      1
+# Short-Description: Fix and normalize IP TTL/HL for carrier detection bypass
+### END INIT INFO
+
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+NAME=ttl_fix
+DESC="TTL normalization"
+
+# Where to read default TTL value (plain integer)
+TTL_FILE="/etc/rcS.d/ttl"
+
+# Network interfaces pattern used for cellular modem on these devices
+CELL_IFACE_PATTERN="rmnet+"
+
+set -e
+
+# Read-only rootfs detection (not strictly needed, but keep in style)
+readonly_rootfs=0
+for flag in `awk '{ if ($2 == "/") { split($4,FLAGS,",") } }; END { for (f in FLAGS) print FLAGS[f] }' </proc/mounts`; do
+  case $flag in
+   ro)
+     readonly_rootfs=1
+     ;;
+  esac
+done
+
+get_ttl() {
+  TTL_VAL=64
+  if [ -r "$TTL_FILE" ]; then
+    TTL_VAL=`cat "$TTL_FILE" 2>/dev/null`
+  fi
+  case "$TTL_VAL" in
+    ''|*[!0-9]*) TTL_VAL=64 ;;
+  esac
+  if [ 0$TTL_VAL -le 0 ]; then TTL_VAL=64; fi
+  if [ 0$TTL_VAL -gt 255 ]; then TTL_VAL=64; fi
+  echo $TTL_VAL
+}
+
+ensure_rule() {
+  # ensure_rule <tool> <table> <chain> <args...>
+  TOOL="$1"; shift
+  TABLE="$1"; shift
+  CHAIN="$1"; shift
+  if $TOOL -t "$TABLE" -C "$CHAIN" "$@" 2>/dev/null; then
+    return 0
+  fi
+  $TOOL -t "$TABLE" -A "$CHAIN" "$@" 2>/dev/null || true
+}
+
+delete_rule_if_exists() {
+  # delete_rule_if_exists <tool> <table> <chain> <args...>
+  TOOL="$1"; shift
+  TABLE="$1"; shift
+  CHAIN="$1"; shift
+  if $TOOL -t "$TABLE" -C "$CHAIN" "$@" 2>/dev/null; then
+    $TOOL -t "$TABLE" -D "$CHAIN" "$@" 2>/dev/null || true
+  fi
+}
+
+start_rules() {
+  TTL_VAL=`get_ttl`
+
+  # IPv4: set outgoing TTL and incoming normalization
+  ensure_rule iptables mangle POSTROUTING -o "$CELL_IFACE_PATTERN" -j TTL --ttl-set "$TTL_VAL"
+  # Also fix locally generated traffic from the router itself
+  ensure_rule iptables mangle OUTPUT      -o "$CELL_IFACE_PATTERN" -j TTL --ttl-set "$TTL_VAL"
+  ensure_rule iptables mangle PREROUTING  -i "$CELL_IFACE_PATTERN" -j TTL --ttl-set 201
+
+  # IPv6: set outgoing Hop Limit and incoming normalization
+  if command -v ip6tables >/dev/null 2>&1; then
+    # Exclude ICMPv6 to avoid breaking NDP/RA/RS and PMTU
+    ensure_rule ip6tables mangle POSTROUTING ! -p icmpv6 -o "$CELL_IFACE_PATTERN" -j HL --hl-set "$TTL_VAL"
+    ensure_rule ip6tables mangle OUTPUT      ! -p icmpv6 -o "$CELL_IFACE_PATTERN" -j HL --hl-set "$TTL_VAL"
+    ensure_rule ip6tables mangle PREROUTING  ! -p icmpv6 -i "$CELL_IFACE_PATTERN" -j HL --hl-set 201
+  fi
+}
+
+stop_rules() {
+  TTL_VAL=`get_ttl`
+  delete_rule_if_exists iptables mangle POSTROUTING -o "$CELL_IFACE_PATTERN" -j TTL --ttl-set "$TTL_VAL"
+  delete_rule_if_exists iptables mangle OUTPUT      -o "$CELL_IFACE_PATTERN" -j TTL --ttl-set "$TTL_VAL"
+  delete_rule_if_exists iptables mangle PREROUTING  -i "$CELL_IFACE_PATTERN" -j TTL --ttl-set 201
+  if command -v ip6tables >/dev/null 2>&1; then
+    delete_rule_if_exists ip6tables mangle POSTROUTING ! -p icmpv6 -o "$CELL_IFACE_PATTERN" -j HL --hl-set "$TTL_VAL"
+    delete_rule_if_exists ip6tables mangle OUTPUT      ! -p icmpv6 -o "$CELL_IFACE_PATTERN" -j HL --hl-set "$TTL_VAL"
+    delete_rule_if_exists ip6tables mangle PREROUTING  ! -p icmpv6 -i "$CELL_IFACE_PATTERN" -j HL --hl-set 201
+  fi
+}
+
+# Per-interface apply/remove used by if-pre-up.d/if-post-down.d hooks
+apply_iface() {
+  IFACE="$1"
+  [ -n "$IFACE" ] || return 0
+  TTL_VAL=`get_ttl`
+  ensure_rule iptables  mangle POSTROUTING -o "$IFACE" -j TTL --ttl-set "$TTL_VAL"
+  ensure_rule iptables  mangle OUTPUT      -o "$IFACE" -j TTL --ttl-set "$TTL_VAL"
+  ensure_rule iptables  mangle PREROUTING  -i "$IFACE" -j TTL --ttl-set 201
+  if command -v ip6tables >/dev/null 2>&1; then
+    ensure_rule ip6tables mangle POSTROUTING ! -p icmpv6 -o "$IFACE" -j HL --hl-set "$TTL_VAL"
+    ensure_rule ip6tables mangle OUTPUT      ! -p icmpv6 -o "$IFACE" -j HL --hl-set "$TTL_VAL"
+    ensure_rule ip6tables mangle PREROUTING  ! -p icmpv6 -i "$IFACE" -j HL --hl-set 201
+  fi
+}
+
+remove_iface() {
+  IFACE="$1"
+  [ -n "$IFACE" ] || return 0
+  TTL_VAL=`get_ttl`
+  delete_rule_if_exists iptables  mangle POSTROUTING -o "$IFACE" -j TTL --ttl-set "$TTL_VAL"
+  delete_rule_if_exists iptables  mangle OUTPUT      -o "$IFACE" -j TTL --ttl-set "$TTL_VAL"
+  delete_rule_if_exists iptables  mangle PREROUTING  -i "$IFACE" -j TTL --ttl-set 201
+  if command -v ip6tables >/dev/null 2>&1; then
+    delete_rule_if_exists ip6tables mangle POSTROUTING ! -p icmpv6 -o "$IFACE" -j HL --hl-set "$TTL_VAL"
+    delete_rule_if_exists ip6tables mangle OUTPUT      ! -p icmpv6 -o "$IFACE" -j HL --hl-set "$TTL_VAL"
+    delete_rule_if_exists ip6tables mangle PREROUTING  ! -p icmpv6 -i "$IFACE" -j HL --hl-set 201
+  fi
+}
+
+case "$1" in
+  start)
+    echo -n "Starting $DESC: "
+    start_rules
+    echo "$NAME."
+    ;;
+  stop)
+    echo -n "Stopping $DESC: "
+    stop_rules
+    echo "$NAME."
+    ;;
+  restart|force-reload)
+    echo -n "Restarting $DESC: "
+    stop_rules || true
+    start_rules
+    echo "$NAME."
+    ;;
+  apply)
+    # used by if-pre-up.d hook; expects interface name as $2
+    IFACE="$2"
+    apply_iface "$IFACE"
+    ;;
+  remove)
+    # used by if-post-down.d hook; expects interface name as $2
+    IFACE="$2"
+    remove_iface "$IFACE"
+    ;;
+  *)
+    N=/etc/init.d/$NAME
+    echo "Usage: $N {start|stop|restart|force-reload}" >&2
+    exit 1
+    ;;
+esac
+
+exit 0
+
+

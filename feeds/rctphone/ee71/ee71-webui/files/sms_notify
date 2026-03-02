@@ -1,0 +1,119 @@
+#!/bin/sh
+# sms_notify — Event-driven SMS notification for EE71
+# Called by sms_watchd on user_info.db3 change.
+# Checks new_sms_flag → reads unread SMS via WebAPI → sends Telegram → clears flag.
+
+CONF="/etc/sms_forward.conf"
+DB="/jrd-resource/resource/sqlite3/user_info.db3"
+LAST_ID_FILE="/tmp/sms_forward_lastid"
+LOCK="/tmp/sms_notify.lock"
+TAG="sms_notify"
+VK="KSDHSDFOGQ5WERYTUIQWERTYUISDFG1HJZXCVCXBN2GDSMNDHKVKFsVBNf"
+
+log() { logger -t "$TAG" "$@"; }
+
+# --- Lockfile ---
+mkdir "$LOCK" 2>/dev/null || exit 0
+trap 'rmdir "$LOCK" 2>/dev/null' EXIT
+
+# --- Config ---
+TELEGRAM_ENABLED=0; TELEGRAM_BOT_TOKEN=""; TELEGRAM_CHAT_ID=""; FILTER_NUMBERS=""
+[ -f "$CONF" ] && . "$CONF"
+[ "$TELEGRAM_ENABLED" = "1" ] || exit 0
+[ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ] || exit 0
+
+# --- Check flag ---
+FLAG=$(sqlite3 "$DB" "SELECT value FROM sms_config WHERE items='new_sms_flag';" 2>/dev/null)
+[ "$FLAG" = "1" ] || exit 0
+
+log "new_sms_flag=1, reading SMS"
+
+# --- WebAPI helper ---
+LAN_IP=$(ifconfig bridge0 2>/dev/null | sed -n 's/.*inet addr:\([^ ]*\).*/\1/p')
+LAN_IP="${LAN_IP:-192.168.1.1}"
+
+webapi() {
+    curl --interface bridge0 -s -m 5 "http://${LAN_IP}/jrd/webapi" \
+      -H "Content-Type: application/json" \
+      -H "Referer: http://${LAN_IP}/index.html" \
+      -H "_TclRequestVerificationKey: $VK" \
+      -d "{\"jsonrpc\":\"2.0\",\"method\":\"$1\",\"params\":$2,\"id\":\"1\"}"
+}
+
+# --- Read last ID ---
+LAST_ID=0
+[ -f "$LAST_ID_FILE" ] && LAST_ID=$(cat "$LAST_ID_FILE" 2>/dev/null) && LAST_ID="${LAST_ID:-0}"
+
+# --- Get new SMS (by SMSId, not UnreadCount — UI may mark as read first) ---
+CONTACTS=$(webapi "GetSMSContactList" '{"Page":0,"ContactNum":50}')
+if [ -z "$CONTACTS" ] || ! echo "$CONTACTS" | grep -q '"result"'; then
+    log "WebAPI: no response"
+    sqlite3 "$DB" "UPDATE sms_config SET value='0' WHERE items='new_sms_flag';" 2>/dev/null
+    exit 1
+fi
+
+TMP="/tmp/sms_notify_$$.tmp"
+: > "$TMP"
+
+echo "$CONTACTS" | tr '{}' '\n' | while IFS= read -r L; do
+    # Skip contacts with no new messages (compare latest SMSId with LAST_ID)
+    TOP_SID=$(echo "$L" | sed -n 's/.*"SMSId"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p')
+    [ -z "$TOP_SID" ] && continue
+    [ "$TOP_SID" -le "$LAST_ID" ] 2>/dev/null && continue
+
+    PH=$(echo "$L" | sed -n 's/.*"PhoneNumber"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    [ -z "$PH" ] && PH=$(echo "$L" | sed -n 's/.*"PhoneNumber"[[:space:]]*:[[:space:]]*\[ *"\([^"]*\)".*/\1/p')
+    [ -z "$PH" ] && continue
+    CID=$(echo "$L" | sed -n 's/.*"ContactId"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p')
+
+    MSGS=$(webapi "GetSMSContentList" "{\"ContactId\":${CID:-0},\"Page\":0,\"PhoneNumber\":\"${PH}\"}")
+    [ -z "$MSGS" ] && continue
+
+    echo "$MSGS" | tr '{}' '\n' | while IFS= read -r M; do
+        # SMSType: 0=received, 2=sent — only forward received
+        ST=$(echo "$M" | sed -n 's/.*"SMSType"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p')
+        [ "$ST" = "0" ] || continue
+        SID=$(echo "$M" | sed -n 's/.*"SMSId"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p')
+        [ -n "$SID" ] || continue
+        BODY=$(echo "$M" | sed -n 's/.*"SMSContent"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+        TIME=$(echo "$M" | sed -n 's/.*"SMSTime"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+        printf '%s\t%s\t%s\t%s\n' "$SID" "$PH" "$TIME" "$BODY" >> "$TMP"
+    done
+done
+
+# --- Forward to Telegram ---
+MAX_ID="$LAST_ID"
+while IFS='	' read -r SID FROM TIME BODY; do
+    [ -z "$SID" ] && continue
+    [ "$SID" -le "$LAST_ID" ] 2>/dev/null && continue
+
+    # Filter check
+    if [ -n "$FILTER_NUMBERS" ]; then
+        MATCH=0
+        OLD_IFS="$IFS"; IFS=","
+        for num in $FILTER_NUMBERS; do
+            num=$(printf '%s' "$num" | tr -d ' ')
+            [ -n "$num" ] && echo "$FROM" | grep -qF "$num" && MATCH=1 && break
+        done
+        IFS="$OLD_IFS"
+        [ "$MATCH" = "0" ] && continue
+    fi
+
+    MSG=$(printf "<b>From:</b> %s\n<b>Time:</b> %s\n\n%s" "$FROM" "$TIME" "$BODY")
+    R=$(curl -s -m 15 "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+        -d "chat_id=${TELEGRAM_CHAT_ID}" --data-urlencode "text=${MSG}" -d "parse_mode=HTML" 2>&1)
+    if echo "$R" | grep -q '"ok":true'; then
+        log "forwarded SMS from $FROM"
+    else
+        logger -t "$TAG" -p user.err "Telegram failed for $FROM"
+    fi
+
+    [ "$SID" -gt "$MAX_ID" ] 2>/dev/null && MAX_ID="$SID"
+done < "$TMP"
+
+rm -f "$TMP"
+[ "$MAX_ID" -gt "$LAST_ID" ] 2>/dev/null && echo "$MAX_ID" > "$LAST_ID_FILE"
+
+# --- Clear flag ---
+sqlite3 "$DB" "UPDATE sms_config SET value='0' WHERE items='new_sms_flag';" 2>/dev/null
+log "done (last_id=$MAX_ID)"

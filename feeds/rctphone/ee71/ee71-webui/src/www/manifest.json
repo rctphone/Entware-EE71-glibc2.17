@@ -1,0 +1,11 @@
+{
+    "name": "EE71 4GEE WiFi Mini",
+    "short_name": "EE71",
+    "icons": [
+        { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" }
+    ],
+    "start_url": "/index.html",
+    "display": "standalone",
+    "background_color": "#1a2332",
+    "theme_color": "#4db6ac"
+}

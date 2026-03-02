@@ -1,0 +1,40 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          qcmap_renice
+# Required-Start:    $remote_fs
+# Default-Start:     2 3 4 5
+# Short-Description: Renice QCMAP busy-loop threads to lowest priority
+### END INIT INFO
+
+# QCMAP_ConnectionManager has a known busy-loop bug in its netlink parser
+# thread (see ee71-qcmap-fix package). Even with the binary patch applied,
+# we defensively renice any thread that has zero wait channel (wchan=0),
+# meaning it's CPU-bound and likely the netlink polling thread.
+#
+# Runs 20s after boot (QCMAP needs time to start all threads).
+
+case "$1" in
+  start)
+    (
+      sleep 20
+      QCMAP_PID=$(pidof QCMAP_ConnectionManager 2>/dev/null)
+      if [ -z "$QCMAP_PID" ]; then
+          exit 0
+      fi
+      for tid in $(ls /proc/$QCMAP_PID/task/ 2>/dev/null); do
+        wchan=$(cat /proc/$QCMAP_PID/task/$tid/wchan 2>/dev/null)
+        if [ "$wchan" = "0" ]; then
+          renice 19 $tid 2>/dev/null
+          echo "qcmap_renice: TID $tid (busy loop) reniced to 19" > /dev/kmsg
+        fi
+      done
+    ) &
+    ;;
+  stop)
+    ;;
+  *)
+    echo "Usage: $0 {start|stop}" >&2
+    exit 1
+    ;;
+esac
+exit 0

@@ -1,0 +1,111 @@
+#!/bin/sh
+# Conditional AAAA filtering for dnsmasq (safe mode for QCMAP-managed dnsmasq)
+#
+# IMPORTANT:
+# - This hook never kills/restarts dnsmasq.
+# - It only edits /etc/dnsmasq.conf and sends SIGHUP to running dnsmasq.
+# - Some options (including filter-AAAA) may require full restart to apply.
+#   In that case we only mark "pending restart" and avoid DHCP/DNS downtime.
+
+DNSMASQ_CONF="/etc/dnsmasq.conf"
+WAN_IFACE="rmnet_data0"
+FILTER_MARKER="# AUTO: filter-AAAA (no IPv6 WAN)"
+
+LOCK_DIR="/var/run/dnsmasq_ipv6_filter.lock"
+STATE_FILE="/var/run/dnsmasq_ipv6_filter.state"
+PENDING_RESTART_FILE="/var/run/dnsmasq_ipv6_filter.pending_restart"
+
+DEBOUNCE_SEC="${DEBOUNCE_SEC:-12}"
+INITIAL_WAIT_SEC="${INITIAL_WAIT_SEC:-30}"
+LOG_TAG="dnsmasq_ipv6_filter"
+
+log_msg() {
+    echo "$LOG_TAG: $*"
+    logger -t "$LOG_TAG" "$*" 2>/dev/null || true
+}
+
+has_global_ipv6() {
+    ifconfig "$WAN_IFACE" 2>/dev/null | grep "inet6 addr:" | grep -qv "Scope:Link"
+}
+
+has_filter() {
+    grep -q "^filter-AAAA$" "$DNSMASQ_CONF" 2>/dev/null
+}
+
+set_filter_on_disk() {
+    want_filter="$1"
+
+    if [ "$want_filter" = "1" ]; then
+        if has_filter; then
+            echo 0
+            return
+        fi
+        echo "$FILTER_MARKER" >> "$DNSMASQ_CONF"
+        echo "filter-AAAA" >> "$DNSMASQ_CONF"
+        echo 1
+        return
+    fi
+
+    if has_filter; then
+        sed -i '/^filter-AAAA$/d' "$DNSMASQ_CONF"
+        sed -i "/$FILTER_MARKER/d" "$DNSMASQ_CONF"
+        echo 1
+        return
+    fi
+
+    echo 0
+}
+
+hup_dnsmasq() {
+    pid="$(pidof dnsmasq 2>/dev/null || true)"
+    if [ -z "$pid" ]; then
+        log_msg "dnsmasq is not running; will apply on next start"
+        return 1
+    fi
+    kill -HUP "$pid" 2>/dev/null || return 1
+    log_msg "sent SIGHUP to dnsmasq pid=$pid"
+    return 0
+}
+
+# Single-instance lock
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    log_msg "another instance is running, skip"
+    exit 0
+fi
+trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT INT TERM
+
+# Boot path: WAN may appear late
+if [ -z "$(ifconfig "$WAN_IFACE" 2>/dev/null | grep "inet addr")" ]; then
+    sleep "$INITIAL_WAIT_SEC"
+fi
+
+# Debounce rmnet flaps/events
+sleep "$DEBOUNCE_SEC"
+
+if has_global_ipv6; then
+    desired_state="ipv6_up"
+    want_filter=0
+else
+    desired_state="ipv6_down"
+    want_filter=1
+fi
+
+prev_state="$(cat "$STATE_FILE" 2>/dev/null || echo "unknown")"
+changed="$(set_filter_on_disk "$want_filter")"
+echo "$desired_state" > "$STATE_FILE"
+
+if [ "$changed" = "1" ]; then
+    date +%s > "$PENDING_RESTART_FILE"
+    if [ "$want_filter" = "1" ]; then
+        log_msg "set filter-AAAA ON in config (no hard restart)"
+    else
+        log_msg "set filter-AAAA OFF in config (no hard restart)"
+    fi
+    log_msg "full effect may require next QCMAP/dnsmasq restart"
+    hup_dnsmasq || true
+elif [ "$prev_state" != "$desired_state" ]; then
+    log_msg "state changed ($prev_state -> $desired_state), config already up to date"
+    hup_dnsmasq || true
+else
+    log_msg "state unchanged ($desired_state), no action"
+fi

@@ -1,0 +1,84 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          oem_watch_patch
+# Required-Start:    $remote_fs
+# Default-Start:     S
+# Short-Description: Patch oem_watch to remove anti-patterns
+### END INIT INFO
+
+# oem_watch is the main watchdog script that monitors core_app/webs.
+# Stock version has severe anti-patterns:
+# - echo 3 > /proc/sys/vm/drop_caches (7 occurrences) — destroys page cache
+# - echo m > /proc/sysrq-trigger — useless memory dumps to dmesg
+# - sqlite3_integrity_check.sh on boot — 3-5s delay
+# - sleep 15 in main loop — excessive CPU wakeups
+#
+# This script patches oem_watch in-place on boot before it's started (S65).
+# Must run early in rcS.d (before S65start_coreapp_le which launches oem_watch).
+
+OEM_WATCH="/jrd-resource/bin/oem_watch"
+MARKER="/jrd-resource/bin/.oem_watch_patched"
+
+case "$1" in
+  start)
+    if [ ! -f "$OEM_WATCH" ]; then
+        echo "oem_watch_patch: oem_watch not found"
+        exit 0
+    fi
+
+    # Already patched?
+    if [ -f "$MARKER" ]; then
+        echo "oem_watch_patch: already patched"
+        exit 0
+    fi
+
+    # Backup original
+    cp -n "$OEM_WATCH" "${OEM_WATCH}.orig" 2>/dev/null
+
+    CHANGED=0
+
+    # Remove drop_caches lines (comment them out)
+    if grep -q '^echo 3 > /proc/sys/vm/drop_caches' "$OEM_WATCH" 2>/dev/null; then
+        sed -i 's|^echo 3 > /proc/sys/vm/drop_caches|#PERF: removed drop_caches\n#&|' "$OEM_WATCH"
+        CHANGED=1
+        echo "oem_watch_patch: removed drop_caches"
+    fi
+
+    # Remove sysrq-trigger lines
+    if grep -q '^echo m > /proc/sysrq-trigger' "$OEM_WATCH" 2>/dev/null; then
+        sed -i 's|^echo m > /proc/sysrq-trigger|#PERF: removed sysrq-trigger\n#&|' "$OEM_WATCH"
+        CHANGED=1
+        echo "oem_watch_patch: removed sysrq-trigger"
+    fi
+
+    # Remove sqlite3_integrity_check
+    if grep -q '^/jrd-resource/bin/sqlite3_integrity_check' "$OEM_WATCH" 2>/dev/null; then
+        sed -i 's|^/jrd-resource/bin/sqlite3_integrity_check|#PERF: removed sqlite check\n#&|' "$OEM_WATCH"
+        CHANGED=1
+        echo "oem_watch_patch: removed sqlite3_integrity_check"
+    fi
+
+    # Increase sleep from 15s to 60s (reduce CPU wakeups by 75%)
+    if grep -q 'sleep 15$' "$OEM_WATCH" 2>/dev/null; then
+        sed -i 's|sleep 15$|#PERF: increased from 15s to 60s (reduce CPU wakeups)\n    sleep 60|' "$OEM_WATCH"
+        CHANGED=1
+        echo "oem_watch_patch: sleep 15 → 60"
+    fi
+
+    if [ "$CHANGED" = "1" ]; then
+        touch "$MARKER"
+        sync
+        echo "oem_watch_patch: done"
+    else
+        echo "oem_watch_patch: no changes needed"
+    fi
+    ;;
+  stop)
+    echo "oem_watch_patch: no stop action"
+    ;;
+  *)
+    echo "Usage: $0 {start|stop}" >&2
+    exit 1
+    ;;
+esac
+exit 0

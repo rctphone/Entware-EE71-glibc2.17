@@ -1,0 +1,4 @@
+protocol:1
+name:Tele2 LTE
+apn:internet.tele2.ru
+dial:*99#

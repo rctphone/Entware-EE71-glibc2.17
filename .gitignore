@@ -12,6 +12,7 @@
 /tmp
 /logs
 /feeds
+!/feeds/rctphone/
 /feeds.conf
 /files
 /target/linux/feeds

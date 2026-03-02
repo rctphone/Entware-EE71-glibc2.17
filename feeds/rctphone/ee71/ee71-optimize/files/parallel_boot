@@ -1,0 +1,38 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          parallel_boot
+# Required-Start:    $remote_fs
+# Default-Start:     2 3 4 5
+# Short-Description: Launch independent services in parallel
+### END INIT INFO
+
+# Phase 3: Boot parallelization
+# These services have NO dependency on the modem stack (qmuxd/netmgrd/QCMAP/qti/core_app).
+# Running them in background saves ~10-15s of sequential boot time.
+#
+# Modem stack MUST stay sequential:
+#   S29init_irsc_util -> S30mssboot -> S40qmuxd -> S45netmgrd
+#   -> S39QCMAP -> S40qti -> S65start_coreapp_le
+
+case "$1" in
+  start)
+    echo "parallel_boot: launching independent services in background"
+    /etc/init.d/dropbear start &
+    /etc/init.d/lan_accept start 2>/dev/null &
+    /etc/init.d/syslog start 2>/dev/null &
+    /etc/init.d/thermal-engine start &
+    /etc/init.d/chgrp-diag start 2>/dev/null &
+    wait
+    echo "parallel_boot: done"
+    ;;
+  stop)
+    /etc/init.d/dropbear stop
+    /etc/init.d/syslog stop 2>/dev/null
+    /etc/init.d/thermal-engine stop
+    ;;
+  *)
+    echo "Usage: $0 {start|stop}" >&2
+    exit 1
+    ;;
+esac
+exit 0

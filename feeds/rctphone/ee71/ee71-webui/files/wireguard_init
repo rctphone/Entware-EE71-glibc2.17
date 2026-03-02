@@ -1,0 +1,31 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          wireguard
+# Required-Start:    wireguard_modules
+# Default-Start:     2 3 4 5
+# Short-Description: Restore VPN state from /etc/vpn.conf on boot
+### END INIT INFO
+
+VPN_APPLY="/usr/bin/vpn_apply"
+
+case "$1" in
+    start)
+        [ -x "$VPN_APPLY" ] && "$VPN_APPLY"
+        ;;
+    stop)
+        printf 'VPN=off\nROUTE_ALL=0\n' > /etc/vpn.conf
+        [ -x "$VPN_APPLY" ] && "$VPN_APPLY"
+        ;;
+    restart)
+        $0 stop
+        $0 start
+        ;;
+    status)
+        [ -f /etc/vpn.conf ] && cat /etc/vpn.conf || echo "no vpn.conf"
+        ;;
+    *)
+        echo "Usage: $0 { start | stop | restart | status }" >&2
+        exit 1
+        ;;
+esac
+exit 0

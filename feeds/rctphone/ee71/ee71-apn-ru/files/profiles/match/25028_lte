@@ -1,0 +1,6 @@
+protocol:1
+name:Beeline LTE
+apn:internet.beeline.ru
+user:beeline
+psw:beeline
+dial:*99#
