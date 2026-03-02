@@ -39,12 +39,13 @@ curl -sLO https://raw.githubusercontent.com/rctphone/Entware-EE71-glibc2.17/ee71
 
 ## What it does
 
-1. Downloads `opkg` binary and package metadata from GitHub
-2. Pushes to device via `adb push`
-3. Installs opkg to `/usr/bin/`
+1. Downloads `opkg` binary, package metadata, and USB patch from GitHub (on host)
+2. Pushes all files to device via `adb push`
+3. Installs opkg to `/usr/bin/` (normal) or `/system/usr/bin/` (recovery)
 4. Configures the package feed (`/etc/opkg.conf`)
 5. Pre-registers 30 system libraries so opkg won't break them
-6. Runs `opkg update` to verify
+6. Installs USB kernel patch for ADB access in normal mode
+7. Runs `opkg update` to verify (normal mode only)
 
 ## Normal mode vs Recovery mode
 
@@ -55,10 +56,12 @@ The installer auto-detects which mode the device is in.
 - Installs directly to `/usr/bin/`, `/etc/` (persistent UBI storage)
 - opkg works immediately after install
 
-**Recovery mode** (hold Reset 10s, or `sys_reboot recovery`):
+**Recovery mode** (hold Reset 10s, or `adb reboot recovery`):
 - ADB always available, no WiFi/network
 - `/system` is already mounted at boot (rootfs + usrfs)
 - Installs to `/system/usr/bin/`, `/system/etc/`
+- Also installs USB kernel patch so ADB works after reboot
+- Host downloads all files (no internet on device in recovery)
 - Reboot to normal mode after install, then run `opkg update`
 
 ## After install
@@ -82,6 +85,8 @@ opkg list
 # List installed
 opkg list-installed
 ```
+
+Default device IP: `192.168.1.1`
 
 ## Package feed
 
@@ -107,6 +112,11 @@ https://raw.githubusercontent.com/rctphone/ee71-opkg/main
 **"No space left on device"**
 - `/usr` is 32 MB, check: `adb shell df /usr`
 - Remove unused packages: `opkg remove <package>`
+
+**Can't enter recovery mode**
+- `sys_reboot recovery` does NOT work (no fota partition)
+- Use `adb reboot recovery` instead
+- Or hold the Reset button for ~10 seconds
 
 ## Manual install (without scripts)
 

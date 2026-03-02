@@ -3,13 +3,16 @@ REM install.bat — Install opkg on EE71 via ADB (Windows)
 REM
 REM Usage: install.bat
 REM
+REM Downloads everything from GitHub on the host, pushes to device via ADB,
+REM then runs setup on the device. Works in both normal and recovery mode.
+REM
 REM Requires: adb.exe in PATH (Android Platform Tools)
 REM Download: https://developer.android.com/tools/releases/platform-tools
 
 setlocal
 
 set REPO=https://raw.githubusercontent.com/rctphone/Entware-EE71-glibc2.17/ee71
-set SETUP_URL=%REPO%/install/setup.sh
+set OPKG_REPO=https://raw.githubusercontent.com/rctphone/ee71-opkg/main
 
 echo === EE71 opkg installer ===
 echo.
@@ -39,20 +42,41 @@ if %errorlevel% neq 0 (
 
 echo [*] Device found
 
-REM Download setup script
-echo [*] Downloading setup script...
+REM Create temp dir
 set TMP=%TEMP%\ee71-install
 mkdir "%TMP%" 2>nul
-curl -sL "%SETUP_URL%" -o "%TMP%\setup.sh"
+
+REM Download all files on the host
+echo [*] Downloading files from GitHub...
+curl -sL "%REPO%/install/setup.sh" -o "%TMP%\setup.sh"
 if %errorlevel% neq 0 (
     echo [ERR] Download failed. Check internet connection.
     exit /b 1
 )
 
-REM Push and run
+curl -sL "%OPKG_REPO%/Packages" -o "%TMP%\Packages"
+curl -sL "%OPKG_REPO%/opkg-status" -o "%TMP%\opkg-status"
+curl -sL "%REPO%/install/patch_usb_kernel" -o "%TMP%\patch_usb_kernel"
+
+REM Find opkg filename from Packages index
+for /f "tokens=2" %%a in ('findstr /B "Filename: opkg_" "%TMP%\Packages"') do set OPKG_FILE=%%a
+if "%OPKG_FILE%"=="" (
+    echo [ERR] opkg package not found in index
+    exit /b 1
+)
+
+echo [*] Downloading %OPKG_FILE%...
+curl -sL "%OPKG_REPO%/%OPKG_FILE%" -o "%TMP%\%OPKG_FILE%"
+
+REM Push everything to device
 echo [*] Pushing to device...
 adb push "%TMP%\setup.sh" /tmp/setup.sh
+adb push "%TMP%\Packages" /tmp/Packages
+adb push "%TMP%\%OPKG_FILE%" /tmp/%OPKG_FILE%
+adb push "%TMP%\opkg-status" /tmp/opkg-status
+adb push "%TMP%\patch_usb_kernel" /tmp/patch_usb_kernel
 
+REM Run setup on device
 echo [*] Running setup on device...
 echo.
 adb shell "sh /tmp/setup.sh"
@@ -61,14 +85,15 @@ echo.
 echo [*] Done!
 echo.
 echo Connect to device:
-echo   adb shell
+echo   adb shell                (USB)
+echo   ssh root@device-ip       (after installing Dropbear SSH)
 echo.
 echo Install packages:
 echo   opkg update
 echo   opkg install dropbear curl iperf3
 
 REM Cleanup
-del /q "%TMP%\setup.sh" 2>nul
+del /q "%TMP%\*" 2>nul
 rmdir "%TMP%" 2>nul
 
 endlocal

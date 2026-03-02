@@ -3,13 +3,16 @@
 #
 # Usage: ./install.sh
 #
-# Downloads the setup script from GitHub and runs it on the device.
-# Works in both normal and recovery mode.
+# Downloads everything from GitHub on the host, pushes to device via ADB,
+# then runs setup on the device. Works in both normal and recovery mode.
+#
+# In recovery mode, also installs the USB kernel patch so ADB works
+# after rebooting to normal mode.
 
 set -e
 
 REPO="https://raw.githubusercontent.com/rctphone/Entware-EE71-glibc2.17/ee71"
-SETUP_URL="$REPO/install/setup.sh"
+OPKG_REPO="https://raw.githubusercontent.com/rctphone/ee71-opkg/main"
 
 echo "=== EE71 opkg installer ==="
 echo ""
@@ -38,16 +41,36 @@ fi
 SERIAL=$(adb devices | grep -w "device" | head -1 | awk '{print $1}')
 echo "[*] Device found: $SERIAL"
 
-# Download setup script
-echo "[*] Downloading setup script..."
+# Create temp dir
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
-curl -sL "$SETUP_URL" -o "$TMP/setup.sh"
 
-# Push and run
+# Download all files on the host (device may have no internet in recovery)
+echo "[*] Downloading files from GitHub..."
+curl -sL "$REPO/install/setup.sh" -o "$TMP/setup.sh"
+curl -sL "$OPKG_REPO/Packages" -o "$TMP/Packages"
+
+OPKG_FILE=$(grep "^Filename: opkg_" "$TMP/Packages" | head -1 | awk '{print $2}')
+if [ -z "$OPKG_FILE" ]; then
+    echo "[ERR] opkg package not found in index"
+    exit 1
+fi
+
+curl -sL "$OPKG_REPO/$OPKG_FILE" -o "$TMP/$OPKG_FILE"
+curl -sL "$OPKG_REPO/opkg-status" -o "$TMP/opkg-status"
+curl -sL "$REPO/install/patch_usb_kernel" -o "$TMP/patch_usb_kernel"
+
+echo "[*] Downloaded: setup.sh, $OPKG_FILE, opkg-status, patch_usb_kernel"
+
+# Push everything to device
 echo "[*] Pushing to device..."
 adb push "$TMP/setup.sh" /tmp/setup.sh
+adb push "$TMP/Packages" /tmp/Packages
+adb push "$TMP/$OPKG_FILE" "/tmp/$OPKG_FILE"
+adb push "$TMP/opkg-status" /tmp/opkg-status
+adb push "$TMP/patch_usb_kernel" /tmp/patch_usb_kernel
 
+# Run setup on device
 echo "[*] Running setup on device..."
 echo ""
 adb shell "sh /tmp/setup.sh"
@@ -56,8 +79,8 @@ echo ""
 echo "[*] Done!"
 echo ""
 echo "Connect to device:"
-echo "  ssh root@192.168.88.1    (if Dropbear SSH installed)"
 echo "  adb shell                (USB)"
+echo "  ssh root@<device-ip>     (after installing Dropbear SSH)"
 echo ""
 echo "Install packages:"
 echo "  opkg update"

@@ -1,23 +1,23 @@
 #!/bin/sh
 # setup.sh — runs ON the EE71 device (via adb shell)
-# Downloads opkg + packages from GitHub and configures the package manager.
+# Installs opkg from files already pushed to /tmp/ by the host installer.
 #
 # Normal mode:   installs to /usr/bin, /etc (persistent UBI)
 # Recovery mode:  /system already mounted by init, installs to /system/...
+#                 Also installs USB kernel patch so ADB works in normal mode.
 
 set -e
 
-REPO="https://raw.githubusercontent.com/rctphone/ee71-opkg/main"
 PREFIX=""
 
 # --- Detect mode ---
-# Normal mode: /usr is a UBI mount (ubi0:usrfs)
+# Normal mode: /usr is a UBI mount (ubi0:usrfs on /usr)
 # Recovery mode: /system is mounted by find_recovery_partitions.sh at boot
-if mount | grep -q "ubi.*on /usr"; then
-    echo "[*] Normal mode detected (/usr is UBI mount)"
+if mount | grep -q "ubi.*on /usr "; then
+    echo "[*] Normal mode detected"
     PREFIX=""
 elif [ -d "/system/usr/bin" ]; then
-    echo "[*] Recovery mode detected (/system already mounted)"
+    echo "[*] Recovery mode detected (/system mounted)"
     PREFIX="/system"
 else
     echo "[ERR] Cannot detect device mode."
@@ -29,33 +29,18 @@ else
     exit 1
 fi
 
-# --- Check wget/curl ---
-DL=""
-if command -v curl >/dev/null 2>&1; then
-    DL="curl -sL -o"
-elif command -v wget >/dev/null 2>&1; then
-    DL="wget -q -O"
-else
-    echo "[ERR] No curl or wget found on device."
-    echo "  Push files manually via ADB (see INSTALL.md)."
-    exit 1
-fi
-
-# --- Download opkg ipk ---
-echo "[*] Downloading package index..."
-$DL /tmp/Packages "$REPO/Packages"
-
-OPKG_FILE=$(grep "^Filename: opkg_" /tmp/Packages | head -1 | awk '{print $2}')
+# --- Find opkg ipk in /tmp ---
+OPKG_FILE=$(ls /tmp/opkg_*.ipk 2>/dev/null | head -1)
 if [ -z "$OPKG_FILE" ]; then
-    echo "[ERR] opkg package not found in index"
+    echo "[ERR] opkg ipk not found in /tmp/"
+    echo "  The host installer should have pushed it via ADB."
     exit 1
 fi
 
-echo "[*] Downloading $OPKG_FILE..."
-$DL "/tmp/$OPKG_FILE" "$REPO/$OPKG_FILE"
-
-echo "[*] Downloading opkg-status..."
-$DL /tmp/opkg-status "$REPO/opkg-status"
+if [ ! -f /tmp/opkg-status ]; then
+    echo "[ERR] opkg-status not found in /tmp/"
+    exit 1
+fi
 
 # --- Extract and install opkg binary ---
 echo "[*] Installing opkg..."
@@ -99,11 +84,35 @@ for pkg in $(sed -n 's/^Package: //p' "$PREFIX/usr/lib/opkg/status"); do
     touch "$PREFIX/usr/lib/opkg/info/${pkg}.list"
 done
 
+# --- Install USB kernel patch (ADB support) ---
+if [ -f /tmp/patch_usb_kernel ]; then
+    echo "[*] Installing USB kernel patch (ADB in normal mode)..."
+    cp /tmp/patch_usb_kernel "$PREFIX/etc/init.d/patch_usb_kernel"
+    chmod 755 "$PREFIX/etc/init.d/patch_usb_kernel"
+    ln -sf ../init.d/patch_usb_kernel "$PREFIX/etc/rcS.d/S01patch_usb_kernel"
+    echo "  $PREFIX/etc/rcS.d/S01patch_usb_kernel installed"
+
+    # Also patch boot_hsusb_composition to include ADB
+    COMP="$PREFIX/sbin/usb/boot_hsusb_composition"
+    if [ -f "$COMP" ]; then
+        if ! grep -q "ffs" "$COMP" 2>/dev/null; then
+            echo "[*] Patching boot_hsusb_composition to include ADB..."
+            # Replace the functions line to include diag,ffs,serial
+            sed -i 's/echo rndis_qc,mass_storage/echo rndis_qc,diag,ffs,serial,mass_storage/' "$COMP"
+            sed -i 's/echo ecm,mass_storage/echo ecm,diag,ffs,serial,mass_storage/' "$COMP"
+            echo "  boot_hsusb_composition patched"
+        else
+            echo "  boot_hsusb_composition already has ADB"
+        fi
+    fi
+fi
+
 # --- Clean up ---
 rm -f /tmp/Packages /tmp/opkg-status /tmp/opkg_*.ipk /tmp/data.tar.gz
+rm -f /tmp/patch_usb_kernel
 rm -rf /tmp/usr
 
-# --- Test (normal mode only) ---
+# --- Test (normal mode only — recovery has no network) ---
 if [ -z "$PREFIX" ]; then
     echo "[*] Testing opkg..."
     if opkg update 2>&1; then
@@ -120,5 +129,6 @@ if [ -z "$PREFIX" ]; then
 else
     echo ""
     echo "=== Setup complete (recovery mode) ==="
-    echo "Reboot to normal mode, then run: opkg update"
+    echo "Reboot to normal mode: adb reboot"
+    echo "Then: opkg update && opkg install dropbear curl"
 fi

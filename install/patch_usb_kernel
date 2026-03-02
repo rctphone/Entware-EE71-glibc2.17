@@ -1,0 +1,199 @@
+#!/bin/sh
+# Patch kernel jrd_usb_configs_tab to customize USB compositions per OS
+#
+# The EE71 kernel has a built-in table (jrd_usb_configs_tab) that maps USB PIDs
+# to function lists. When the kernel detects the host OS, it auto-switches to
+# the corresponding PID. Stock table only has ecm/rndis + mass_storage (no ADB).
+#
+# This script patches the table in RAM via /dev/kmem on every boot.
+# Configuration is read from /usb_conf/usb_patch.conf (written by web UI).
+# If no config file exists, defaults are used (ADB + DIAG + Serial + MS).
+#
+# Kernel table at 0xc0a4a890, 15 entries, each 36 bytes:
+#   PID(4 bytes) + 8 func_id slots(4 bytes each)
+#   func_id: 0=ffs(ADB), 2=ecm_qc, 7=diag, 9=serial, 15=rndis_qc, 16=ecm, 18=mass_storage
+
+SYSFS="/sys/class/android_usb/android0"
+LOG=/tmp/usb_kernel_patch.log
+CONF="/usb_conf/usb_patch.conf"
+TABLE_BASE=$((0xc0a4a890))
+ENTRY_SIZE=36
+
+# Default configs (if no config file)
+DEFAULT_14="16,7,0,9,18"   # Mac: ecm,diag,ffs,serial,mass_storage
+DEFAULT_5="15,7,0,9,18"    # Win/Linux: rndis_qc,diag,ffs,serial,mass_storage
+
+# Expected PIDs (little-endian hex) for verification
+PID_14="08090000"   # 0x0908
+PID_5="95010000"    # 0x0195
+
+# Map func_id → sysfs function name (for fix_current_boot)
+fid_to_name() {
+    case "$1" in
+        0) echo "ffs" ;;
+        2) echo "ecm_qc" ;;
+        7) echo "diag" ;;
+        9) echo "serial" ;;
+        15) echo "rndis_qc" ;;
+        16) echo "ecm" ;;
+        18) echo "mass_storage" ;;
+        *) echo "" ;;
+    esac
+}
+
+# Read config for an entry index, return func IDs string
+# Usage: get_conf 14
+get_conf() {
+    idx="$1"
+    default="$2"
+    if [ -f "$CONF" ]; then
+        val=$(grep "^${idx}=" "$CONF" 2>/dev/null | head -1 | sed "s/^${idx}=//")
+        if [ -n "$val" ]; then
+            echo "$val"
+            return
+        fi
+    fi
+    echo "$default"
+}
+
+# Build and write kernel patch for an entry
+# Usage: patch_entry "Mac(0908)" entry_index expected_pid_hex funcs_csv
+patch_entry() {
+    label="$1"
+    idx="$2"
+    expected_pid="$3"
+    funcs_csv="$4"
+
+    entry_addr=$((TABLE_BASE + idx * ENTRY_SIZE))
+    patch_addr=$((entry_addr + 4))
+
+    # Verify PID
+    pid_hex=$(dd if=/dev/kmem bs=1 skip=$entry_addr count=4 2>/dev/null | od -A n -t x1 | tr -d ' ')
+    if [ "$pid_hex" != "$expected_pid" ]; then
+        echo "[$(date)] $label: PID mismatch: $pid_hex (expected $expected_pid)" >> $LOG
+        return 1
+    fi
+
+    # Build payload from func IDs
+    PAYLOAD=""
+    SLOT=0
+    OLD_IFS="$IFS"
+    IFS=','
+    for fid in $funcs_csv; do
+        PAYLOAD="${PAYLOAD}$(printf '\\x%02x' "$fid")\\x00\\x00\\x00"
+        SLOT=$((SLOT + 1))
+    done
+    IFS="$OLD_IFS"
+    # Pad remaining slots with 0xFFFFFFFF
+    while [ "$SLOT" -lt 8 ]; do
+        PAYLOAD="${PAYLOAD}\\xff\\xff\\xff\\xff"
+        SLOT=$((SLOT + 1))
+    done
+
+    # Write patch (always — 32 bytes to kmem is cheap)
+    printf "$PAYLOAD" | dd of=/dev/kmem bs=1 seek=$patch_addr conv=notrunc 2>/dev/null
+
+    # Verify first slot
+    first_fid=$(echo "$funcs_csv" | cut -d',' -f1)
+    expected_first=$(printf '%02x000000' "$first_fid")
+    new=$(dd if=/dev/kmem bs=1 skip=$patch_addr count=4 2>/dev/null | od -A n -t x1 | tr -d ' ')
+    if [ "$new" = "$expected_first" ]; then
+        echo "[$(date)] $label: patched OK → $funcs_csv" >> $LOG
+        return 0
+    else
+        echo "[$(date)] $label: verify failed: $new (expected $expected_first)" >> $LOG
+        return 1
+    fi
+}
+
+# Build sysfs function string from func IDs CSV
+# Usage: build_sysfs_funcs "16,7,0,9,18" → "ecm,diag,ffs,serial,mass_storage"
+build_sysfs_funcs() {
+    result=""
+    OLD_IFS="$IFS"
+    IFS=','
+    for fid in $1; do
+        name=$(fid_to_name "$fid")
+        [ -z "$name" ] && continue
+        if [ -z "$result" ]; then
+            result="$name"
+        else
+            result="$result,$name"
+        fi
+    done
+    IFS="$OLD_IFS"
+    echo "$result"
+}
+
+fix_current_boot() {
+    # Kernel auto-switch fires at ~6s, init scripts start at ~8-10s
+    # If patch ran before the switch, kernel uses patched table (no fix needed)
+    # If patch ran after, we fix the composition here
+    i=0
+    while [ $i -lt 15 ]; do
+        funcs=$(cat $SYSFS/functions 2>/dev/null)
+        state=$(cat $SYSFS/state 2>/dev/null)
+
+        # Already has ADB — done
+        case "$funcs" in *ffs*)
+            echo "[$(date)] ADB present ($funcs), done" >> $LOG
+            return 0
+        ;; esac
+
+        # ECM/RNDIS without ADB — fix it using config
+        case "$funcs" in *ecm*|*rndis*)
+            if [ "$state" = "CONFIGURED" ]; then
+                echo "[$(date)] Fixing boot composition ($funcs)" >> $LOG
+                pid=$(cat $SYSFS/idProduct 2>/dev/null)
+
+                # Determine which config to use based on current network mode
+                case "$funcs" in
+                    *ecm*) conf=$(get_conf 14 "$DEFAULT_14") ;;
+                    *)     conf=$(get_conf 5 "$DEFAULT_5") ;;
+                esac
+                new_funcs=$(build_sysfs_funcs "$conf")
+
+                echo 0 > $SYSFS/enable
+                echo "$new_funcs" > $SYSFS/functions
+                # Configure function-specific transports
+                case "$new_funcs" in *diag*) echo diag > $SYSFS/f_diag/clients 2>/dev/null ;; esac
+                case "$new_funcs" in *serial*) echo smd > $SYSFS/f_serial/transports 2>/dev/null ;; esac
+                echo 1 > $SYSFS/remote_wakeup
+                sleep 1
+                echo 1 > $SYSFS/enable
+                case "$new_funcs" in *ffs*) /etc/init.d/adbd start 2>/dev/null ;; esac
+                echo "[$(date)] Applied: $new_funcs (pid=$pid)" >> $LOG
+                return 0
+            fi
+        ;; esac
+
+        sleep 1
+        i=$((i + 1))
+    done
+    echo "[$(date)] Timeout waiting for ECM/RNDIS (funcs=$funcs)" >> $LOG
+}
+
+case "$1" in
+  start)
+    echo "[$(date)] Starting USB kernel patch" >> $LOG
+    # Read per-entry config (or use defaults)
+    MAC_FUNCS=$(get_conf 14 "$DEFAULT_14")
+    WIN_FUNCS=$(get_conf 5 "$DEFAULT_5")
+    echo "[$(date)] Config: entry14=$MAC_FUNCS entry5=$WIN_FUNCS" >> $LOG
+    patch_entry "Mac(0908)" 14 "$PID_14" "$MAC_FUNCS"
+    patch_entry "Win(0195)" 5 "$PID_5" "$WIN_FUNCS"
+    fix_current_boot &
+    ;;
+  stop)
+    echo "done"
+    ;;
+  restart)
+    $0 stop
+    $0 start
+    ;;
+  *)
+    echo "Usage: $0 {start|stop|restart}" >&2
+    exit 1
+    ;;
+esac
+exit 0
