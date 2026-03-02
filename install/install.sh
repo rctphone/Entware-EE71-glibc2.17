@@ -73,7 +73,7 @@ adb push "$TMP/patch_usb_kernel" /tmp/patch_usb_kernel
 # Run setup on device
 echo "[*] Running setup on device..."
 echo ""
-adb shell "sh /tmp/setup.sh"
+adb shell "sh /tmp/setup.sh" </dev/null
 
 echo ""
 echo "[*] Done!"
