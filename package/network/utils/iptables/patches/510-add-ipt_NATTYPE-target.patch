@@ -1,0 +1,158 @@
+--- /dev/null
++++ b/extensions/libipt_NATTYPE.c
+@@ -0,0 +1,126 @@
++/* Shared library add-on to iptables to add NATTYPE target support.
++ *
++ * Qualcomm NATTYPE — controls NAT traversal type (cone NAT modes).
++ * Kernel module: net/ipv4/netfilter/ipt_NATTYPE.c
++ */
++
++#include <stdio.h>
++#include <string.h>
++#include <stdlib.h>
++#include <getopt.h>
++#include <xtables.h>
++#include <linux/netfilter_ipv4/ipt_NATTYPE.h>
++
++static void NATTYPE_help(void)
++{
++	printf(
++		"NATTYPE target options:\n"
++		" --mode \n"
++		"\t dnat (PREROUTING)\n"
++		"\t forward_in (FORWARD)\n"
++		"\t forward_out (FORWARD)\n"
++		" --type \n"
++		"\t %d -- Endpoint Independent\n"
++		"\t %d -- Address Restricted\n",
++		TYPE_ENDPOINT_INDEPENDENT,
++		TYPE_ADDRESS_RESTRICTED);
++}
++
++static const struct option NATTYPE_opts[] = {
++	{ "mode", 1, NULL, '1' },
++	{ "type", 1, NULL, '2' },
++	{ .name = NULL }
++};
++
++static int NATTYPE_parse(int c, char **argv, int invert, unsigned int *flags,
++			 const void *entry, struct xt_entry_target **target)
++{
++	struct ipt_nattype_info *info =
++		(struct ipt_nattype_info *)(*target)->data;
++
++	switch (c) {
++	case '1':
++		if (strcasecmp(optarg, "dnat") == 0)
++			info->mode = MODE_DNAT;
++		else if (strcasecmp(optarg, "forward_in") == 0 ||
++			 strcasecmp(optarg, "forward in") == 0)
++			info->mode = MODE_FORWARD_IN;
++		else if (strcasecmp(optarg, "forward_out") == 0 ||
++			 strcasecmp(optarg, "forward out") == 0)
++			info->mode = MODE_FORWARD_OUT;
++		else
++			xtables_error(PARAMETER_PROBLEM,
++				"--mode: dnat forward_in forward_out");
++		*flags |= 1;
++		return 1;
++	case '2':
++		info->type = strtol(optarg, NULL, 10);
++		*flags |= 2;
++		return 1;
++	}
++	return 0;
++}
++
++static void NATTYPE_check(unsigned int flags)
++{
++}
++
++static void NATTYPE_print(const void *ip,
++			  const struct xt_entry_target *target, int numeric)
++{
++	const struct ipt_nattype_info *info =
++		(const struct ipt_nattype_info *)target->data;
++
++	printf(" --mode");
++	switch (info->mode) {
++	case MODE_DNAT:
++		printf(" dnat");
++		break;
++	case MODE_FORWARD_IN:
++		printf(" forward_in");
++		break;
++	case MODE_FORWARD_OUT:
++		printf(" forward_out");
++		break;
++	}
++	printf(" --type %d", info->type);
++}
++
++static void NATTYPE_save(const void *ip,
++			 const struct xt_entry_target *target)
++{
++	const struct ipt_nattype_info *info =
++		(const struct ipt_nattype_info *)target->data;
++
++	switch (info->mode) {
++	case MODE_DNAT:
++		printf(" --mode dnat");
++		break;
++	case MODE_FORWARD_IN:
++		printf(" --mode forward_in");
++		break;
++	case MODE_FORWARD_OUT:
++		printf(" --mode forward_out");
++		break;
++	}
++	printf(" --type %d", info->type);
++}
++
++static struct xtables_target nattype_tg_reg = {
++	.name          = "NATTYPE",
++	.version       = XTABLES_VERSION,
++	.family        = NFPROTO_IPV4,
++	.size          = XT_ALIGN(sizeof(struct ipt_nattype_info)),
++	.userspacesize = XT_ALIGN(sizeof(struct ipt_nattype_info)),
++	.help          = NATTYPE_help,
++	.parse         = NATTYPE_parse,
++	.final_check   = NATTYPE_check,
++	.print         = NATTYPE_print,
++	.save          = NATTYPE_save,
++	.extra_opts    = NATTYPE_opts,
++};
++
++void _init(void)
++{
++	xtables_register_target(&nattype_tg_reg);
++}
+--- /dev/null
++++ b/include/linux/netfilter_ipv4/ipt_NATTYPE.h
+@@ -0,0 +1,26 @@
++#ifndef _IPT_NATTYPE_H_target
++#define _IPT_NATTYPE_H_target
++
++#define NATTYPE_TIMEOUT 300
++
++enum nattype_mode {
++	MODE_DNAT,
++	MODE_FORWARD_IN,
++	MODE_FORWARD_OUT
++};
++
++enum nattype_type {
++	TYPE_PORT_ADDRESS_RESTRICTED,
++	TYPE_ENDPOINT_INDEPENDENT,
++	TYPE_ADDRESS_RESTRICTED
++};
++
++struct ipt_nattype_info {
++	u_int16_t mode;
++	u_int16_t type;
++};
++
++extern bool nattype_refresh_timer(unsigned long nattype,
++	unsigned long timeout_value);
++
++#endif /*_IPT_NATTYPE_H_target*/

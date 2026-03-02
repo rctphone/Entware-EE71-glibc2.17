@@ -14,7 +14,7 @@ PKG_NAME:=iptables
 PKG_VERSION:=1.4.21
 
 ifndef CONFIG_PACKAGE_opt-ndmsv2
-  PKG_RELEASE:=5
+  PKG_RELEASE:=6
 else
   PKG_RELEASE:=6
 endif
