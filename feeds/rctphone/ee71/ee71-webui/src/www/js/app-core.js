@@ -139,7 +139,7 @@ var App = (function() {
 
     var NAV_ITEMS = [
         { id: 'dashboard',    icon: 'ic-dashboard',  label: 'Dashboard' },
-        { id: 'traffic',      icon: 'ic-traffic',    label: 'Traffic' },
+
         { id: 'clients',      icon: 'ic-clients',    label: 'Clients' },
         { id: 'connection',   icon: 'ic-mobile',     label: 'Connection' },
         { id: 'apn',          icon: 'ic-globe',      label: 'APN' },
@@ -148,7 +148,7 @@ var App = (function() {
         { id: 'mobile-settings', icon: 'ic-settings', label: 'Settings' },
         { id: 'sms',          icon: 'ic-sms',        label: 'SMS' },
         { id: 'wifi',         icon: 'ic-wifi',       label: 'WiFi' },
-        { id: 'wifi-extender', icon: 'ic-wifi',      label: 'WiFi Extender' },
+
         { id: 'lan',          icon: 'ic-network',    label: 'LAN' },
         { id: 'firewall',     icon: 'ic-firewall',   label: 'Firewall' },
         { id: 'upnp',         icon: 'ic-network',    label: 'UPnP' },
@@ -163,9 +163,9 @@ var App = (function() {
     ];
 
     var NAV_GROUPS = [
-        { label: 'STATUS',   icon: 'ic-dashboard', items: ['dashboard', 'traffic', 'clients'] },
+        { label: 'STATUS',   icon: 'ic-dashboard', items: ['dashboard', 'clients'] },
         { label: 'MOBILE',   icon: 'ic-mobile',    items: ['connection', 'sms', 'ussd', 'mobile-settings'] },
-        { label: 'NETWORK',  icon: 'ic-wifi',      items: ['wifi', 'wifi-extender', 'lan', 'firewall', 'upnp', 'ttl-fix', 'vpn'] },
+        { label: 'NETWORK',  icon: 'ic-wifi',      items: ['wifi', 'lan', 'firewall', 'upnp', 'ttl-fix', 'vpn'] },
         { label: 'SYSTEM',   icon: 'ic-settings',  items: ['diagnostics', 'speedtest', 'settings', 'ssh', 'backup', 'about'] },
     ];
 
@@ -304,11 +304,12 @@ var App = (function() {
         if (!API.isLoggedIn()) return;
         Promise.all([
             API.cgiGet('wireguard.cgi', { action: 'status' }).catch(function() { return {}; }),
+            API.cgiGet('amneziawg.cgi', { action: 'status' }).catch(function() { return {}; }),
             API.cgiGet('shadowsocks.cgi', { action: 'status' }).catch(function() { return {}; }),
         ]).then(function(vpn) {
             var elVpn = $('#sb-vpn');
             if (elVpn) {
-                var vpnOn = !!(vpn[0].up || vpn[1].running);
+                var vpnOn = !!(vpn[0].up || vpn[1].up || vpn[2].running);
                 elVpn.classList.toggle('hidden', !vpnOn);
             }
         }).catch(function() {});
@@ -435,7 +436,7 @@ var App = (function() {
     // --- Build navigation ---
 
     var BOTTOM_NAV_IDS = {
-        dashboard: 1, traffic: 1, clients: 1,
+        dashboard: 1, clients: 1,
         connection: 1, sms: 1,
         wifi: 1, vpn: 1,
         settings: 1, speedtest: 1, about: 1

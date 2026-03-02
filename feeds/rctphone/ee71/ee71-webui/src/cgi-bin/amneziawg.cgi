@@ -1,16 +1,16 @@
 #!/bin/sh
-# wireguard.cgi — WireGuard VPN management
+# amneziawg.cgi — AmneziaWG VPN management
 # GET: status, config (read-only)
 # POST: save, enable, disable, generate_key (with CSRF check)
 echo "Content-Type: application/json"
 echo ""
 
-WG_CONF="/etc/wireguard/wg0.conf"
+AWG_CONF="/etc/amneziawg/awg0.conf"
 VPN_CONF="/etc/vpn.conf"
 VPN_APPLY="/usr/bin/vpn_apply"
-WG_MODULE="/usr/lib/modules/$(uname -r)/kernel/drivers/net/wireguard.ko"
-WG_BIN="/usr/bin/wg"
-IFACE="wg0"
+AWG_MODULE="/usr/lib/modules/$(uname -r)/kernel/drivers/net/amneziawg.ko"
+AWG_BIN="/usr/bin/awg"
+IFACE="awg0"
 # Detect LAN subnet from bridge0
 _LAN=$(ifconfig bridge0 2>/dev/null | sed -n 's/.*inet addr:\([^ ]*\).*/\1/p')
 LAN_NET=$(echo "${_LAN:-192.168.1.1}" | sed 's/\.[0-9]*$/.0\/24/')
@@ -45,7 +45,7 @@ json_escape() {
     printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/	/\\t/g'
 }
 
-is_wg_up() {
+is_awg_up() {
     ip link show "$IFACE" >/dev/null 2>&1 && echo 1 || echo 0
 }
 
@@ -76,35 +76,35 @@ esac
 
 case "$ACTION" in
 status)
-    UP=$(is_wg_up)
+    UP=$(is_awg_up)
     MODULE_LOADED=0
-    lsmod 2>/dev/null | grep -q wireguard && MODULE_LOADED=1
+    lsmod 2>/dev/null | grep -q amneziawg && MODULE_LOADED=1
     HAS_CONFIG=0
-    [ -f "$WG_CONF" ] && HAS_CONFIG=1
-    HAS_WG=0
-    [ -x "$WG_BIN" ] && HAS_WG=1
+    [ -f "$AWG_CONF" ] && HAS_CONFIG=1
+    HAS_AWG=0
+    [ -x "$AWG_BIN" ] && HAS_AWG=1
 
-    # Get address from wg0 interface (runtime), endpoint from config (for display when down)
-    WG_ADDRESS=""
+    # Get address from awg0 interface (runtime), endpoint from config (for display when down)
+    AWG_ADDRESS=""
     if [ "$UP" = "1" ]; then
-        WG_ADDRESS=$(ip -4 addr show "$IFACE" 2>/dev/null | sed -n 's/.*inet \([^ ]*\).*/\1/p' | head -1)
+        AWG_ADDRESS=$(ip -4 addr show "$IFACE" 2>/dev/null | sed -n 's/.*inet \([^ ]*\).*/\1/p' | head -1)
     fi
     CONF_ENDPOINT=""
-    if [ -f "$WG_CONF" ]; then
-        CONF_ENDPOINT=$(sed -n 's/^[[:space:]]*Endpoint[[:space:]]*=[[:space:]]*//p' "$WG_CONF" | head -1)
+    if [ -f "$AWG_CONF" ]; then
+        CONF_ENDPOINT=$(sed -n 's/^[[:space:]]*Endpoint[[:space:]]*=[[:space:]]*//p' "$AWG_CONF" | head -1)
     fi
 
     vpn_read
     AUTO_START=0
-    [ "$_VPN" = "wg" ] && AUTO_START=1
+    [ "$_VPN" = "awg" ] && AUTO_START=1
 
-    # Get wg show dump if interface is up
+    # Get awg show dump if interface is up
     PEERS_JSON="[]"
     IFACE_JSON="{}"
-    if [ "$UP" = "1" ] && [ -x "$WG_BIN" ]; then
-        WG_DUMP=$("$WG_BIN" show "$IFACE" dump 2>/dev/null)
-        if [ -n "$WG_DUMP" ]; then
-            IFACE_LINE=$(echo "$WG_DUMP" | head -1)
+    if [ "$UP" = "1" ] && [ -x "$AWG_BIN" ]; then
+        AWG_DUMP=$("$AWG_BIN" show "$IFACE" dump 2>/dev/null)
+        if [ -n "$AWG_DUMP" ]; then
+            IFACE_LINE=$(echo "$AWG_DUMP" | head -1)
             IFACE_PUBKEY=$(echo "$IFACE_LINE" | cut -f2)
             IFACE_PORT=$(echo "$IFACE_LINE" | cut -f3)
 
@@ -112,7 +112,7 @@ status)
                 "$(json_escape "$IFACE_PUBKEY")" \
                 "$(json_escape "$IFACE_PORT")")
 
-            PEERS_INNER=$(echo "$WG_DUMP" | tail -n +2 | {
+            PEERS_INNER=$(echo "$AWG_DUMP" | tail -n +2 | {
                 FIRST_PEER=1
                 while IFS='	' read -r PUBKEY PRESHARED ENDPOINT ALLOWED_IPS HANDSHAKE RX TX KEEPALIVE; do
                     [ -z "$PUBKEY" ] && continue
@@ -146,20 +146,20 @@ status)
         fi
     fi
 
-    printf '{"up":%d,"module_loaded":%d,"has_config":%d,"has_wg":%d,"auto_start":%d,"address":"%s","endpoint":"%s","interface":%s,"peers":%s}' \
-        "$UP" "$MODULE_LOADED" "$HAS_CONFIG" "$HAS_WG" "$AUTO_START" \
-        "$(json_escape "$WG_ADDRESS")" "$(json_escape "$CONF_ENDPOINT")" \
+    printf '{"up":%d,"module_loaded":%d,"has_config":%d,"has_awg":%d,"auto_start":%d,"address":"%s","endpoint":"%s","interface":%s,"peers":%s}' \
+        "$UP" "$MODULE_LOADED" "$HAS_CONFIG" "$HAS_AWG" "$AUTO_START" \
+        "$(json_escape "$AWG_ADDRESS")" "$(json_escape "$CONF_ENDPOINT")" \
         "$IFACE_JSON" "$PEERS_JSON"
     ;;
 
 config)
-    if [ ! -f "$WG_CONF" ]; then
-        echo '{"error":"No WireGuard config found"}'
+    if [ ! -f "$AWG_CONF" ]; then
+        echo '{"error":"No AmneziaWG config found"}'
         exit 0
     fi
 
     # Return raw config file — escape for JSON (backslash, quotes, newlines)
-    RAW=$(sed 's/\\/\\\\/g; s/"/\\"/g; s/	/\\t/g' "$WG_CONF" | awk '{if(NR>1)printf "\\n"; printf "%s",$0}')
+    RAW=$(sed 's/\\/\\\\/g; s/"/\\"/g; s/	/\\t/g' "$AWG_CONF" | awk '{if(NR>1)printf "\\n"; printf "%s",$0}')
     printf '{"config":"%s"}' "$RAW"
     ;;
 
@@ -176,48 +176,48 @@ save)
         exit 0
     fi
 
-    mkdir -p "$(dirname "$WG_CONF")"
-    printf '%s\n' "$CONFIG" > "$WG_CONF"
-    chmod 0600 "$WG_CONF"
+    mkdir -p "$(dirname "$AWG_CONF")"
+    printf '%s\n' "$CONFIG" > "$AWG_CONF"
+    chmod 0600 "$AWG_CONF"
 
-    if [ "$(is_wg_up)" = "1" ] && [ -x "$WG_BIN" ]; then
-        "$WG_BIN" strip "$WG_CONF" | "$WG_BIN" syncconf "$IFACE" /dev/stdin 2>/dev/null
+    if [ "$(is_awg_up)" = "1" ] && [ -x "$AWG_BIN" ]; then
+        "$AWG_BIN" strip "$AWG_CONF" | "$AWG_BIN" syncconf "$IFACE" /dev/stdin 2>/dev/null
     fi
 
     printf '{"ok":true}'
     ;;
 
 enable)
-    if [ ! -f "$WG_CONF" ]; then
-        echo '{"error":"No WireGuard config. Save config first."}'
+    if [ ! -f "$AWG_CONF" ]; then
+        echo '{"error":"No AmneziaWG config. Save config first."}'
         exit 0
     fi
 
-    # Write VPN state and apply (stops SS if running, starts WG + route all)
-    vpn_write "wg"
+    # Write VPN state and apply (stops other VPNs, starts AWG + route all)
+    vpn_write "awg"
     "$VPN_APPLY" >/dev/null 2>&1
 
-    UP=$(is_wg_up)
+    UP=$(is_awg_up)
     printf '{"ok":true,"up":%d}' "$UP"
     ;;
 
 disable)
-    # Write VPN off and apply (stops WG, cleans routes)
+    # Write VPN off and apply (stops AWG, cleans routes)
     vpn_write "off"
     "$VPN_APPLY" >/dev/null 2>&1
 
-    UP=$(is_wg_up)
+    UP=$(is_awg_up)
     printf '{"ok":true,"up":%d}' "$UP"
     ;;
 
 generate_key)
-    if [ ! -x "$WG_BIN" ]; then
-        echo '{"error":"wg binary not found"}'
+    if [ ! -x "$AWG_BIN" ]; then
+        echo '{"error":"awg binary not found"}'
         exit 0
     fi
 
-    PRIVKEY=$("$WG_BIN" genkey 2>/dev/null)
-    PUBKEY=$(echo "$PRIVKEY" | "$WG_BIN" pubkey 2>/dev/null)
+    PRIVKEY=$("$AWG_BIN" genkey 2>/dev/null)
+    PUBKEY=$(echo "$PRIVKEY" | "$AWG_BIN" pubkey 2>/dev/null)
 
     printf '{"private_key":"%s","public_key":"%s"}' \
         "$(json_escape "$PRIVKEY")" \

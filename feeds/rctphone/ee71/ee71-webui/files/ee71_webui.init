@@ -93,19 +93,17 @@ start_speedtest() {
     # Get LAN IP
     LAN_IP=$(ifconfig bridge0 2>/dev/null | sed -n 's/.*inet addr:\([^ ]*\).*/\1/p')
     LAN_IP="${LAN_IP:-192.168.1.1}"
-    # Ensure dnsmasq resolves our custom domain to the router
-    DNS_ENTRY="address=/$SPEEDTEST_DOMAIN/$LAN_IP"
-    if ! grep -qF "$SPEEDTEST_DOMAIN" "$DNSMASQ_CONF" 2>/dev/null; then
-        echo "$DNS_ENTRY" >> "$DNSMASQ_CONF"
-        # SIGHUP does not reload address= records — full restart needed
-        DNSMASQ_PID=$(pidof dnsmasq 2>/dev/null)
-        if [ -n "$DNSMASQ_PID" ]; then
-            DNSMASQ_CMD=$(cat /proc/$DNSMASQ_PID/cmdline 2>/dev/null | tr '\0' ' ')
-            kill "$DNSMASQ_PID" 2>/dev/null; sleep 0.3
-            $DNSMASQ_CMD 2>/dev/null || true
-        fi
-        echo "dnsmasq: $SPEEDTEST_DOMAIN -> $LAN_IP"
+    # Ensure dnsmasq resolves our custom domain to the router.
+    # Use /etc/hosts (universally read by dnsmasq, even QCMAP-launched).
+    if ! grep -qF "$SPEEDTEST_DOMAIN" /etc/hosts 2>/dev/null; then
+        echo "$LAN_IP $SPEEDTEST_DOMAIN" >> /etc/hosts
     fi
+    # Block native Ookla domains (force custom widget)
+    for BLK in speedtest.net c.speedtest.net; do
+        grep -qF "$BLK" /etc/hosts 2>/dev/null || echo "127.0.0.1 $BLK" >> /etc/hosts
+    done
+    # Reload dnsmasq to pick up /etc/hosts changes
+    kill -HUP "$(pidof dnsmasq)" 2>/dev/null && echo "dnsmasq: $SPEEDTEST_DOMAIN -> $LAN_IP"
     # Open firewall port for speedtest httpd
     iptables -C INPUT -i bridge0 -p tcp --dport "$SPEEDTEST_PORT" -j ACCEPT 2>/dev/null || \
         iptables -I INPUT 1 -i bridge0 -p tcp --dport "$SPEEDTEST_PORT" -j ACCEPT 2>/dev/null

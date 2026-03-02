@@ -2004,6 +2004,8 @@ label.switch input:disabled + .slider { opacity: 0.4; cursor: default; }
 
 /* --- VPN page --- */
 
+.vpn-card + .vpn-card { margin-top: 1rem; }
+
 .vpn-status {
     display: flex;
     align-items: center;

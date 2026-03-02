@@ -35,21 +35,62 @@
     // Last fetched settings, kept for advanced panel access
     var _wifiSettings = null;
 
-    // Build full AP2G/AP5G params from current settings — firmware resets omitted fields
+    // Build full SetWlanSettings params — firmware resets omitted fields to empty.
+    // Three sections needed:
+    //   AP2G       — 2.4GHz primary (wlan0)
+    //   AP5G       — 5GHz settings (band-switch mode, kept in sync)
+    //   AP2G_guest — Guest AP = wlan1 in AP-AP mode (the actual 5GHz interface)
     // SecurityMode 4 (WPA/WPA2) and 2 (WPA) generate broken hostapd config — clamp to safe values
     function _safeSecMode(mode) { return (mode === 0) ? 0 : 3; }
 
     function _fullParams(overrides2g, overrides5g) {
         var s = _wifiSettings || {};
+        var raw2g = s.AP2G || {};
+        var raw5g = s.AP5G || {};
+        var rawGuest = s.AP2G_guest || {};
+
         var st2g = (s.Wlan2gState === 1 || s.Wlan2gState === '1') ? 1 : 0;
         var st5g = (s.Wlan5gState === 1 || s.Wlan5gState === '1') ? 1 : 0;
-        var sec2g = _safeSecMode(SEC_REV[s.WlanAuthMode] != null ? SEC_REV[s.WlanAuthMode] : 3);
-        var sec5g = _safeSecMode(SEC_REV[s.WlanAuthMode_5G] != null ? SEC_REV[s.WlanAuthMode_5G] : 3);
-        var ap2g = { ApStatus: st2g, Ssid: s.WlanSSID || '', WpaKey: s.WlanAPPwd || '', SecurityMode: sec2g, WpaType: 1 };
-        var ap5g = { ApStatus: st5g, Ssid: s.WlanSSID_5G || '', WpaKey: s.WlanAPPwd_5G || '', SecurityMode: sec5g, WpaType: 1 };
+        var sec2g = _safeSecMode(SEC_REV[s.WlanAuthMode] != null ? SEC_REV[s.WlanAuthMode] : (raw2g.SecurityMode != null ? raw2g.SecurityMode : 3));
+        var sec5g = _safeSecMode(SEC_REV[s.WlanAuthMode_5G] != null ? SEC_REV[s.WlanAuthMode_5G] : (raw5g.SecurityMode != null ? raw5g.SecurityMode : 3));
+        var ch2g = parseInt(s.WlanChannel || raw2g.Channel || 0, 10) || 0;
+        var ch5g = parseInt(s.WlanChannel_5G || rawGuest.Channel || raw5g.Channel || 0, 10) || 0;
+        var wmode2g = WMODE_2G_REV[s.WlanMode] != null ? WMODE_2G_REV[s.WlanMode] : (raw2g.WMode != null ? raw2g.WMode : 3);
+        var wmode5g = WMODE_5G_REV[s.WlanMode_5G] != null ? WMODE_5G_REV[s.WlanMode_5G] : (rawGuest.WMode != null ? rawGuest.WMode : (raw5g.WMode != null ? raw5g.WMode : 6));
+        var bw2g = BW_2G_REV[s.WlanBandwidth] != null ? BW_2G_REV[s.WlanBandwidth] : (raw2g.Bandwidth != null ? raw2g.Bandwidth : 0);
+        var bw5g = BW_5G_REV[s.WlanBandwidth_5G] != null ? BW_5G_REV[s.WlanBandwidth_5G] : (rawGuest.Bandwidth != null ? rawGuest.Bandwidth : (raw5g.Bandwidth != null ? raw5g.Bandwidth : 0));
+        var hide2g = (s['2GHiddenSSID'] === '1' || s['2GHiddenSSID'] === 1 || raw2g.SsidHidden === 1) ? 1 : 0;
+        var hide5g = (s['5GHiddenSSID'] === '1' || s['5GHiddenSSID'] === 1 || rawGuest.SsidHidden === 1 || raw5g.SsidHidden === 1) ? 1 : 0;
+        var cc = raw2g.CountryCode || raw5g.CountryCode || rawGuest.CountryCode || 'GB';
+
+        var ap2g = {
+            ApStatus: st2g, Ssid: s.WlanSSID || '', WpaKey: s.WlanAPPwd || '',
+            SecurityMode: sec2g, WpaType: 1,
+            Channel: ch2g, WMode: wmode2g, Bandwidth: bw2g,
+            SsidHidden: hide2g, CountryCode: cc,
+            ApIsolation: raw2g.ApIsolation || 0, max_numsta: raw2g.max_numsta || 15
+        };
+        var ap5g = {
+            ApStatus: st5g, Ssid: s.WlanSSID_5G || '', WpaKey: s.WlanAPPwd_5G || '',
+            SecurityMode: sec5g, WpaType: 1,
+            Channel: ch5g, WMode: wmode5g, Bandwidth: bw5g,
+            SsidHidden: hide5g, CountryCode: cc,
+            ApIsolation: raw5g.ApIsolation || 0, max_numsta: rawGuest.max_numsta || raw5g.max_numsta || 15
+        };
         if (overrides2g) Object.keys(overrides2g).forEach(function(k) { ap2g[k] = overrides2g[k]; });
         if (overrides5g) Object.keys(overrides5g).forEach(function(k) { ap5g[k] = overrides5g[k]; });
-        return { AP2G: ap2g, AP5G: ap5g };
+
+        // Guest sections = wlan1 in AP-AP mode, cascade ALL fields from 5GHz
+        var guestSsid = ap5g.Ssid || (ap2g.Ssid ? ap2g.Ssid + '_5G' : 'EE71_5G');
+        var guestKey = ap5g.WpaKey || ap2g.WpaKey || '12345678';
+        var guestFields = {
+            ApStatus: ap5g.ApStatus, Ssid: guestSsid, WpaKey: guestKey,
+            SecurityMode: ap5g.SecurityMode, WpaType: ap5g.WpaType,
+            Channel: ap5g.Channel, WMode: ap5g.WMode, Bandwidth: ap5g.Bandwidth,
+            SsidHidden: ap5g.SsidHidden, CountryCode: ap5g.CountryCode,
+            ApIsolation: 0, max_numsta: ap5g.max_numsta
+        };
+        return { AP2G: ap2g, AP5G: ap5g, AP2G_guest: guestFields, AP5G_guest: guestFields };
     }
 
     function _toast(msg, isErr) {
@@ -76,26 +117,31 @@
         ]).then(function(results) {
             var settings = results[0], state = results[1];
 
-            // Map nested AP2G/AP5G to flat names for display
+            // Map nested AP2G/AP5G/AP2G_guest to flat names for display.
+            // In AP-AP mode, wlan1 (5GHz) is the "guest AP" — prefer AP2G_guest
+            // over AP5G for 5GHz data since that's what controls wlan1 hostapd.
             if (settings) {
                 var ap2g = settings.AP2G || {};
                 var ap5g = settings.AP5G || {};
+                var guest = settings.AP2G_guest || {};
+                // Use AP2G_guest for 5GHz display when available (it maps to Guest5G* DB fields)
+                var src5g = (guest.Ssid && guest.ApStatus != null) ? guest : ap5g;
                 if (!settings.WlanSSID && ap2g.Ssid) settings.WlanSSID = ap2g.Ssid;
                 if (!settings.WlanAPPwd && ap2g.WpaKey) settings.WlanAPPwd = ap2g.WpaKey;
                 if (settings.WlanChannel == null && ap2g.Channel != null) settings.WlanChannel = String(ap2g.Channel);
                 if (settings.WlanAuthMode == null && ap2g.SecurityMode != null) settings.WlanAuthMode = SEC_MAP[ap2g.SecurityMode] || '';
                 if (!settings.WlanMode && ap2g.WMode != null) settings.WlanMode = WMODE_2G[ap2g.WMode] || '';
                 if (!settings.WlanBandwidth && ap2g.Bandwidth != null) settings.WlanBandwidth = BW_2G[ap2g.Bandwidth] || '';
-                if (!settings.WlanSSID_5G && ap5g.Ssid) settings.WlanSSID_5G = ap5g.Ssid;
-                if (!settings.WlanAPPwd_5G && ap5g.WpaKey) settings.WlanAPPwd_5G = ap5g.WpaKey;
-                if (settings.WlanChannel_5G == null && ap5g.Channel != null) settings.WlanChannel_5G = String(ap5g.Channel);
-                if (settings.WlanAuthMode_5G == null && ap5g.SecurityMode != null) settings.WlanAuthMode_5G = SEC_MAP[ap5g.SecurityMode] || '';
-                if (!settings.WlanMode_5G && ap5g.WMode != null) settings.WlanMode_5G = WMODE_5G[ap5g.WMode] || '';
-                if (!settings.WlanBandwidth_5G && ap5g.Bandwidth != null) settings.WlanBandwidth_5G = BW_5G[ap5g.Bandwidth] || '';
+                if (!settings.WlanSSID_5G && src5g.Ssid) settings.WlanSSID_5G = src5g.Ssid;
+                if (!settings.WlanAPPwd_5G && src5g.WpaKey) settings.WlanAPPwd_5G = src5g.WpaKey;
+                if (settings.WlanChannel_5G == null && src5g.Channel != null) settings.WlanChannel_5G = String(src5g.Channel);
+                if (settings.WlanAuthMode_5G == null && src5g.SecurityMode != null) settings.WlanAuthMode_5G = SEC_MAP[src5g.SecurityMode] || '';
+                if (!settings.WlanMode_5G && src5g.WMode != null) settings.WlanMode_5G = WMODE_5G[src5g.WMode] || '';
+                if (!settings.WlanBandwidth_5G && src5g.Bandwidth != null) settings.WlanBandwidth_5G = BW_5G[src5g.Bandwidth] || '';
                 if (settings.Wlan2gState == null && ap2g.ApStatus != null) settings.Wlan2gState = String(ap2g.ApStatus);
-                if (settings.Wlan5gState == null && ap5g.ApStatus != null) settings.Wlan5gState = String(ap5g.ApStatus);
+                if (settings.Wlan5gState == null && src5g.ApStatus != null) settings.Wlan5gState = String(src5g.ApStatus);
                 if (settings['2GHiddenSSID'] == null && ap2g.SsidHidden != null) settings['2GHiddenSSID'] = String(ap2g.SsidHidden);
-                if (settings['5GHiddenSSID'] == null && ap5g.SsidHidden != null) settings['5GHiddenSSID'] = String(ap5g.SsidHidden);
+                if (settings['5GHiddenSSID'] == null && src5g.SsidHidden != null) settings['5GHiddenSSID'] = String(src5g.SsidHidden);
             }
 
             _wifiSettings = settings;

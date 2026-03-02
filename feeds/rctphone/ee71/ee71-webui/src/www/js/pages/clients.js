@@ -91,7 +91,8 @@
                 var dev = devices[j];
                 var ip = dev.IPAddress || dev.IpAddress || '';
                 var traffic = trafficMap[ip];
-                var name = dev.DeviceName || dev.HostName || '\u2014';
+                var name = dev.DeviceName || dev.HostName || '';
+                if (!name) name = ip || mac;
                 var mac = dev.MacAddress || '\u2014';
                 var cm = Number(dev.ConnectMode);
 

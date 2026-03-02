@@ -42,7 +42,13 @@ webapi() {
 
 # --- Read last ID ---
 LAST_ID=0
-[ -f "$LAST_ID_FILE" ] && LAST_ID=$(cat "$LAST_ID_FILE" 2>/dev/null) && LAST_ID="${LAST_ID:-0}"
+FIRST_RUN=0
+if [ -f "$LAST_ID_FILE" ]; then
+    LAST_ID=$(cat "$LAST_ID_FILE" 2>/dev/null)
+    LAST_ID="${LAST_ID:-0}"
+else
+    FIRST_RUN=1
+fi
 
 # --- Get new SMS (by SMSId, not UnreadCount — UI may mark as read first) ---
 CONTACTS=$(webapi "GetSMSContactList" '{"Page":0,"ContactNum":50}')
@@ -50,6 +56,16 @@ if [ -z "$CONTACTS" ] || ! echo "$CONTACTS" | grep -q '"result"'; then
     log "WebAPI: no response"
     sqlite3 "$DB" "UPDATE sms_config SET value='0' WHERE items='new_sms_flag';" 2>/dev/null
     exit 1
+fi
+
+# --- First run: seed LAST_ID with current max SMSId (don't forward old messages) ---
+if [ "$FIRST_RUN" = "1" ]; then
+    MAX_EXISTING=$(echo "$CONTACTS" | tr '{}' '\n' | sed -n 's/.*"SMSId"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' | sort -n | tail -1)
+    MAX_EXISTING="${MAX_EXISTING:-0}"
+    echo "$MAX_EXISTING" > "$LAST_ID_FILE"
+    log "first run: seeded last_id=$MAX_EXISTING (skipping existing messages)"
+    sqlite3 "$DB" "UPDATE sms_config SET value='0' WHERE items='new_sms_flag';" 2>/dev/null
+    exit 0
 fi
 
 TMP="/tmp/sms_notify_$$.tmp"
@@ -77,6 +93,7 @@ echo "$CONTACTS" | tr '{}' '\n' | while IFS= read -r L; do
         [ -n "$SID" ] || continue
         BODY=$(echo "$M" | sed -n 's/.*"SMSContent"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
         TIME=$(echo "$M" | sed -n 's/.*"SMSTime"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+        # Keep body JSON-escaped in temp file (newlines would break line-by-line read)
         printf '%s\t%s\t%s\t%s\n' "$SID" "$PH" "$TIME" "$BODY" >> "$TMP"
     done
 done
@@ -99,6 +116,8 @@ while IFS='	' read -r SID FROM TIME BODY; do
         [ "$MATCH" = "0" ] && continue
     fi
 
+    # Unescape JSON string: printf %b handles \n, \r, \t, \\; tr strips CR; sed fixes JSON's \/
+    BODY=$(printf '%b' "$BODY" | tr -d '\r' | sed 's|\\/|/|g')
     MSG=$(printf "<b>From:</b> %s\n<b>Time:</b> %s\n\n%s" "$FROM" "$TIME" "$BODY")
     R=$(curl -s -m 15 "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
         -d "chat_id=${TELEGRAM_CHAT_ID}" --data-urlencode "text=${MSG}" -d "parse_mode=HTML" 2>&1)

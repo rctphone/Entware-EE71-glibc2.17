@@ -177,7 +177,7 @@
                             var connIcon = cm === 0 ? 'ic-usb' : 'ic-wifi';
                             return '<div class="device-row">' +
                                 icon(devIcon) +
-                                '<span class="device-name">' + escHtml(d.DeviceName || d.MacAddress || '?') + '</span>' +
+                                '<span class="device-name">' + escHtml(d.DeviceName || d.HostName || d.IPAddress || d.IpAddress || d.MacAddress || '?') + '</span>' +
                                 '<span class="device-ip">' + escHtml(d.IpAddress || '') + '</span>' +
                                 '<span class="device-signal">' + icon(connIcon) + '</span>' +
                                 '</div>';
