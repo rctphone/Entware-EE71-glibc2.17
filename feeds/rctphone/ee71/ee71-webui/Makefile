@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=ee71-webui
 PKG_VERSION:=1.0.0
-PKG_RELEASE:=1
+PKG_RELEASE:=2
 
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)
 
@@ -56,33 +56,32 @@ define Package/ee71-webui/description
   - miniupnpd, sqlite3, hostapd
 endef
 
+ESBUILD_VERSION:=0.24.2
+ESBUILD:=$(STAGING_DIR_HOST)/bin/esbuild
+
 define Build/Prepare
 	mkdir -p $(PKG_BUILD_DIR)
 	$(CP) ./src/www $(PKG_BUILD_DIR)/
 	$(CP) ./src/cgi-bin $(PKG_BUILD_DIR)/
+	# Download esbuild (host tool, cached in staging)
+	if [ ! -x $(ESBUILD) ]; then \
+		mkdir -p $(STAGING_DIR_HOST)/bin; \
+		wget -qO /tmp/esbuild.tgz \
+			"https://registry.npmjs.org/@esbuild/linux-x64/-/linux-x64-$(ESBUILD_VERSION).tgz" && \
+		tar xzf /tmp/esbuild.tgz -C /tmp package/bin/esbuild && \
+		mv /tmp/package/bin/esbuild $(ESBUILD) && \
+		chmod +x $(ESBUILD) && \
+		rm -rf /tmp/esbuild.tgz /tmp/package; \
+	fi
 endef
 
 define Build/Compile
-	# Bundle JS: concatenate vendor + core + pages + boot
-	cd $(PKG_BUILD_DIR)/www && { \
-		for V in uPlot.iife.min.js termino.min.js; do \
-			[ -f js/$$V ] && cat js/$$V && printf '\n'; \
-		done; \
-		cat js/api.js && printf '\n'; \
-		cat js/app-core.js && printf '\n'; \
-		for P in login dashboard connection apn at-terminal traffic clients \
-		         wifi wifi-extender lan firewall upnp ttl-fix ussd sms vpn \
-		         diagnostics speedtest settings ssh backup about mobile-settings; do \
-			[ -f js/pages/$${P}.js ] && cat js/pages/$${P}.js && printf '\n'; \
-		done; \
-		cat js/app-boot.js; \
-	} > js/app.bundle.js
-	# Bundle CSS: vendor + custom
-	cd $(PKG_BUILD_DIR)/www && { \
-		[ -f css/pico.classless.min.css ] && cat css/pico.classless.min.css && printf '\n'; \
-		[ -f css/uPlot.min.css ] && cat css/uPlot.min.css && printf '\n'; \
-		cat css/app.css && printf '\n'; \
-	} > css/app.bundle.css
+	# Bundle JS (vendor + core + pages + boot)
+	$(ESBUILD) $(PKG_BUILD_DIR)/www/js/entry.js \
+		--bundle --format=iife --outfile=$(PKG_BUILD_DIR)/www/js/app.bundle.js
+	# Bundle CSS (vendor + custom)
+	$(ESBUILD) $(PKG_BUILD_DIR)/www/css/entry.css \
+		--bundle --external:'*.woff2' --outfile=$(PKG_BUILD_DIR)/www/css/app.bundle.css
 	# Patch index.html to use bundles
 	cd $(PKG_BUILD_DIR)/www && \
 		sed -i '/<link rel="stylesheet" href="css\/pico/d' index.html && \

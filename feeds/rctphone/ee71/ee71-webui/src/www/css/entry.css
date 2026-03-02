@@ -1,0 +1,4 @@
+/* esbuild entry point — bundles all CSS */
+@import './pico.classless.min.css';
+@import './uPlot.min.css';
+@import './app.css';
