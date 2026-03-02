@@ -22,8 +22,10 @@ define Package/ee71-webui
 	+ee71-optimize \
 	+ee71-usb-adb \
 	+ee71-kmod-wireguard \
+	+ee71-kmod-amneziawg \
 	+ee71-kmod-tun \
 	+wireguard-tools \
+	+ee71-amneziawg-tools \
 	+shadowsocks-libev \
 	+curl \
 	+busybox \
@@ -47,7 +49,8 @@ define Package/ee71-webui/description
   - QCMAP binary fix (zero-length netlink attribute)
   - Performance optimizations (tmpfs, daemons, sysctl)
   - USB ADB kernel patch (/dev/kmem)
-  - WireGuard (kernel module + wg/wg-quick userspace)
+  - WireGuard (kernel module + wg userspace)
+  - AmneziaWG (kernel module + awg userspace)
   - ShadowSocks (ss-redir, ss-tunnel)
   - curl, busybox, dropbear, dnsmasq, iperf3
   - miniupnpd, sqlite3, hostapd
