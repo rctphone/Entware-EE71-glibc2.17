@@ -34,7 +34,7 @@ endef
 
 # XXX Entware specific: GCC-8.x.x (cc1: error: -Werror=dangling-pointer: no option -Wdangling-pointer)
 TARGET_CFLAGS += \
-	-I$(STAGING_DIR)/opt/include \
+	-I$(STAGING_DIR)/usr/include \
 	$(if $(CONFIG_GCC_USE_VERSION_8),,-Wno-error=dangling-pointer) \
 	-Wno-error=maybe-uninitialized
 
@@ -42,8 +42,8 @@ CMAKE_OPTIONS += \
 	-DDEBUG=1
 
 define Package/uqmi/install
-	$(INSTALL_DIR) $(1)/opt/sbin
-	$(INSTALL_BIN) $(PKG_BUILD_DIR)/uqmi/uqmi $(1)/opt/sbin/
+	$(INSTALL_DIR) $(1)/usr/sbin
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/uqmi/uqmi $(1)/usr/sbin/
 #	$(CP) ./files/* $(1)/
 endef
 

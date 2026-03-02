@@ -6,6 +6,7 @@
 #
 
 # Entware specifics: remove deps USE_GLIBC:libcrypt-compat
+# EE71: /opt → /usr paths, custom SysV init script
 
 include $(TOPDIR)/rules.mk
 
@@ -65,11 +66,11 @@ define Package/dropbear
   TITLE:=Small SSH2 client/server
   MENU:=1
   DEPENDS:= +DROPBEAR_ZLIB:zlib
-  ALTERNATIVES:=100:/opt/bin/ssh-keygen:/opt/sbin/dropbear
+  ALTERNATIVES:=100:/usr/bin/ssh-keygen:/usr/sbin/dropbear
   $(if $(CONFIG_DROPBEAR_SCP),ALTERNATIVES+= \
-	  100:/opt/bin/scp:/opt/sbin/dropbear,)
+	  100:/usr/bin/scp:/usr/sbin/dropbear,)
   $(if $(CONFIG_DROPBEAR_DBCLIENT),ALTERNATIVES+= \
-	  100:/opt/bin/ssh:/opt/sbin/dropbear,)
+	  100:/usr/bin/ssh:/usr/sbin/dropbear,)
 
 endef
 
@@ -78,7 +79,7 @@ define Package/dropbear/description
 endef
 
 define Package/dropbear/conffiles
-/opt/etc/config/dropbear.conf
+/etc/dropbear
 endef
 
 define Package/dropbearconvert
@@ -110,16 +111,9 @@ CONFIGURE_ARGS += \
 #
 ##############################################################################
 
-# adjust allowed shell list (if getusershell(3) is missing):
-# - COMPAT_USER_SHELLS
-# remove version number from protocol ident:
-# - IDENT_VERSION_PART
-# disable unused functionality:
-# - DO_MOTD
-
 DB_OPT_COMMON = \
 	IDENT_VERSION_PART,"" \
-	COMPAT_USER_SHELLS,"/opt/bin/sh","/bin/ash","/bin/sh" \
+	COMPAT_USER_SHELLS,"/usr/bin/sh","/bin/ash","/bin/sh" \
 	DEFAULT_PATH,"$(TARGET_INIT_PATH)" \
 	DEFAULT_ROOT_PATH,"$(TARGET_INIT_PATH)" \
 	DO_MOTD,0 \
@@ -257,41 +251,34 @@ define Build/Compile
 endef
 
 define Package/dropbear/install
-	$(INSTALL_DIR) $(1)/opt/sbin
-	$(INSTALL_BIN) $(PKG_BUILD_DIR)/dropbearmulti $(1)/opt/sbin/dropbear
-	$(INSTALL_DIR) $(1)/opt/bin
-	$(if $(CONFIG_DROPBEAR_DBCLIENT),$(LN) ../sbin/dropbear $(1)/opt/bin/dbclient,)
-	$(LN) ../sbin/dropbear $(1)/opt/bin/dropbearkey
-	$(INSTALL_DIR) $(1)/opt/etc/config
-	$(INSTALL_CONF) ./files/dropbear.conf $(1)/opt/etc/config
-	$(INSTALL_DIR) $(1)/opt/etc/init.d
-	$(INSTALL_BIN) ./files/S51dropbear $(1)/opt/etc/init.d
-	$(INSTALL_DIR) $(1)/opt/etc/dropbear
-#	$(INSTALL_DIR) $(1)/lib/preinit
-#	$(INSTALL_DATA) ./files/dropbear.failsafe $(1)/lib/preinit/99_10_failsafe_dropbear
-#	$(INSTALL_DIR) $(1)/etc/uci-defaults
-#	$(INSTALL_DATA) ./files/dropbear.defaults $(1)/etc/uci-defaults/50-dropbear
-	$(foreach f,$(filter /opt/etc/dropbear/%,$(Package/dropbear/conffiles)),$(if $(wildcard $(TOPDIR)/files/$(f)),chmod 0600 $(TOPDIR)/files/$(f) || :; ))
+	$(INSTALL_DIR) $(1)/usr/sbin
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/dropbearmulti $(1)/usr/sbin/dropbear
+	$(INSTALL_DIR) $(1)/usr/bin
+	$(if $(CONFIG_DROPBEAR_DBCLIENT),$(LN) ../sbin/dropbear $(1)/usr/bin/dbclient,)
+	$(LN) ../sbin/dropbear $(1)/usr/bin/dropbearkey
+	$(INSTALL_DIR) $(1)/etc/init.d
+	$(INSTALL_BIN) ./files/dropbear.init $(1)/etc/init.d/dropbear
+	$(INSTALL_DIR) $(1)/etc/dropbear
 endef
 
 define Package/dropbearconvert/install
-	$(INSTALL_DIR) $(1)/opt/bin
-	$(INSTALL_BIN) $(PKG_BUILD_DIR)/dropbearconvert $(1)/opt/bin/dropbearconvert
+	$(INSTALL_DIR) $(1)/usr/bin
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/dropbearconvert $(1)/usr/bin/dropbearconvert
 endef
 
 define Package/dropbear/postinst
 #!/bin/sh
 
-if [ ! -f /opt/etc/dropbear/dropbear_rsa_host_key ]; then
-    /opt/bin/dropbearkey -t rsa -f /opt/etc/dropbear/dropbear_rsa_host_key
+if [ ! -f /etc/dropbear/dropbear_rsa_host_key ]; then
+    /usr/bin/dropbearkey -t rsa -f /etc/dropbear/dropbear_rsa_host_key
 fi
 
-if [ ! -f /opt/etc/dropbear/dropbear_ecdsa_host_key ]; then
-    /opt/bin/dropbearkey -t ecdsa -f /opt/etc/dropbear/dropbear_ecdsa_host_key
+if [ ! -f /etc/dropbear/dropbear_ecdsa_host_key ]; then
+    /usr/bin/dropbearkey -t ecdsa -f /etc/dropbear/dropbear_ecdsa_host_key
 fi
 
-if [ ! -f /opt/etc/dropbear/dropbear_ed25519_host_key ]; then
-    /opt/bin/dropbearkey -t ed25519 -f /opt/etc/dropbear/dropbear_ed25519_host_key
+if [ ! -f /etc/dropbear/dropbear_ed25519_host_key ]; then
+    /usr/bin/dropbearkey -t ed25519 -f /etc/dropbear/dropbear_ed25519_host_key
 fi
 endef
 

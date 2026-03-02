@@ -49,27 +49,27 @@ CONFIGURE_ARGS += \
 	--enable-shared
 
 define Build/InstallDev
-	$(INSTALL_DIR) $(1)/opt/include/libnftnl
+	$(INSTALL_DIR) $(1)/usr/include/libnftnl
 	$(CP) \
-		$(PKG_INSTALL_DIR)/opt/include/libnftnl/*.h \
-		$(1)/opt/include/libnftnl/
+		$(PKG_INSTALL_DIR)/usr/include/libnftnl/*.h \
+		$(1)/usr/include/libnftnl/
 
-	$(INSTALL_DIR) $(1)/opt/lib
+	$(INSTALL_DIR) $(1)/usr/lib
 	$(CP) \
-		$(PKG_INSTALL_DIR)/opt/lib/libnftnl.{so*,a,la} \
-		$(1)/opt/lib/
+		$(PKG_INSTALL_DIR)/usr/lib/libnftnl.{so*,a,la} \
+		$(1)/usr/lib/
 
-	$(INSTALL_DIR) $(1)/opt/lib/pkgconfig
+	$(INSTALL_DIR) $(1)/usr/lib/pkgconfig
 	$(CP) \
-		$(PKG_INSTALL_DIR)/opt/lib/pkgconfig/libnftnl.pc \
-		$(1)/opt/lib/pkgconfig/
+		$(PKG_INSTALL_DIR)/usr/lib/pkgconfig/libnftnl.pc \
+		$(1)/usr/lib/pkgconfig/
 endef
 
 define Package/libnftnl/install
-	$(INSTALL_DIR) $(1)/opt/lib
+	$(INSTALL_DIR) $(1)/usr/lib
 	$(CP) \
-		$(PKG_INSTALL_DIR)/opt/lib/libnftnl.so.* \
-		$(1)/opt/lib/
+		$(PKG_INSTALL_DIR)/usr/lib/libnftnl.so.* \
+		$(1)/usr/lib/
 endef
 
 $(eval $(call BuildPackage,libnftnl))

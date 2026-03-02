@@ -67,6 +67,7 @@ CMAKE_HOST_OPTIONS += \
 	-DPCRE2_SHOW_REPORT=OFF \
 	-DPCRE2_BUILD_PCRE2GREP=OFF \
 	-DPCRE2_BUILD_TESTS=OFF \
+	-DHAVE_BUILTIN_ASSUME=OFF
 	-DPCRE2_STATIC_PIC=ON
 
 CMAKE_OPTIONS += \
@@ -80,27 +81,28 @@ CMAKE_OPTIONS += \
 	-DPCRE2_SHOW_REPORT=OFF \
 	-DPCRE2_BUILD_PCRE2GREP=OFF \
 	-DPCRE2_BUILD_TESTS=OFF
+	-DHAVE_BUILTIN_ASSUME=OFF
 
 define Build/InstallDev
 	$(call Build/InstallDev/cmake,$(1))
-	$(SED) 	's,^\(prefix\|exec_prefix\)=.*,\1=$(STAGING_DIR)/opt,g' $(1)/opt/bin/pcre2-config
+	$(SED) 	's,^\(prefix\|exec_prefix\)=.*,\1=$(STAGING_DIR)/opt,g' $(1)/usr/bin/pcre2-config
 	$(INSTALL_DIR) $(2)/bin
-	$(LN) ../../opt/bin/pcre2-config $(2)/bin/pcre2-config
+	$(LN) ../../usr/bin/pcre2-config $(2)/bin/pcre2-config
 endef
 
 define Package/libpcre2/install
-	$(INSTALL_DIR) $(1)/opt/lib
-	$(CP) $(PKG_INSTALL_DIR)/opt/lib/libpcre2-{8,posix}.so* $(1)/opt/lib/
+	$(INSTALL_DIR) $(1)/usr/lib
+	$(CP) $(PKG_INSTALL_DIR)/usr/lib/libpcre2-{8,posix}.so* $(1)/usr/lib/
 endef
 
 define Package/libpcre2-16/install
-	$(INSTALL_DIR) $(1)/opt/lib
-	$(CP) $(PKG_INSTALL_DIR)/opt/lib/libpcre2-16.so* $(1)/opt/lib/
+	$(INSTALL_DIR) $(1)/usr/lib
+	$(CP) $(PKG_INSTALL_DIR)/usr/lib/libpcre2-16.so* $(1)/usr/lib/
 endef
 
 define Package/libpcre2-32/install
-	$(INSTALL_DIR) $(1)/opt/lib
-	$(CP) $(PKG_INSTALL_DIR)/opt/lib/libpcre2-32.so* $(1)/opt/lib/
+	$(INSTALL_DIR) $(1)/usr/lib
+	$(CP) $(PKG_INSTALL_DIR)/usr/lib/libpcre2-32.so* $(1)/usr/lib/
 endef
 
 $(eval $(call BuildPackage,libpcre2))

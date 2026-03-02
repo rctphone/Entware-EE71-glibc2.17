@@ -68,22 +68,22 @@ CONFIGURE_ARGS += \
 	--disable-udev
 
 define Build/InstallDev
-	$(INSTALL_DIR) $(1)/opt/include/libusb-1.0
-	$(CP) $(PKG_INSTALL_DIR)/opt/include/libusb-1.0/libusb.h $(1)/opt/include/libusb-1.0/
-	$(INSTALL_DIR) $(1)/opt/lib
-	$(CP) $(PKG_INSTALL_DIR)/opt/lib/libusb-1.0.* $(1)/opt/lib/
-	$(INSTALL_DIR) $(1)/opt/lib/pkgconfig
-	$(CP) $(PKG_INSTALL_DIR)/opt/lib/pkgconfig/libusb-1.0.pc $(1)/opt/lib/pkgconfig/
+	$(INSTALL_DIR) $(1)/usr/include/libusb-1.0
+	$(CP) $(PKG_INSTALL_DIR)/usr/include/libusb-1.0/libusb.h $(1)/usr/include/libusb-1.0/
+	$(INSTALL_DIR) $(1)/usr/lib
+	$(CP) $(PKG_INSTALL_DIR)/usr/lib/libusb-1.0.* $(1)/usr/lib/
+	$(INSTALL_DIR) $(1)/usr/lib/pkgconfig
+	$(CP) $(PKG_INSTALL_DIR)/usr/lib/pkgconfig/libusb-1.0.pc $(1)/usr/lib/pkgconfig/
 endef
 
 define Package/libusb-1.0/install
-	$(INSTALL_DIR) $(1)/opt/lib
-	$(CP) $(PKG_INSTALL_DIR)/opt/lib/libusb-1.0.so* $(1)/opt/lib/
+	$(INSTALL_DIR) $(1)/usr/lib
+	$(CP) $(PKG_INSTALL_DIR)/usr/lib/libusb-1.0.so* $(1)/usr/lib/
 endef
 
 define Package/fxload/install
-	$(INSTALL_DIR) $(1)/opt/sbin
-	$(INSTALL_BIN) $(PKG_BUILD_DIR)/examples/.libs/fxload $(1)/opt/sbin
+	$(INSTALL_DIR) $(1)/usr/sbin
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/examples/.libs/fxload $(1)/usr/sbin
 endef
 
 $(eval $(call BuildPackage,libusb-1.0))

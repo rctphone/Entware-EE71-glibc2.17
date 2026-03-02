@@ -39,7 +39,7 @@ $(call Package/iproute2/Default)
  TITLE:=Routing control utility (Minimal)
  VARIANT:=tiny
  PROVIDES:=ip
- ALTERNATIVES:=200:/opt/sbin/ip:/opt/libexec/ip-tiny
+ ALTERNATIVES:=200:/usr/sbin/ip:/usr/libexec/ip-tiny
 endef
 
 define Package/ip-full
@@ -47,7 +47,7 @@ $(call Package/iproute2/Default)
  TITLE:=Routing control utility (Full)
  VARIANT:=full
  PROVIDES:=ip
- ALTERNATIVES:=300:/opt/sbin/ip:/opt/libexec/ip-full
+ ALTERNATIVES:=300:/usr/sbin/ip:/usr/libexec/ip-full
 endef
 
 define Package/tc
@@ -83,7 +83,7 @@ define Build/Configure
 	$(SED) "s,-I/usr/include/db3,," $(PKG_BUILD_DIR)/Makefile
 	$(SED) "s,^KERNEL_INCLUDE.*,KERNEL_INCLUDE=$(LINUX_DIR)/include," \
 		$(PKG_BUILD_DIR)/Makefile
-	$(SED) "s,^LIBC_INCLUDE.*,LIBC_INCLUDE=$(STAGING_DIR)/opt/include," \
+	$(SED) "s,^LIBC_INCLUDE.*,LIBC_INCLUDE=$(STAGING_DIR)/usr/include," \
 		$(PKG_BUILD_DIR)/Makefile
 	echo "static const char SNAPSHOT[] = \"$(PKG_VERSION)-$(PKG_RELEASE)-entware\";" \
 		> $(PKG_BUILD_DIR)/include/SNAPSHOT.h
@@ -93,13 +93,13 @@ TARGET_CFLAGS += -DHAVE_SETNS
 TARGET_CFLAGS += -ffunction-sections -fdata-sections
 
 MAKE_FLAGS += \
-	EXTRA_CCOPTS="$(TARGET_CFLAGS) -I../include -I$(STAGING_DIR)/opt/include/libnl-tiny" \
+	EXTRA_CCOPTS="$(TARGET_CFLAGS) -I../include -I$(STAGING_DIR)/usr/include/libnl-tiny" \
 	KERNEL_INCLUDE="$(LINUX_DIR)/include" \
 	SHARED_LIBS="" \
 	LDFLAGS="$(TARGET_LDFLAGS) -Wl,--gc-sections" \
-	LIBDIR="/opt/lib" \
+	LIBDIR="/usr/lib" \
 	IP_CONFIG_TINY=$(IP_CONFIG_TINY) \
-	CONFDIR="/opt/etc/iproute2" \
+	CONFDIR="/etc/iproute2" \
 	FPIC="$(FPIC)"
 
 define Build/Compile
@@ -107,52 +107,52 @@ define Build/Compile
 endef
 
 define Build/InstallDev
-	$(INSTALL_DIR) $(1)/opt/include
-	$(CP) $(PKG_BUILD_DIR)/include/{libgenl,libnetlink,ll_map}.h $(1)/opt/include/
-	$(INSTALL_DIR) $(1)/opt/lib
-	$(CP) $(PKG_BUILD_DIR)/lib/libnetlink.a $(1)/opt/lib/
+	$(INSTALL_DIR) $(1)/usr/include
+	$(CP) $(PKG_BUILD_DIR)/include/{libgenl,libnetlink,ll_map}.h $(1)/usr/include/
+	$(INSTALL_DIR) $(1)/usr/lib
+	$(CP) $(PKG_BUILD_DIR)/lib/libnetlink.a $(1)/usr/lib/
 endef
 
 define Package/ip-tiny/install
-	$(INSTALL_DIR) $(1)/opt/etc/iproute2
-	$(INSTALL_DIR) $(1)/opt/libexec
-	$(INSTALL_BIN) $(PKG_BUILD_DIR)/ip/ip $(1)/opt/libexec/ip-tiny
+	$(INSTALL_DIR) $(1)/etc/iproute2
+	$(INSTALL_DIR) $(1)/usr/libexec
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/ip/ip $(1)/usr/libexec/ip-tiny
 endef
 
 define Package/ip-full/install
-	$(INSTALL_DIR) $(1)/opt/etc/iproute2
-	$(INSTALL_DIR) $(1)/opt/libexec
-	$(INSTALL_BIN) $(PKG_BUILD_DIR)/ip/ip $(1)/opt/libexec/ip-full
+	$(INSTALL_DIR) $(1)/etc/iproute2
+	$(INSTALL_DIR) $(1)/usr/libexec
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/ip/ip $(1)/usr/libexec/ip-full
 endef
 
 define Package/tc/install
-	$(INSTALL_DIR) $(1)/opt/sbin
-	$(INSTALL_DIR) $(1)/opt/etc/iproute2
-	$(INSTALL_BIN) $(PKG_BUILD_DIR)/tc/tc $(1)/opt/sbin/
+	$(INSTALL_DIR) $(1)/usr/sbin
+	$(INSTALL_DIR) $(1)/etc/iproute2
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/tc/tc $(1)/usr/sbin/
 endef
 
 define Package/genl/install
-	$(INSTALL_DIR) $(1)/opt/sbin
-	$(INSTALL_DIR) $(1)/opt/etc/iproute2
-	$(INSTALL_BIN) $(PKG_BUILD_DIR)/genl/genl $(1)/opt/sbin/
+	$(INSTALL_DIR) $(1)/usr/sbin
+	$(INSTALL_DIR) $(1)/etc/iproute2
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/genl/genl $(1)/usr/sbin/
 endef
 
 define Package/ip-bridge/install
-	$(INSTALL_DIR) $(1)/opt/sbin
-	$(INSTALL_DIR) $(1)/opt/etc/iproute2
-	$(INSTALL_BIN) $(PKG_BUILD_DIR)/bridge/bridge $(1)/opt/sbin/
+	$(INSTALL_DIR) $(1)/usr/sbin
+	$(INSTALL_DIR) $(1)/etc/iproute2
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/bridge/bridge $(1)/usr/sbin/
 endef
 
 define Package/ss/install
-	$(INSTALL_DIR) $(1)/opt/sbin
-	$(INSTALL_DIR) $(1)/opt/etc/iproute2
-	$(INSTALL_BIN) $(PKG_BUILD_DIR)/misc/ss $(1)/opt/sbin/
+	$(INSTALL_DIR) $(1)/usr/sbin
+	$(INSTALL_DIR) $(1)/etc/iproute2
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/misc/ss $(1)/usr/sbin/
 endef
 
 define Package/nstat/install
-	$(INSTALL_DIR) $(1)/opt/sbin
-	$(INSTALL_DIR) $(1)/opt/etc/iproute2
-	$(INSTALL_BIN) $(PKG_BUILD_DIR)/misc/nstat $(1)/opt/sbin/
+	$(INSTALL_DIR) $(1)/usr/sbin
+	$(INSTALL_DIR) $(1)/etc/iproute2
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/misc/nstat $(1)/usr/sbin/
 endef
 
 $(eval $(call BuildPackage,ip-tiny))

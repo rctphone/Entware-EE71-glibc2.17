@@ -123,28 +123,28 @@ define Host/Install
 endef
 
 define Build/InstallDev
-	$(INSTALL_DIR) $(1)/opt/include/lua5.3 $(1)/opt/lib
-	$(CP) $(PKG_INSTALL_DIR)/opt/include/lua5.3/lua{,lib,conf}.h $(1)/opt/include/lua5.3/
-	$(CP) $(PKG_INSTALL_DIR)/opt/include/lua5.3/lua.hpp $(1)/opt/include/lua5.3/
-	$(CP) $(PKG_INSTALL_DIR)/opt/include/lua5.3/lauxlib.h $(1)/opt/include/lua5.3/
-	$(INSTALL_DIR) $(1)/opt/lib
-	$(CP) $(PKG_INSTALL_DIR)/opt/lib/liblua5.3.{a,so*} $(1)/opt/lib/
-	$(LN) liblua5.3.so.0.0.0 $(1)/opt/lib/liblualib5.3.so
+	$(INSTALL_DIR) $(1)/usr/include/lua5.3 $(1)/usr/lib
+	$(CP) $(PKG_INSTALL_DIR)/usr/include/lua5.3/lua{,lib,conf}.h $(1)/usr/include/lua5.3/
+	$(CP) $(PKG_INSTALL_DIR)/usr/include/lua5.3/lua.hpp $(1)/usr/include/lua5.3/
+	$(CP) $(PKG_INSTALL_DIR)/usr/include/lua5.3/lauxlib.h $(1)/usr/include/lua5.3/
+	$(INSTALL_DIR) $(1)/usr/lib
+	$(CP) $(PKG_INSTALL_DIR)/usr/lib/liblua5.3.{a,so*} $(1)/usr/lib/
+	$(LN) liblua5.3.so.0.0.0 $(1)/usr/lib/liblualib5.3.so
 endef
 
 define Package/liblua5.3/install
-	$(INSTALL_DIR) $(1)/opt/lib
-	$(CP) $(PKG_INSTALL_DIR)/opt/lib/liblua5.3.so* $(1)/opt/lib/
+	$(INSTALL_DIR) $(1)/usr/lib
+	$(CP) $(PKG_INSTALL_DIR)/usr/lib/liblua5.3.so* $(1)/usr/lib/
 endef
 
 define Package/lua5.3/install
-	$(INSTALL_DIR) $(1)/opt/bin
-	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/opt/bin/lua5.3 $(1)/opt/bin/
+	$(INSTALL_DIR) $(1)/usr/bin
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/bin/lua5.3 $(1)/usr/bin/
 endef
 
 define Package/luac5.3/install
-	$(INSTALL_DIR) $(1)/opt/bin
-	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/opt/bin/luac5.3 $(1)/opt/bin/
+	$(INSTALL_DIR) $(1)/usr/bin
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/bin/luac5.3 $(1)/usr/bin/
 endef
 
 $(eval $(call BuildPackage,liblua5.3))

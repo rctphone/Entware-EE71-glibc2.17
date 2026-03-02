@@ -77,8 +77,8 @@ MAKE_FLAGS := \
 	CCOPT="$(TARGET_CFLAGS)"
 
 define Package/strace/install
-	$(INSTALL_DIR) $(1)/opt/bin
-	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/opt/bin/strace $(1)/opt/bin/
+	$(INSTALL_DIR) $(1)/usr/bin
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/bin/strace $(1)/usr/bin/
 endef
 
 $(eval $(call BuildPackage,strace))

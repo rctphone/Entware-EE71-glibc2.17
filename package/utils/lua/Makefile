@@ -101,7 +101,7 @@ define Build/Compile
 		CC="$(TARGET_CROSS)gcc" \
 		AR="$(TARGET_CROSS)ar rcu" \
 		RANLIB="$(TARGET_CROSS)ranlib" \
-		INSTALL_ROOT=/opt \
+		INSTALL_ROOT=/usr \
 		CFLAGS="$(TARGET_CPPFLAGS) $(TARGET_CFLAGS)" \
 		MYLDFLAGS="$(TARGET_LDFLAGS) $(if $(CONFIG_USE_GLIBC),-lm -ldl)" \
 		PKG_VERSION=$(PKG_VERSION) \
@@ -109,7 +109,7 @@ define Build/Compile
 	rm -rf $(PKG_INSTALL_DIR)
 	mkdir -p $(PKG_INSTALL_DIR)
 	$(MAKE) -C $(PKG_BUILD_DIR) \
-		INSTALL_TOP="$(PKG_INSTALL_DIR)/opt" \
+		INSTALL_TOP="$(PKG_INSTALL_DIR)/usr" \
 		install
 endef
 
@@ -149,39 +149,39 @@ define Host/Install
 endef
 
 define Build/InstallDev
-	$(INSTALL_DIR) $(1)/opt/include
-	$(CP) $(PKG_INSTALL_DIR)/opt/include/lua{,lib,conf}.h $(1)/opt/include/
-	$(CP) $(PKG_INSTALL_DIR)/opt/include/lua.hpp $(1)/opt/include/
-	$(CP) $(PKG_INSTALL_DIR)/opt/include/lauxlib.h $(1)/opt/include/
-	$(CP) $(PKG_INSTALL_DIR)/opt/include/lnum_config.h $(1)/opt/include/
-	$(INSTALL_DIR) $(1)/opt/lib
-	$(CP) $(PKG_INSTALL_DIR)/opt/lib/liblua.{a,so*} $(1)/opt/lib/
-	$(LN) liblua.so.$(PKG_VERSION) $(1)/opt/lib/liblualib.so
-	$(INSTALL_DIR) $(1)/opt/lib/pkgconfig
-	$(CP) $(PKG_BUILD_DIR)/etc/lua.pc $(1)/opt/lib/pkgconfig/
+	$(INSTALL_DIR) $(1)/usr/include
+	$(CP) $(PKG_INSTALL_DIR)/usr/include/lua{,lib,conf}.h $(1)/usr/include/
+	$(CP) $(PKG_INSTALL_DIR)/usr/include/lua.hpp $(1)/usr/include/
+	$(CP) $(PKG_INSTALL_DIR)/usr/include/lauxlib.h $(1)/usr/include/
+	$(CP) $(PKG_INSTALL_DIR)/usr/include/lnum_config.h $(1)/usr/include/
+	$(INSTALL_DIR) $(1)/usr/lib
+	$(CP) $(PKG_INSTALL_DIR)/usr/lib/liblua.{a,so*} $(1)/usr/lib/
+	$(LN) liblua.so.$(PKG_VERSION) $(1)/usr/lib/liblualib.so
+	$(INSTALL_DIR) $(1)/usr/lib/pkgconfig
+	$(CP) $(PKG_BUILD_DIR)/etc/lua.pc $(1)/usr/lib/pkgconfig/
 endef
 
 define Package/liblua/install
-	$(INSTALL_DIR) $(1)/opt/lib
-	$(CP) $(PKG_INSTALL_DIR)/opt/lib/liblua.so.* $(1)/opt/lib/
+	$(INSTALL_DIR) $(1)/usr/lib
+	$(CP) $(PKG_INSTALL_DIR)/usr/lib/liblua.so.* $(1)/usr/lib/
 endef
 
 define Package/lua/install
-	$(INSTALL_DIR) $(1)/opt/bin
-	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/opt/bin/lua5.1 $(1)/opt/bin/
-	$(LN) lua5.1 $(1)/opt/bin/lua
+	$(INSTALL_DIR) $(1)/usr/bin
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/bin/lua5.1 $(1)/usr/bin/
+	$(LN) lua5.1 $(1)/usr/bin/lua
 endef
 
 define Package/luac/install
-	$(INSTALL_DIR) $(1)/opt/bin
-	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/opt/bin/luac5.1 $(1)/opt/bin/
-	$(LN) luac5.1 $(1)/opt/bin/luac
+	$(INSTALL_DIR) $(1)/usr/bin
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/bin/luac5.1 $(1)/usr/bin/
+	$(LN) luac5.1 $(1)/usr/bin/luac
 endef
 
 define Package/lua-examples/install
-	$(INSTALL_DIR) $(1)/opt/share/lua/examples
+	$(INSTALL_DIR) $(1)/usr/share/lua/examples
 	$(INSTALL_DATA) $(PKG_BUILD_DIR)/test/*.lua \
-		$(1)/opt/share/lua/examples/
+		$(1)/usr/share/lua/examples/
 endef
 
 $(eval $(call BuildPackage,liblua))

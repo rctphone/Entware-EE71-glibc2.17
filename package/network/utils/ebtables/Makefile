@@ -30,7 +30,7 @@ define Package/ebtables-legacy
   URL:=https://ebtables.netfilter.org/
   PROVIDES:=ebtables
   ALTERNATIVES:=\
-    200:/opt/sbin/ebtables:/opt/sbin/ebtables-legacy
+    200:/usr/sbin/ebtables:/usr/sbin/ebtables-legacy
 endef
 
 define Package/ebtables-legacy-utils
@@ -39,7 +39,7 @@ define Package/ebtables-legacy-utils
   TITLE:=ebtables save/restore utilities
   PROVIDES:=ebtables-utils
   ALTERNATIVES:=\
-    200:/opt/sbin/ebtables-restore:/opt/sbin/ebtables-legacy-restore
+    200:/usr/sbin/ebtables-restore:/usr/sbin/ebtables-legacy-restore
 endef
 
 define Package/ebtables-legacy/description
@@ -57,25 +57,25 @@ MAKE_VARS += EXT_LIBSI="$(LIBGCC_S)"
 
 MAKE_FLAGS += \
 	CFLAGS="$(TARGET_CFLAGS)" \
-	LIBDIR="/opt/lib/ebtables"
+	LIBDIR="/usr/lib/ebtables"
 
 define Package/ebtables-legacy/install
-	$(INSTALL_DIR) $(1)/opt/etc
-	$(INSTALL_DATA) $(PKG_BUILD_DIR)/ethertypes $(1)/opt/etc/
-	$(INSTALL_DIR) $(1)/opt/lib/ebtables
-	$(INSTALL_BIN) $(PKG_BUILD_DIR)/lib*.so $(1)/opt/lib/
-	$(INSTALL_BIN) $(PKG_BUILD_DIR)/extensions/*.so $(1)/opt/lib/ebtables/
-	$(INSTALL_DIR) $(1)/opt/sbin
-	$(INSTALL_BIN) $(PKG_BUILD_DIR)/ebtables $(1)/opt/sbin/ebtables-legacy
+	$(INSTALL_DIR) $(1)/etc
+	$(INSTALL_DATA) $(PKG_BUILD_DIR)/ethertypes $(1)/etc/
+	$(INSTALL_DIR) $(1)/usr/lib/ebtables
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/lib*.so $(1)/usr/lib/
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/extensions/*.so $(1)/usr/lib/ebtables/
+	$(INSTALL_DIR) $(1)/usr/sbin
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/ebtables $(1)/usr/sbin/ebtables-legacy
 endef
 
 define Package/ebtables-legacy-utils/install
-	$(INSTALL_DIR) $(1)/opt/sbin
+	$(INSTALL_DIR) $(1)/usr/sbin
 	#ebtables-save depends on perl and is just broken
-	#$(INSTALL_BIN) $(PKG_BUILD_DIR)/ebtables-save $(1)/opt/sbin/ebtables-legacy-save
-	$(INSTALL_BIN) $(PKG_BUILD_DIR)/ebtables-restore $(1)/opt/sbin/ebtables-legacy-restore
+	#$(INSTALL_BIN) $(PKG_BUILD_DIR)/ebtables-save $(1)/usr/sbin/ebtables-legacy-save
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/ebtables-restore $(1)/usr/sbin/ebtables-legacy-restore
 	# Entware specific: fix exec path in scripts
-	#$(SED) 's,^#!.*perl,#!/opt/bin/perl,' $(1)/opt/sbin/ebtables-save
+	#$(SED) 's,^#!.*perl,#!/usr/bin/perl,' $(1)/usr/sbin/ebtables-save
 endef
 
 $(eval $(call BuildPackage,ebtables-legacy))

@@ -27,7 +27,7 @@ define Package/arptables-legacy
   URL:=https://git.netfilter.org/arptables/
   PROVIDES:=arptables
   ALTERNATIVES:=\
-    200:/opt/sbin/arptables:/opt/sbin/arptables-legacy
+    200:/usr/sbin/arptables:/usr/sbin/arptables-legacy
 endef
 
 MAKE_FLAGS += \
@@ -35,8 +35,8 @@ MAKE_FLAGS += \
 	KERNEL_DIR="$(LINUX_DIR)"
 
 define Package/arptables-legacy/install
-	$(INSTALL_DIR) $(1)/opt/sbin
-	$(INSTALL_BIN) $(PKG_BUILD_DIR)/arptables-legacy $(1)/opt/sbin/arptables-legacy
+	$(INSTALL_DIR) $(1)/usr/sbin
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/arptables-legacy $(1)/usr/sbin/arptables-legacy
 endef
 
 $(eval $(call BuildPackage,arptables-legacy))

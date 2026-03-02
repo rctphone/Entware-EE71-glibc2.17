@@ -5,7 +5,7 @@
  	int retval = 0;
  	int opt;
 -        char *pci_id_file = "/usr/local/share/pci.ids";
-+        char *pci_id_file = "/opt/share/hwdata/pci.ids";
++        char *pci_id_file = "/usr/share/hwdata/pci.ids";
  	
  	while((opt = getopt(argc, argv, cmd_options)) != EOF) {
  		switch(opt) {

@@ -135,10 +135,10 @@ if !USE_MUSL
 
 	config DROPBEAR_LASTLOG_PATH
 		string "lastlog path:"
-		default "/opt/var/log/lastlog"
+		default "/var/log/lastlog"
 		depends on DROPBEAR_LASTLOG
 		help
-			Default: /opt/var/log/lastlog
+			Default: /var/log/lastlog
 
 	config DROPBEAR_LOGINFUNC
 		bool "Use login() and logout() functions"
@@ -169,10 +169,10 @@ if !USE_MUSL
 
 	config DROPBEAR_WTMP_PATH
 		string "wtmp path:"
-		default "/opt/var/log/wtmp"
+		default "/var/log/wtmp"
 		depends on DROPBEAR_WTMP
 		help
-			Default: /opt/var/log/wtmp
+			Default: /var/log/wtmp
 
 	config DROPBEAR_UTMP
 		bool "Write utmp"
@@ -190,10 +190,10 @@ if !USE_MUSL
 
 	config DROPBEAR_UTMP_PATH
 		string "utmp path:"
-		default "/opt/var/run/utmp"
+		default "/var/run/utmp"
 		depends on DROPBEAR_UTMP
 		help
-			Default: /opt/var/run/utmp
+			Default: /var/run/utmp
 
 	config DROPBEAR_PUTUTLINE
 		bool "Use pututline() to write to utmp"

@@ -63,7 +63,7 @@ define Package/uboot-envtools/description
 endef
 
 define Package/uboot-envtools/conffiles
-/opt/etc/fw_env.config
+/etc/fw_env.config
 endef
 
 define Build/Configure
@@ -91,19 +91,19 @@ endif
 endef
 
 define Package/dumpimage/install
-	$(INSTALL_DIR) $(1)/opt/bin
-	$(INSTALL_BIN) $(PKG_BUILD_DIR)/tools/dumpimage $(1)/opt/bin
+	$(INSTALL_DIR) $(1)/usr/bin
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/tools/dumpimage $(1)/usr/bin
 endef
 
 define Package/fit-check-sign/install
-	$(INSTALL_DIR) $(1)/opt/bin
-	$(INSTALL_BIN) $(PKG_BUILD_DIR)/tools/fit_check_sign $(1)/opt/bin
+	$(INSTALL_DIR) $(1)/usr/bin
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/tools/fit_check_sign $(1)/usr/bin
 endef
 
 define Package/uboot-envtools/install
-	$(INSTALL_DIR) $(1)/opt/sbin
-	$(INSTALL_BIN) $(PKG_BUILD_DIR)/tools/env/fw_printenv $(1)/opt/sbin
-	$(LN) fw_printenv $(1)/opt/sbin/fw_setenv
+	$(INSTALL_DIR) $(1)/usr/sbin
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/tools/env/fw_printenv $(1)/usr/sbin
+	$(LN) fw_printenv $(1)/usr/sbin/fw_setenv
 #	$(INSTALL_BIN) ./uboot-envtools/files/fw_printsys $(1)/usr/sbin
 #	$(INSTALL_BIN) ./uboot-envtools/files/fw_setsys $(1)/usr/sbin
 #	$(INSTALL_BIN) ./uboot-envtools/files/fw_loadenv $(1)/usr/sbin
@@ -120,8 +120,8 @@ define Package/uboot-envtools/install
 #			$(1)/etc/uci-defaults/30_uboot-envtools \
 #		) \
 #	)
-	$(INSTALL_DIR) $(1)/opt/etc/
-	$(INSTALL_CONF) $(PKG_BUILD_DIR)/tools/env/fw_env.config $(1)/opt/etc
+	$(INSTALL_DIR) $(1)/etc/
+	$(INSTALL_CONF) $(PKG_BUILD_DIR)/tools/env/fw_env.config $(1)/etc
 endef
 
 $(eval $(call BuildPackage,dumpimage))

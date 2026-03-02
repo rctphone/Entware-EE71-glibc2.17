@@ -48,15 +48,15 @@ CONFIGURE_ARGS += \
 TARGET_LDFLAGS += $(if $(CONFIG_USE_MUSL),-lssp_nonshared)
 
 define Package/libunwind/install
-	$(INSTALL_DIR) $(1)/opt/lib
-	$(CP) $(PKG_INSTALL_DIR)/opt/lib/libunwin*.so.* $(1)/opt/lib/
+	$(INSTALL_DIR) $(1)/usr/lib
+	$(CP) $(PKG_INSTALL_DIR)/usr/lib/libunwin*.so.* $(1)/usr/lib/
 endef
 
 define Build/InstallDev
-	$(INSTALL_DIR) $(1)/opt/include $(1)/opt/lib/pkgconfig
-	$(CP) $(PKG_INSTALL_DIR)/opt/include/*.h $(1)/opt/include
-	$(CP) $(PKG_INSTALL_DIR)/opt/lib/libunwin*.so* $(1)/opt/lib
-	$(CP) $(PKG_INSTALL_DIR)/opt/lib/pkgconfig/* $(1)/opt/lib/pkgconfig/
+	$(INSTALL_DIR) $(1)/usr/include $(1)/usr/lib/pkgconfig
+	$(CP) $(PKG_INSTALL_DIR)/usr/include/*.h $(1)/usr/include
+	$(CP) $(PKG_INSTALL_DIR)/usr/lib/libunwin*.so* $(1)/usr/lib
+	$(CP) $(PKG_INSTALL_DIR)/usr/lib/pkgconfig/* $(1)/usr/lib/pkgconfig/
 endef
 
 $(eval $(call BuildPackage,libunwind))

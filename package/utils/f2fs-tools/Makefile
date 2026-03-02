@@ -118,36 +118,36 @@ ifneq ($(CONFIG_USE_MUSL),)
 endif
 
 define Package/libf2fs/install
-	$(INSTALL_DIR) $(1)/opt/lib
+	$(INSTALL_DIR) $(1)/usr/lib
 	$(CP) \
-		$(PKG_INSTALL_DIR)/opt/lib/libf2fs.so.* $(1)/opt/lib/
+		$(PKG_INSTALL_DIR)/usr/lib/libf2fs.so.* $(1)/usr/lib/
 endef
 
 Package/libf2fs-selinux/install = $(Package/libf2fs/install)
 
 define Package/mkf2fs/install
-	$(INSTALL_DIR) $(1)/opt/sbin
-	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/opt/sbin/mkfs.f2fs $(1)/opt/sbin
+	$(INSTALL_DIR) $(1)/usr/sbin
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/sbin/mkfs.f2fs $(1)/usr/sbin
 endef
 
 Package/mkf2fs-selinux/install = $(Package/mkf2fs/install)
 
 define Package/f2fsck/install
-	$(INSTALL_DIR) $(1)/opt/sbin
-	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/opt/sbin/fsck.f2fs $(1)/opt/sbin
-	$(LN) ../sbin/fsck.f2fs $(1)/opt/sbin/defrag.f2fs
-	$(LN) ../sbin/fsck.f2fs $(1)/opt/sbin/dump.f2fs
-	$(LN) ../sbin/fsck.f2fs $(1)/opt/sbin/sload.f2fs
-	$(LN) ../sbin/fsck.f2fs $(1)/opt/sbin/resize.f2fs
-	$(LN) ../sbin/fsck.f2fs $(1)/opt/sbin/f2fslabel
+	$(INSTALL_DIR) $(1)/usr/sbin
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/sbin/fsck.f2fs $(1)/usr/sbin
+	$(LN) ../sbin/fsck.f2fs $(1)/usr/sbin/defrag.f2fs
+	$(LN) ../sbin/fsck.f2fs $(1)/usr/sbin/dump.f2fs
+	$(LN) ../sbin/fsck.f2fs $(1)/usr/sbin/sload.f2fs
+	$(LN) ../sbin/fsck.f2fs $(1)/usr/sbin/resize.f2fs
+	$(LN) ../sbin/fsck.f2fs $(1)/usr/sbin/f2fslabel
 endef
 
 Package/f2fsck-selinux/install = $(Package/f2fsck/install)
 
 define Package/f2fs-tools/install
-	$(INSTALL_DIR) $(1)/opt/sbin
-	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/opt/sbin/fibmap.f2fs $(1)/opt/sbin
-	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/opt/sbin/parse.f2fs $(1)/opt/sbin
+	$(INSTALL_DIR) $(1)/usr/sbin
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/sbin/fibmap.f2fs $(1)/usr/sbin
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/sbin/parse.f2fs $(1)/usr/sbin
 endef
 
 Package/f2fs-tools-selinux/install = $(Package/f2fs-tools/install)

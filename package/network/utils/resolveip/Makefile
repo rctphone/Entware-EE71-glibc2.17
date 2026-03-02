@@ -34,8 +34,8 @@ define Build/Compile
 endef
 
 define Package/resolveip/install
-	$(INSTALL_DIR) $(1)/opt/bin
-	$(INSTALL_BIN) $(PKG_BUILD_DIR)/resolveip $(1)/opt/bin/
+	$(INSTALL_DIR) $(1)/usr/bin
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/resolveip $(1)/usr/bin/
 endef
 
 $(eval $(call BuildPackage,resolveip))

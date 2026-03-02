@@ -42,12 +42,12 @@ HOST_MAKE_FLAGS += \
 	CFLAGS="$(HOST_CFLAGS) $(FPIC) -std=gnu89"
 
 define Build/InstallDev
-	$(INSTALL_DIR) $(1)/opt/include
+	$(INSTALL_DIR) $(1)/usr/include
 	$(CP)   $(PKG_BUILD_DIR)/argp.h \
-		$(1)/opt/include/
-	$(INSTALL_DIR) $(1)/opt/lib
+		$(1)/usr/include/
+	$(INSTALL_DIR) $(1)/usr/lib
 	$(CP)   $(PKG_BUILD_DIR)/libargp.a \
-		$(1)/opt/lib/
+		$(1)/usr/lib/
 endef
 
 define Host/Install

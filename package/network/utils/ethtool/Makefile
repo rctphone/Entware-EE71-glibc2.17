@@ -66,8 +66,8 @@ endif
 #CONFIGURE_ARGS += --enable-rss-input-xfrm
 
 define Package/ethtool/install
-	$(INSTALL_DIR) $(1)/opt/sbin
-	$(INSTALL_BIN) $(PKG_BUILD_DIR)/ethtool $(1)/opt/sbin
+	$(INSTALL_DIR) $(1)/usr/sbin
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/ethtool $(1)/usr/sbin
 endef
 
 Package/ethtool-full/install=$(Package/ethtool/install)

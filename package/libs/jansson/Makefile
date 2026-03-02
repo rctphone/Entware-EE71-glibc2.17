@@ -44,8 +44,8 @@ define Package/jansson/description
 endef
 
 define Package/jansson/install
-	$(INSTALL_DIR) $(1)/opt/lib
-	$(CP) $(PKG_INSTALL_DIR)/opt/lib/libjansson.so* $(1)/opt/lib/
+	$(INSTALL_DIR) $(1)/usr/lib
+	$(CP) $(PKG_INSTALL_DIR)/usr/lib/libjansson.so* $(1)/usr/lib/
 endef
 
 $(eval $(call BuildPackage,jansson))

@@ -5,6 +5,7 @@
 # See /LICENSE for more information.
 #
 # Entware specific. We keep this version. New versions are for Kernels > 4.2
+# EE71: /opt → /usr paths, kernel 3.10 compat
 
 include $(TOPDIR)/rules.mk
 include $(INCLUDE_DIR)/kernel.mk
@@ -56,23 +57,13 @@ This package contains the PPP (Point-to-Point Protocol) daemon.
 endef
 
 define Package/ppp/conffiles
-/opt/etc/ppp/chap-secrets
-/opt/etc/ppp/filter
-/opt/etc/ppp/ip-down
-/opt/etc/ppp/ip-up
-/opt/etc/ppp/ipv6-down
-/opt/etc/ppp/ipv6-up
-/opt/etc/ppp/options
-endef
-
-define Package/ppp-mod-pppoa
-$(call Package/ppp/Default)
-  DEPENDS:=@(PACKAGE_ppp||PACKAGE_ppp-multilink)
-  TITLE:=PPPoA plugin
-endef
-
-define Package/ppp-mod-pppoa/description
-This package contains a PPPoA (PPP over ATM) plugin for ppp.
+/etc/ppp/chap-secrets
+/etc/ppp/filter
+/etc/ppp/ip-down
+/etc/ppp/ip-up
+/etc/ppp/ipv6-down
+/etc/ppp/ipv6-up
+/etc/ppp/options
 endef
 
 define Package/ppp-mod-pppoe
@@ -97,8 +88,8 @@ plugin for ppp.
 endef
 
 define Package/ppp-mod-radius/conffiles
-/opt/etc/ppp/radius.conf
-/opt/etc/ppp/radius/
+/etc/ppp/radius.conf
+/etc/ppp/radius/
 endef
 
 define Package/ppp-mod-pppol2tp
@@ -192,9 +183,13 @@ $(call Build/Configure/Default,, \
 		$(PKG_BUILD_DIR)/pppd/plugins/pppoatm/linux/
 
 	# Kernel 4.14.9+ only, ignore the exit status of cp in case the file
-	# doesn't exits
+	# doesn't exist
 	-$(CP) $(LINUX_DIR)/include/linux/compiler_types.h \
 		$(PKG_BUILD_DIR)/pppd/plugins/pppoatm/linux/
+
+	# EE71: kernel 3.10 missing defines
+	$(SED) '/#include "pppd.h"/i #ifndef SOL_NETLINK\n#define SOL_NETLINK 270\n#endif\n#ifndef NETLINK_CAP_ACK\n#define NETLINK_CAP_ACK 10\n#endif' \
+		$(PKG_BUILD_DIR)/pppd/sys-linux.c
 endef
 
 MAKE_FLAGS += COPTS="$(TARGET_CFLAGS)" \
@@ -212,88 +207,81 @@ ifdef CONFIG_USE_MUSL
 endif
 
 define Build/InstallDev
-	$(INSTALL_DIR) $(1)/opt/include
-	$(CP) $(PKG_INSTALL_DIR)/include/pppd $(1)/opt/include/
+	$(INSTALL_DIR) $(1)/usr/include
+	$(CP) $(PKG_INSTALL_DIR)/include/pppd $(1)/usr/include/
 endef
 
 define Package/ppp/script_install
 endef
 
 define Package/ppp/install
-	$(INSTALL_DIR) $(1)/opt/lib/pppd/$(PKG_RELEASE_VERSION)
-	$(INSTALL_DIR) $(1)/opt/sbin
-	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/sbin/pppd $(1)/opt/sbin/
+	$(INSTALL_DIR) $(1)/usr/lib/pppd/$(PKG_RELEASE_VERSION)
+	$(INSTALL_DIR) $(1)/usr/sbin
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/sbin/pppd $(1)/usr/sbin/
 endef
 Package/ppp-multilink/install=$(Package/ppp/install)
 
-define Package/ppp-mod-pppoa/install
-	$(INSTALL_DIR) $(1)/opt/lib/pppd/$(PKG_RELEASE_VERSION)
-	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/lib/pppd/$(PKG_RELEASE_VERSION)/pppoatm.so \
-		$(1)/opt/lib/pppd/$(PKG_RELEASE_VERSION)/
-endef
-
 define Package/ppp-mod-pppoe/install
-	$(INSTALL_DIR) $(1)/opt/lib/pppd/$(PKG_RELEASE_VERSION)
+	$(INSTALL_DIR) $(1)/usr/lib/pppd/$(PKG_RELEASE_VERSION)
 	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/lib/pppd/$(PKG_RELEASE_VERSION)/rp-pppoe.so \
-		$(1)/opt/lib/pppd/$(PKG_RELEASE_VERSION)/
+		$(1)/usr/lib/pppd/$(PKG_RELEASE_VERSION)/
 endef
 
 define Package/ppp-mod-radius/install
-	$(INSTALL_DIR) $(1)/opt/lib/pppd/$(PKG_RELEASE_VERSION)
+	$(INSTALL_DIR) $(1)/usr/lib/pppd/$(PKG_RELEASE_VERSION)
 	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/lib/pppd/$(PKG_RELEASE_VERSION)/radius.so \
-		$(1)/opt/lib/pppd/$(PKG_RELEASE_VERSION)/
-	$(INSTALL_DIR) $(1)/opt/etc/ppp
-	$(INSTALL_DATA) ./files/etc/ppp/radius.conf $(1)/opt/etc/ppp/
-	$(INSTALL_DIR) $(1)/opt/etc/ppp/radius
+		$(1)/usr/lib/pppd/$(PKG_RELEASE_VERSION)/
+	$(INSTALL_DIR) $(1)/etc/ppp
+	$(INSTALL_DATA) ./files/etc/ppp/radius.conf $(1)/etc/ppp/
+	$(INSTALL_DIR) $(1)/etc/ppp/radius
 	$(INSTALL_DATA) ./files/etc/ppp/radius/dictionary* \
-		$(1)/opt/etc/ppp/radius/
+		$(1)/etc/ppp/radius/
 	$(INSTALL_CONF) ./files/etc/ppp/radius/servers \
-		$(1)/opt/etc/ppp/radius/
+		$(1)/etc/ppp/radius/
 endef
 
 define Package/ppp-mod-pppol2tp/install
-	$(INSTALL_DIR) $(1)/opt/lib/pppd/$(PKG_RELEASE_VERSION)
+	$(INSTALL_DIR) $(1)/usr/lib/pppd/$(PKG_RELEASE_VERSION)
 	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/lib/pppd/$(PKG_RELEASE_VERSION)/pppol2tp.so \
-		$(1)/opt/lib/pppd/$(PKG_RELEASE_VERSION)/
+		$(1)/usr/lib/pppd/$(PKG_RELEASE_VERSION)/
 endef
 
 define Package/ppp-mod-pptp/install
-	$(INSTALL_DIR) $(1)/opt/lib/pppd/$(PKG_RELEASE_VERSION)
+	$(INSTALL_DIR) $(1)/usr/lib/pppd/$(PKG_RELEASE_VERSION)
 	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/lib/pppd/$(PKG_RELEASE_VERSION)/pptp.so \
-		$(1)/opt/lib/pppd/$(PKG_RELEASE_VERSION)/
-	$(INSTALL_DIR) $(1)/opt/etc/ppp
-	$(INSTALL_DATA) ./files/etc/ppp/options.pptp $(1)/opt/etc/ppp/
+		$(1)/usr/lib/pppd/$(PKG_RELEASE_VERSION)/
+	$(INSTALL_DIR) $(1)/etc/ppp
+	$(INSTALL_DATA) ./files/etc/ppp/options.pptp $(1)/etc/ppp/
 endef
 
 define Package/ppp-mod-passwordfd/install
-	$(INSTALL_DIR) $(1)/opt/lib/pppd/$(PKG_RELEASE_VERSION)
+	$(INSTALL_DIR) $(1)/usr/lib/pppd/$(PKG_RELEASE_VERSION)
 	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/lib/pppd/$(PKG_RELEASE_VERSION)/passwordfd.so \
-		$(1)/opt/lib/pppd/$(PKG_RELEASE_VERSION)/
+		$(1)/usr/lib/pppd/$(PKG_RELEASE_VERSION)/
 endef
 
 define Package/chat/install
-	$(INSTALL_DIR) $(1)/opt/sbin
-	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/sbin/chat $(1)/opt/sbin/
+	$(INSTALL_DIR) $(1)/usr/sbin
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/sbin/chat $(1)/usr/sbin/
 endef
 
 define Package/pppdump/install
-	$(INSTALL_DIR) $(1)/opt/sbin
-	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/sbin/pppdump $(1)/opt/sbin/
+	$(INSTALL_DIR) $(1)/usr/sbin
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/sbin/pppdump $(1)/usr/sbin/
 endef
 
 define Package/pppstats/install
-	$(INSTALL_DIR) $(1)/opt/sbin
-	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/sbin/pppstats $(1)/opt/sbin/
+	$(INSTALL_DIR) $(1)/usr/sbin
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/sbin/pppstats $(1)/usr/sbin/
 endef
 
 define Package/pppoe-discovery/install
-	$(INSTALL_DIR) $(1)/opt/sbin
-	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/sbin/pppoe-discovery $(1)/opt/sbin/
+	$(INSTALL_DIR) $(1)/usr/sbin
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/sbin/pppoe-discovery $(1)/usr/sbin/
 endef
 
 $(eval $(call BuildPackage,ppp))
 $(eval $(call BuildPackage,ppp-multilink))
-$(eval $(call BuildPackage,ppp-mod-pppoa))
 $(eval $(call BuildPackage,ppp-mod-pppoe))
 $(eval $(call BuildPackage,ppp-mod-radius))
 $(eval $(call BuildPackage,ppp-mod-pppol2tp))

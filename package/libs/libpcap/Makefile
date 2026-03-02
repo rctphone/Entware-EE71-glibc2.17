@@ -92,19 +92,19 @@ define Build/InstallDev
 	$(call Build/InstallDev/cmake,$(1))
 	$(SED) \
 		's,^\(prefix\|exec_prefix\)=.*,\1=$(STAGING_DIR)/opt,g' \
-		$(1)/opt/bin/pcap-config
+		$(1)/usr/bin/pcap-config
 	$(INSTALL_DIR) $(2)/bin
-	$(LN) ../../opt/bin/pcap-config $(2)/bin/pcap-config
+	$(LN) ../../usr/bin/pcap-config $(2)/bin/pcap-config
 endef
 
 define Package/libpcap/install
-	$(INSTALL_DIR) $(1)/opt/lib
-	$(CP) $(PKG_INSTALL_DIR)/opt/lib/libpcap.so* $(1)/opt/lib/
+	$(INSTALL_DIR) $(1)/usr/lib
+	$(CP) $(PKG_INSTALL_DIR)/usr/lib/libpcap.so* $(1)/usr/lib/
 endef
 
 define Package/rpcapd/install
-	$(INSTALL_DIR) $(1)/opt/sbin
-	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/opt/sbin/rpcapd $(1)/opt/sbin/
+	$(INSTALL_DIR) $(1)/usr/sbin
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/sbin/rpcapd $(1)/usr/sbin/
 endef
 
 $(eval $(call BuildPackage,libpcap))

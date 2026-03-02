@@ -5,7 +5,7 @@
  esac
  
 -NATIVE_LIB_DIRS='/usr/local/lib /lib /usr/lib'
-+NATIVE_LIB_DIRS='/opt/usr/lib'
++NATIVE_LIB_DIRS='/lib /usr/lib'
  case "${target}" in
  
  *-*-dragonfly*)

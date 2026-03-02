@@ -4,11 +4,14 @@
 # This is free software, licensed under the GNU General Public License v2.
 # See /LICENSE for more information.
 #
+# EE71: Based on OpenWrt v22.03.7, bumped to 20250419.
+# Paths use /etc/ssl (matches OpenSSL --openssldir=/etc/ssl).
+
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=ca-certificates
 PKG_VERSION:=20250419
-PKG_RELEASE:=2
+PKG_RELEASE:=1
 PKG_MAINTAINER:=
 
 PKG_LICENSE:=GPL-2.0-or-later MPL-2.0
@@ -24,14 +27,12 @@ include $(INCLUDE_DIR)/package.mk
 TAR_OPTIONS+= --strip-components 1
 TAR_CMD=$(HOST_TAR) -C $(1) $(TAR_OPTIONS)
 
-# ca-certs is deprecated and new packages should use ca-certificates-any if
-# they don't need a specific package
 define Package/ca-certificates
   SECTION:=base
   CATEGORY:=Base system
   TITLE:=System CA certificates
   PKGARCH:=all
-  PROVIDES:=@ca-certs
+  PROVIDES:=ca-certs
 endef
 
 define Package/ca-bundle
@@ -39,34 +40,34 @@ define Package/ca-bundle
   CATEGORY:=Base system
   TITLE:=System CA certificates as a bundle
   PKGARCH:=all
-  PROVIDES:=@ca-certs @ca-certificates-any
+  PROVIDES:=ca-certs
 endef
 
 define Build/Install
 	mkdir -p \
-		$(PKG_INSTALL_DIR)/opt/sbin \
-		$(PKG_INSTALL_DIR)/opt/share/ca-certificates
+		$(PKG_INSTALL_DIR)/usr/sbin \
+		$(PKG_INSTALL_DIR)/usr/share/ca-certificates
 	$(call Build/Install/Default,)
 endef
 
 define Package/ca-certificates/install
-	$(INSTALL_DIR) $(1)/opt/etc/ssl/certs
-	$(INSTALL_DATA) $(PKG_INSTALL_DIR)/opt/share/ca-certificates/*/*.crt $(1)/opt/etc/ssl/certs/
+	$(INSTALL_DIR) $(1)/etc/ssl/certs
+	$(INSTALL_DATA) $(PKG_INSTALL_DIR)/usr/share/ca-certificates/*/*.crt $(1)/etc/ssl/certs/
 
-	for CERTFILE in `ls -1 $(1)/opt/etc/ssl/certs`; do \
-		HASH=`openssl x509 -hash -noout -in $(1)/opt/etc/ssl/certs/$$$$CERTFILE` ; \
+	for CERTFILE in `ls -1 $(1)/etc/ssl/certs`; do \
+		HASH=`openssl x509 -hash -noout -in $(1)/etc/ssl/certs/$$$$CERTFILE` ; \
 		SUFFIX=0 ; \
-		while [ -h "$(1)/opt/etc/ssl/certs/$$$$HASH.$$$$SUFFIX" ]; do \
+		while [ -h "$(1)/etc/ssl/certs/$$$$HASH.$$$$SUFFIX" ]; do \
 			let "SUFFIX += 1" ; \
 		done ; \
-		$(LN) "$$$$CERTFILE" "$(1)/opt/etc/ssl/certs/$$$$HASH.$$$$SUFFIX" ; \
+		$(LN) "$$$$CERTFILE" "$(1)/etc/ssl/certs/$$$$HASH.$$$$SUFFIX" ; \
 	done
 endef
 
 define Package/ca-bundle/install
-	$(INSTALL_DIR) $(1)/opt/etc/ssl/certs
-	cat $(PKG_INSTALL_DIR)/opt/share/ca-certificates/*/*.crt >$(1)/opt/etc/ssl/certs/ca-certificates.crt
-	$(LN) /opt/etc/ssl/certs/ca-certificates.crt $(1)/opt/etc/ssl/cert.pem
+	$(INSTALL_DIR) $(1)/etc/ssl/certs
+	cat $(PKG_INSTALL_DIR)/usr/share/ca-certificates/*/*.crt >$(1)/etc/ssl/certs/ca-certificates.crt
+	$(LN) /etc/ssl/certs/ca-certificates.crt $(1)/etc/ssl/cert.pem
 endef
 $(eval $(call BuildPackage,ca-bundle))
 $(eval $(call BuildPackage,ca-certificates))

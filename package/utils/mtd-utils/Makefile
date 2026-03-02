@@ -73,11 +73,11 @@ CONFIGURE_ARGS += \
 #endef
 
 define Package/ubi-utils/install
-	$(INSTALL_DIR) $(1)/opt/sbin
+	$(INSTALL_DIR) $(1)/usr/sbin
 	$(INSTALL_BIN) \
-		$(PKG_INSTALL_DIR)/opt/sbin/{ubiattach,ubicrc32,ubiblock,ubidetach,ubiformat,ubihealthd} $(1)/opt/sbin/
+		$(PKG_INSTALL_DIR)/usr/sbin/{ubiattach,ubicrc32,ubiblock,ubidetach,ubiformat,ubihealthd} $(1)/usr/sbin/
 	$(INSTALL_BIN) \
-		$(PKG_INSTALL_DIR)/opt/sbin/{ubimkvol,ubinfo,ubinize,ubirename,ubirmvol,ubirsvol,ubiupdatevol} $(1)/opt/sbin/
+		$(PKG_INSTALL_DIR)/usr/sbin/{ubimkvol,ubinfo,ubinize,ubirename,ubirmvol,ubirsvol,ubiupdatevol} $(1)/usr/sbin/
 #	$(INSTALL_DIR) $(1)/etc/init.d
 #	$(INSTALL_BIN) ./files/ubihealthd.init $(1)/etc/init.d/ubihealthd
 #	$(INSTALL_DIR) $(1)/etc/uci-defaults
@@ -85,10 +85,10 @@ define Package/ubi-utils/install
 endef
 
 define Package/nand-utils/install
-	$(INSTALL_DIR) $(1)/opt/sbin
+	$(INSTALL_DIR) $(1)/usr/sbin
 	$(INSTALL_BIN) \
-	$(PKG_INSTALL_DIR)/opt/sbin/{flash_erase,nanddump,nandwrite,nandtest,mtdinfo} \
-	$(PKG_INSTALL_DIR)/opt/lib/mtd-utils/nandbiterrs $(1)/opt/sbin/
+	$(PKG_INSTALL_DIR)/usr/sbin/{flash_erase,nanddump,nandwrite,nandtest,mtdinfo} \
+	$(PKG_INSTALL_DIR)/usr/lib/mtd-utils/nandbiterrs $(1)/usr/sbin/
 endef
 
 $(eval $(call BuildPackage,ubi-utils))

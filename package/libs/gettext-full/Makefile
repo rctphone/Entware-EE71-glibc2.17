@@ -158,14 +158,14 @@ define Build/Compile
 endef
 
 define Build/InstallDev
-	$(INSTALL_DIR) $(1)/opt/lib/libintl-full/include
-	$(CP) $(PKG_INSTALL_DIR)/opt/include/libintl.h $(1)/opt/lib/libintl-full/include/
+	$(INSTALL_DIR) $(1)/usr/lib/libintl-full/include
+	$(CP) $(PKG_INSTALL_DIR)/usr/include/libintl.h $(1)/usr/lib/libintl-full/include/
 
-	$(INSTALL_DIR) $(1)/opt/lib/libintl-full/lib
-	$(CP) $(PKG_INSTALL_DIR)/opt/lib/libintl.{a,so*} $(1)/opt/lib/libintl-full/lib/
+	$(INSTALL_DIR) $(1)/usr/lib/libintl-full/lib
+	$(CP) $(PKG_INSTALL_DIR)/usr/lib/libintl.{a,so*} $(1)/usr/lib/libintl-full/lib/
 
-	$(INSTALL_DIR) $(1)/opt/share/gettext/m4
-	$(INSTALL_DATA) $(PKG_INSTALL_DIR)/opt/share/gettext/m4/* $(1)/opt/share/gettext/m4/
+	$(INSTALL_DIR) $(1)/usr/share/gettext/m4
+	$(INSTALL_DATA) $(PKG_INSTALL_DIR)/usr/share/gettext/m4/* $(1)/usr/share/gettext/m4/
 
 	$(SED) '/read dummy/d' $(STAGING_DIR_HOSTPKG)/bin/gettextize
 endef
@@ -180,8 +180,8 @@ define Build/Install
 endef
 
 define Package/libintl-full/install
-	$(INSTALL_DIR) $(1)/opt/lib
-	$(CP) $(PKG_INSTALL_DIR)/opt/lib/libintl.so.* $(1)/opt/lib/
+	$(INSTALL_DIR) $(1)/usr/lib
+	$(CP) $(PKG_INSTALL_DIR)/usr/lib/libintl.so.* $(1)/usr/lib/
 endef
 
 $(eval $(call HostBuild))

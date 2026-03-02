@@ -82,6 +82,7 @@ ifneq ($(wildcard $(PKG_BUILD_DIR)/.source_dir),)
 endif
 
 include $(INCLUDE_DIR)/quilt.mk
+include $(INCLUDE_DIR)/ee71-skip-opt-patches.mk
 
 find_library_dependencies = \
 	$(wildcard $(patsubst %,$(STAGING_DIR)/pkginfo/%.version, \

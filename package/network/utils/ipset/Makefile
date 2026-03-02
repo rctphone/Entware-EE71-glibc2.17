@@ -55,21 +55,21 @@ MAKE_FLAGS += \
 	SHELL="$(BASH)"
 
 define Build/InstallDev
-	$(INSTALL_DIR) $(1)/opt/include $(1)/opt/lib $(1)/opt/lib/pkgconfig
-	$(CP) $(PKG_INSTALL_DIR)/opt/include/libipset $(1)/opt/include/
-	$(CP) $(PKG_INSTALL_DIR)/opt/lib/libipset.so* $(1)/opt/lib/
-	$(CP) $(PKG_BUILD_DIR)/lib/libipset.pc $(1)/opt/lib/pkgconfig/
+	$(INSTALL_DIR) $(1)/usr/include $(1)/usr/lib $(1)/usr/lib/pkgconfig
+	$(CP) $(PKG_INSTALL_DIR)/usr/include/libipset $(1)/usr/include/
+	$(CP) $(PKG_INSTALL_DIR)/usr/lib/libipset.so* $(1)/usr/lib/
+	$(CP) $(PKG_BUILD_DIR)/lib/libipset.pc $(1)/usr/lib/pkgconfig/
 endef
 
 define Package/ipset/install
-	$(INSTALL_DIR) $(1)/opt/sbin
-	$(CP) $(PKG_INSTALL_DIR)/opt/sbin/ipset $(1)/opt/sbin/
-	$(CP) $(PKG_INSTALL_DIR)/opt/sbin/ipset-translate $(1)/opt/sbin/
+	$(INSTALL_DIR) $(1)/usr/sbin
+	$(CP) $(PKG_INSTALL_DIR)/usr/sbin/ipset $(1)/usr/sbin/
+	$(CP) $(PKG_INSTALL_DIR)/usr/sbin/ipset-translate $(1)/usr/sbin/
 endef
 
 define Package/libipset/install
-	$(INSTALL_DIR) $(1)/opt/lib
-	$(CP) $(PKG_INSTALL_DIR)/opt/lib/libipset*.so.* $(1)/opt/lib/
+	$(INSTALL_DIR) $(1)/usr/lib
+	$(CP) $(PKG_INSTALL_DIR)/usr/lib/libipset*.so.* $(1)/usr/lib/
 endef
 
 $(eval $(call BuildPackage,libipset))

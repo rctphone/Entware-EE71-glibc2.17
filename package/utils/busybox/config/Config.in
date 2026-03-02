@@ -501,7 +501,7 @@ config BUSYBOX_CONFIG_SYSROOT
 	For example, busybox can be built against an installed
 	Android NDK, platform version 9, for ARM ABI with
 
-	CONFIG_SYSROOT=/opt/android-ndk/platforms/android-9/arch-arm
+	CONFIG_SYSROOT=/usr/android-ndk/platforms/android-9/arch-arm
 
 	Native builds leave this empty.
 

@@ -40,15 +40,15 @@ TARGET_CFLAGS += -Wno-error=sign-compare
 endif
 
 define Build/InstallDev
-	$(INSTALL_DIR) $(1)/opt/lib/pkgconfig $(1)/opt/include/libnl-tiny
-	$(CP) $(PKG_INSTALL_DIR)/opt/include/libnl-tiny/* $(1)/opt/include/libnl-tiny
-	$(CP) $(PKG_INSTALL_DIR)/opt/lib/libnl-tiny.so* $(1)/opt/lib/
-	$(INSTALL_DATA) $(PKG_BUILD_DIR)/libnl-tiny.pc $(1)/opt/lib/pkgconfig
+	$(INSTALL_DIR) $(1)/usr/lib/pkgconfig $(1)/usr/include/libnl-tiny
+	$(CP) $(PKG_INSTALL_DIR)/usr/include/libnl-tiny/* $(1)/usr/include/libnl-tiny
+	$(CP) $(PKG_INSTALL_DIR)/usr/lib/libnl-tiny.so* $(1)/usr/lib/
+	$(INSTALL_DATA) $(PKG_BUILD_DIR)/libnl-tiny.pc $(1)/usr/lib/pkgconfig
 endef
 
 define Package/libnl-tiny/install
-	$(INSTALL_DIR) $(1)/opt/lib
-	$(CP) $(PKG_INSTALL_DIR)/opt/lib/libnl-tiny.so.* $(1)/opt/lib/
+	$(INSTALL_DIR) $(1)/usr/lib
+	$(CP) $(PKG_INSTALL_DIR)/usr/lib/libnl-tiny.so.* $(1)/usr/lib/
 endef
 
 $(eval $(call BuildPackage,libnl-tiny))

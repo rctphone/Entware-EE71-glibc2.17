@@ -7,6 +7,7 @@ include $(TOPDIR)/rules.mk
 ARCH:=arm
 BOARD:=armv7-3.10
 BOARDNAME:=Entware (armv7, Linux 3.10.49)
+ARCH_PACKAGES:=armv7-softfp
 CPU_TYPE:=cortex-a7+neon-vfpv4
 FEATURES:=gpio usb
 KERNEL_PATCHVER:=3.10

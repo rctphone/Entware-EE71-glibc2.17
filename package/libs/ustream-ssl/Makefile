@@ -51,7 +51,7 @@ define Package/libustream-mbedtls
 endef
 
 ifeq ($(BUILD_VARIANT),wolfssl)
-  TARGET_CFLAGS += -I$(STAGING_DIR)/opt/include/wolfssl
+  TARGET_CFLAGS += -I$(STAGING_DIR)/usr/include/wolfssl
   CMAKE_OPTIONS += -DWOLFSSL=on
 endif
 ifeq ($(BUILD_VARIANT),mbedtls)
@@ -59,8 +59,8 @@ ifeq ($(BUILD_VARIANT),mbedtls)
 endif
 
 define Package/libustream/default/install
-	$(INSTALL_DIR) $(1)/opt/lib/
-	$(INSTALL_DATA) $(PKG_INSTALL_DIR)/opt/lib/libustream-ssl.so $(1)/opt/lib/
+	$(INSTALL_DIR) $(1)/usr/lib/
+	$(INSTALL_DATA) $(PKG_INSTALL_DIR)/usr/lib/libustream-ssl.so $(1)/usr/lib/
 endef
 
 Package/libustream-openssl/install = $(Package/libustream/default/install)

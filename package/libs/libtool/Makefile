@@ -24,7 +24,7 @@ PKG_BUILD_PARALLEL:=0
 include $(INCLUDE_DIR)/package.mk
 
 CONFIGURE_PREFIX=$(STAGING_DIR_HOSTPKG)
-export GLOBAL_LIBDIR=$(STAGING_DIR)/opt/lib
+export GLOBAL_LIBDIR=$(STAGING_DIR)/usr/lib
 
 define Package/libltdl
   SECTION:=libs
@@ -41,14 +41,14 @@ define Build/InstallDev
 		prefix="$(2)/libltdl" \
 		exec_prefix="$(2)/libltdl" \
 		install
-	$(INSTALL_DIR) $(1)/opt/lib $(1)/opt/include
-	mv $(2)/libltdl/lib/* $(1)/opt/lib/
-	mv $(2)/libltdl/include/* $(1)/opt/include/
+	$(INSTALL_DIR) $(1)/usr/lib $(1)/usr/include
+	mv $(2)/libltdl/lib/* $(1)/usr/lib/
+	mv $(2)/libltdl/include/* $(1)/usr/include/
 endef
 
 define Package/libltdl/install
-	$(INSTALL_DIR) $(1)/opt/lib
-	$(CP) $(PKG_BUILD_DIR)/libltdl/.libs/libltdl.so.* $(1)/opt/lib/
+	$(INSTALL_DIR) $(1)/usr/lib
+	$(CP) $(PKG_BUILD_DIR)/libltdl/.libs/libltdl.so.* $(1)/usr/lib/
 endef
 
 $(eval $(call BuildPackage,libltdl))

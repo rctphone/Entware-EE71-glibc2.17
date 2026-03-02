@@ -78,12 +78,12 @@ CONFIGURE_ARGS = \
 		--build=$(GNU_HOST_NAME) \
 		--program-prefix="" \
 		--program-suffix="" \
-		--prefix=/opt \
-		--exec-prefix=/opt \
-		--bindir=/opt/bin \
-		--sbindir=/opt/sbin \
-		--libexecdir=/opt/lib \
-		--sysconfdir=/opt/etc \
+		--prefix=/usr \
+		--exec-prefix=/usr \
+		--bindir=/usr/bin \
+		--sbindir=/usr/sbin \
+		--libexecdir=/usr/lib \
+		--sysconfdir=/etc \
 		$(if $(CONFIG_KEXEC_ZLIB),--with,--without)-zlib \
 		$(if $(CONFIG_KEXEC_LZMA),--with,--without)-lzma \
 		$(if $(CONFIG_KEXEC_ZSTD),--with,--without)-zstd \
@@ -102,8 +102,8 @@ define Package/kexec-tools/install
 endef
 
 define Package/kexec/install
-	$(INSTALL_DIR) $(1)/opt/sbin
-	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/opt/sbin/kexec $(1)/opt/sbin
+	$(INSTALL_DIR) $(1)/usr/sbin
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/sbin/kexec $(1)/usr/sbin
 
 # make a link for compatability with other distros
 #	$(INSTALL_DIR) $(1)/sbin
@@ -111,8 +111,8 @@ define Package/kexec/install
 endef
 
 define Package/kdump/install
-	$(INSTALL_DIR) $(1)/opt/sbin
-	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/opt/sbin/vmcore-dmesg $(1)/usr/sbin
+	$(INSTALL_DIR) $(1)/usr/sbin
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/sbin/vmcore-dmesg $(1)/usr/sbin
 endef
 
 $(eval $(call BuildPackage,kexec-tools))

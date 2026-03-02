@@ -202,129 +202,129 @@ define Build/Compile
 endef
 
 define Build/InstallDev
-	$(INSTALL_DIR) $(1)/opt/lib/pkgconfig
+	$(INSTALL_DIR) $(1)/usr/lib/pkgconfig
 
-	$(CP) $(PKG_BUILD_DIR)/lib/ext2fs/ext2fs.pc $(1)/opt/lib/pkgconfig
-	$(CP) $(PKG_BUILD_DIR)/lib/et/com_err.pc $(1)/opt/lib/pkgconfig
-	$(CP) $(PKG_BUILD_DIR)/lib/e2p/e2p.pc $(1)/opt/lib/pkgconfig
-	$(CP) $(PKG_BUILD_DIR)/lib/ss/ss.pc $(1)/opt/lib/pkgconfig
+	$(CP) $(PKG_BUILD_DIR)/lib/ext2fs/ext2fs.pc $(1)/usr/lib/pkgconfig
+	$(CP) $(PKG_BUILD_DIR)/lib/et/com_err.pc $(1)/usr/lib/pkgconfig
+	$(CP) $(PKG_BUILD_DIR)/lib/e2p/e2p.pc $(1)/usr/lib/pkgconfig
+	$(CP) $(PKG_BUILD_DIR)/lib/ss/ss.pc $(1)/usr/lib/pkgconfig
 
-	$(INSTALL_DIR) $(1)/opt/lib
-	$(CP) $(PKG_BUILD_DIR)/lib/libext2fs.{so,a}* $(1)/opt/lib
-	$(CP) $(PKG_BUILD_DIR)/lib/libcom_err.{so,a}* $(1)/opt/lib
-	$(CP) $(PKG_BUILD_DIR)/lib/libss.{so,a}* $(1)/opt/lib
-	$(CP) $(PKG_BUILD_DIR)/lib/libe2p.{so,a}* $(1)/opt/lib
+	$(INSTALL_DIR) $(1)/usr/lib
+	$(CP) $(PKG_BUILD_DIR)/lib/libext2fs.{so,a}* $(1)/usr/lib
+	$(CP) $(PKG_BUILD_DIR)/lib/libcom_err.{so,a}* $(1)/usr/lib
+	$(CP) $(PKG_BUILD_DIR)/lib/libss.{so,a}* $(1)/usr/lib
+	$(CP) $(PKG_BUILD_DIR)/lib/libe2p.{so,a}* $(1)/usr/lib
 
-	$(INSTALL_DIR) $(1)/opt/include/ext2fs
-	$(CP) $(PKG_BUILD_DIR)/lib/ext2fs/*.h $(1)/opt/include/ext2fs
-	$(INSTALL_DIR) $(1)/opt/include/et
-	$(INSTALL_BIN) $(PKG_BUILD_DIR)/lib/et/*.h $(1)/opt/include/et
+	$(INSTALL_DIR) $(1)/usr/include/ext2fs
+	$(CP) $(PKG_BUILD_DIR)/lib/ext2fs/*.h $(1)/usr/include/ext2fs
+	$(INSTALL_DIR) $(1)/usr/include/et
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/lib/et/*.h $(1)/usr/include/et
 	# Apparently there is some confusion
-	echo "#include <et/com_err.h>" > $(1)/opt/include/com_err.h
-	$(INSTALL_DIR) $(1)/opt/include/ss
+	echo "#include <et/com_err.h>" > $(1)/usr/include/com_err.h
+	$(INSTALL_DIR) $(1)/usr/include/ss
 	$(CP) \
 		$(PKG_BUILD_DIR)/lib/ss/ss.h \
 		$(PKG_BUILD_DIR)/lib/ss/ss_err.h \
-		$(1)/opt/include/ss/
-	$(INSTALL_DIR) $(1)/opt/include/e2p
-	$(CP) $(PKG_BUILD_DIR)/lib/e2p/e2p.h $(1)/opt/include/e2p
+		$(1)/usr/include/ss/
+	$(INSTALL_DIR) $(1)/usr/include/e2p
+	$(CP) $(PKG_BUILD_DIR)/lib/e2p/e2p.h $(1)/usr/include/e2p
 endef
 
 define Package/e2fsprogs/conffiles
-/opt/etc/e2fsck.conf
+/etc/e2fsck.conf
 endef
 
 define Package/e2fsprogs/install
-	$(INSTALL_DIR) $(1)/opt/sbin
-	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/opt/sbin/e2fsck $(1)/opt/sbin/
-	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/opt/sbin/mke2fs $(1)/opt/sbin/
-	$(LN) mke2fs $(1)/opt/sbin/mkfs.ext2
-	$(LN) mke2fs $(1)/opt/sbin/mkfs.ext3
-	$(LN) mke2fs $(1)/opt/sbin/mkfs.ext4
-	$(LN) e2fsck $(1)/opt/sbin/fsck.ext2
-	$(LN) e2fsck $(1)/opt/sbin/fsck.ext3
-	$(LN) e2fsck $(1)/opt/sbin/fsck.ext4
+	$(INSTALL_DIR) $(1)/usr/sbin
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/sbin/e2fsck $(1)/usr/sbin/
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/sbin/mke2fs $(1)/usr/sbin/
+	$(LN) mke2fs $(1)/usr/sbin/mkfs.ext2
+	$(LN) mke2fs $(1)/usr/sbin/mkfs.ext3
+	$(LN) mke2fs $(1)/usr/sbin/mkfs.ext4
+	$(LN) e2fsck $(1)/usr/sbin/fsck.ext2
+	$(LN) e2fsck $(1)/usr/sbin/fsck.ext3
+	$(LN) e2fsck $(1)/usr/sbin/fsck.ext4
 #	$(INSTALL_DIR) $(1)/usr/lib
-	$(INSTALL_DIR) $(1)/opt/etc
+	$(INSTALL_DIR) $(1)/etc
 #	$(INSTALL_DIR) $(1)/lib/functions/fsck
 #	$(INSTALL_DATA) ./files/e2fsck.sh $(1)/lib/functions/fsck/
-	$(INSTALL_DATA) ./files/e2fsck.conf $(1)/opt/etc/e2fsck.conf
+	$(INSTALL_DATA) ./files/e2fsck.conf $(1)/etc/e2fsck.conf
 endef
 
 define Package/libe2p/install
-	$(INSTALL_DIR) $(1)/opt/lib
-	$(CP) $(PKG_INSTALL_DIR)/opt/lib/libe2p.so.* $(1)/opt/lib/
+	$(INSTALL_DIR) $(1)/usr/lib
+	$(CP) $(PKG_INSTALL_DIR)/usr/lib/libe2p.so.* $(1)/usr/lib/
 endef
 
 define Package/libcomerr/install
-	$(INSTALL_DIR) $(1)/opt/lib
-	$(CP) $(PKG_INSTALL_DIR)/opt/lib/libcom_err.so.* $(1)/opt/lib/
+	$(INSTALL_DIR) $(1)/usr/lib
+	$(CP) $(PKG_INSTALL_DIR)/usr/lib/libcom_err.so.* $(1)/usr/lib/
 endef
 
 define Package/libss/install
-	$(INSTALL_DIR) $(1)/opt/lib
-	$(CP) $(PKG_INSTALL_DIR)/opt/lib/libss.so.* $(1)/opt/lib/
+	$(INSTALL_DIR) $(1)/usr/lib
+	$(CP) $(PKG_INSTALL_DIR)/usr/lib/libss.so.* $(1)/usr/lib/
 endef
 
 define Package/libext2fs/install
-	$(INSTALL_DIR) $(1)/opt/lib
-	$(CP) $(PKG_INSTALL_DIR)/opt/lib/libext2fs.so.* $(1)/opt/lib/
+	$(INSTALL_DIR) $(1)/usr/lib
+	$(CP) $(PKG_INSTALL_DIR)/usr/lib/libext2fs.so.* $(1)/usr/lib/
 endef
 
 define Package/libext2fs/install_lib
-	$(INSTALL_DIR) $(1)/opt/lib
-	$(CP) $(PKG_BUILD_DIR)/lib/ext2fs/libext2fs.a $(1)/opt/lib/libext2fs_pic.a
+	$(INSTALL_DIR) $(1)/usr/lib
+	$(CP) $(PKG_BUILD_DIR)/lib/ext2fs/libext2fs.a $(1)/usr/lib/libext2fs_pic.a
 endef
 
 define Package/tune2fs/install
-	$(INSTALL_DIR) $(1)/opt/sbin
-	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/opt/sbin/tune2fs $(1)/opt/sbin/
+	$(INSTALL_DIR) $(1)/usr/sbin
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/sbin/tune2fs $(1)/usr/sbin/
 endef
 
 define Package/resize2fs/install
-	$(INSTALL_DIR) $(1)/opt/sbin
-	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/opt/sbin/resize2fs $(1)/opt/sbin/
+	$(INSTALL_DIR) $(1)/usr/sbin
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/sbin/resize2fs $(1)/usr/sbin/
 endef
 
 define Package/badblocks/install
-	$(INSTALL_DIR) $(1)/opt/sbin
-	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/opt/sbin/badblocks $(1)/opt/sbin/
+	$(INSTALL_DIR) $(1)/usr/sbin
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/sbin/badblocks $(1)/usr/sbin/
 endef
 
 define Package/dumpe2fs/install
-	$(INSTALL_DIR) $(1)/opt/sbin
-	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/opt/sbin/dumpe2fs $(1)/opt/sbin/
+	$(INSTALL_DIR) $(1)/usr/sbin
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/sbin/dumpe2fs $(1)/usr/sbin/
 endef
 
 define Package/e2freefrag/install
-	$(INSTALL_DIR) $(1)/opt/sbin
-	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/opt/sbin/e2freefrag $(1)/opt/sbin/
+	$(INSTALL_DIR) $(1)/usr/sbin
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/sbin/e2freefrag $(1)/usr/sbin/
 endef
 
 define Package/e4crypt/install
-	$(INSTALL_DIR) $(1)/opt/sbin
-	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/opt/sbin/e4crypt $(1)/opt/sbin/
+	$(INSTALL_DIR) $(1)/usr/sbin
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/sbin/e4crypt $(1)/usr/sbin/
 endef
 
 define Package/filefrag/install
-	$(INSTALL_DIR) $(1)/opt/sbin
-	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/opt/sbin/filefrag $(1)/opt/sbin/
+	$(INSTALL_DIR) $(1)/usr/sbin
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/sbin/filefrag $(1)/usr/sbin/
 endef
 
 define Package/debugfs/install
-	$(INSTALL_DIR) $(1)/opt/sbin
-	$(INSTALL_DIR) $(1)/opt/lib
-	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/opt/sbin/debugfs $(1)/opt/sbin/
+	$(INSTALL_DIR) $(1)/usr/sbin
+	$(INSTALL_DIR) $(1)/usr/lib
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/sbin/debugfs $(1)/usr/sbin/
 endef
 
 define Package/chattr/install
-	$(INSTALL_DIR) $(1)/opt/bin
-	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/opt/bin/chattr $(1)/opt/bin/
+	$(INSTALL_DIR) $(1)/usr/bin
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/bin/chattr $(1)/usr/bin/
 endef
 
 define Package/lsattr/install
-	$(INSTALL_DIR) $(1)/opt/bin
-	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/opt/bin/lsattr $(1)/opt/bin/
+	$(INSTALL_DIR) $(1)/usr/bin
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/bin/lsattr $(1)/usr/bin/
 endef
 
 $(eval $(call BuildPackage,libcomerr))

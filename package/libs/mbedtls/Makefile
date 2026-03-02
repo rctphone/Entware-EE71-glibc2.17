@@ -149,32 +149,32 @@ define Build/Configure
 endef
 
 define Build/InstallDev
-	$(INSTALL_DIR) $(1)/opt/include
+	$(INSTALL_DIR) $(1)/usr/include
 	$(CP) \
-		$(PKG_INSTALL_DIR)/opt/include/mbedtls \
-		$(PKG_INSTALL_DIR)/opt/include/psa \
-		$(1)/opt/include/
-	$(INSTALL_DIR) $(1)/opt/lib
-	$(CP) $(PKG_INSTALL_DIR)/opt/lib/lib*.so* $(1)/opt/lib/
-	$(CP) $(PKG_INSTALL_DIR)/opt/lib/lib*.a $(1)/opt/lib/
-	$(CP) $(PKG_INSTALL_DIR)/opt/lib/cmake $(1)/opt/lib/
-	$(INSTALL_DIR) $(1)/opt/lib/pkgconfig
+		$(PKG_INSTALL_DIR)/usr/include/mbedtls \
+		$(PKG_INSTALL_DIR)/usr/include/psa \
+		$(1)/usr/include/
+	$(INSTALL_DIR) $(1)/usr/lib
+	$(CP) $(PKG_INSTALL_DIR)/usr/lib/lib*.so* $(1)/usr/lib/
+	$(CP) $(PKG_INSTALL_DIR)/usr/lib/lib*.a $(1)/usr/lib/
+	$(CP) $(PKG_INSTALL_DIR)/usr/lib/cmake $(1)/usr/lib/
+	$(INSTALL_DIR) $(1)/usr/lib/pkgconfig
 	$(CP) \
-		$(PKG_INSTALL_DIR)/opt/lib/pkgconfig/mbedcrypto.pc \
-		$(PKG_INSTALL_DIR)/opt/lib/pkgconfig/mbedtls.pc \
-		$(PKG_INSTALL_DIR)/opt/lib/pkgconfig/mbedx509.pc \
-		$(1)/opt/lib/pkgconfig/
+		$(PKG_INSTALL_DIR)/usr/lib/pkgconfig/mbedcrypto.pc \
+		$(PKG_INSTALL_DIR)/usr/lib/pkgconfig/mbedtls.pc \
+		$(PKG_INSTALL_DIR)/usr/lib/pkgconfig/mbedx509.pc \
+		$(1)/usr/lib/pkgconfig/
 endef
 
 define Package/libmbedtls/install
-	$(INSTALL_DIR) $(1)/opt/lib
-	$(CP) $(PKG_INSTALL_DIR)/opt/lib/lib*.so.* $(1)/opt/lib/
+	$(INSTALL_DIR) $(1)/usr/lib
+	$(CP) $(PKG_INSTALL_DIR)/usr/lib/lib*.so.* $(1)/usr/lib/
 endef
 
 define Package/mbedtls-util/install
-	$(INSTALL_DIR) $(1)/opt/bin
-	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/opt/bin/gen_key $(1)/opt/bin/
-	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/opt/bin/cert_req $(1)/opt/bin/
+	$(INSTALL_DIR) $(1)/usr/bin
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/bin/gen_key $(1)/usr/bin/
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/bin/cert_req $(1)/usr/bin/
 endef
 
 $(eval $(call BuildPackage,libmbedtls))

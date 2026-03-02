@@ -51,7 +51,7 @@ HOST_MAKE_FLAGS += \
 
 MAKE_FLAGS += \
 	PREFIX=/opt \
-	SHLIBDIR=/opt/lib \
+	SHLIBDIR=/usr/lib \
 	OS=Linux
 
 define Build/Compile
@@ -64,24 +64,24 @@ endef
 
 # XXX skip
 #define Build/InstallDev
-#	$(INSTALL_DIR) $(1)/opt/include
-#	$(CP) $(PKG_INSTALL_DIR)/opt/include/* $(1)/opt/include/
-#	$(INSTALL_DIR) $(1)/opt/lib
-#	$(CP) $(PKG_INSTALL_DIR)/opt/lib/* $(1)/opt/lib/
-#	$(INSTALL_DIR) $(1)/opt/lib/pkgconfig
-#	$(INSTALL_DATA) $(PKG_INSTALL_DIR)/opt/lib/pkgconfig/libsepol.pc $(1)/opt/lib/pkgconfig/
-#	$(SED) 's,/opt/include,$$$${prefix}/include,g' $(1)/opt/lib/pkgconfig/libsepol.pc
-#	$(SED) 's,/opt/lib,$$$${exec_prefix}/lib,g' $(1)/opt/lib/pkgconfig/libsepol.pc
+#	$(INSTALL_DIR) $(1)/usr/include
+#	$(CP) $(PKG_INSTALL_DIR)/usr/include/* $(1)/usr/include/
+#	$(INSTALL_DIR) $(1)/usr/lib
+#	$(CP) $(PKG_INSTALL_DIR)/usr/lib/* $(1)/usr/lib/
+#	$(INSTALL_DIR) $(1)/usr/lib/pkgconfig
+#	$(INSTALL_DATA) $(PKG_INSTALL_DIR)/usr/lib/pkgconfig/libsepol.pc $(1)/usr/lib/pkgconfig/
+#	$(SED) 's,/usr/include,$$$${prefix}/include,g' $(1)/usr/lib/pkgconfig/libsepol.pc
+#	$(SED) 's,/usr/lib,$$$${exec_prefix}/lib,g' $(1)/usr/lib/pkgconfig/libsepol.pc
 #endef
 
 define Package/libsepol/install
-	$(INSTALL_DIR) $(1)/opt/lib
-	$(CP) $(PKG_INSTALL_DIR)/opt/lib/libsepol.so.* $(1)/opt/lib/
+	$(INSTALL_DIR) $(1)/usr/lib
+	$(CP) $(PKG_INSTALL_DIR)/usr/lib/libsepol.so.* $(1)/usr/lib/
 endef
 
 define Package/chkcon/install
-	$(INSTALL_DIR) $(1)/opt/bin
-	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/opt/bin/chkcon $(1)/opt/bin/
+	$(INSTALL_DIR) $(1)/usr/bin
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/bin/chkcon $(1)/usr/bin/
 endef
 
 $(eval $(call HostBuild))

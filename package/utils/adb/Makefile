@@ -45,8 +45,8 @@ define Build/Compile
 endef
 
 define Package/adb/install
-	$(INSTALL_DIR) $(1)/opt/bin
-	$(INSTALL_BIN) $(PKG_BUILD_DIR)/adb/adb $(1)/opt/bin/
+	$(INSTALL_DIR) $(1)/usr/bin
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/adb/adb $(1)/usr/bin/
 endef
 
 $(eval $(call BuildPackage,adb))

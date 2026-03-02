@@ -86,7 +86,7 @@ CPU := $(patsubst riscv,riscv64,$(patsubst x86_64,amd64,$(patsubst x86,i386,$(pa
 
 CONFIGURE_VARS += \
 	UNAME_R=$(LINUX_VERSION) \
-	ac_cv_path_GDB='/opt/bin/gdb'
+	ac_cv_path_GDB='/usr/bin/gdb'
 
 ifeq ($(CONFIG_ARCH_64BIT),y)
 	CONFIGURE_ARGS += \
@@ -107,98 +107,98 @@ CONFIGURE_ARGS += \
 	--enable-lto \
 	--enable-tls \
 	--without-mpicc \
-	--with-tmpdir=/opt/tmp
+	--with-tmpdir=/tmp
 
 define Package/valgrind/install
-	$(INSTALL_DIR) $(1)/opt/bin
-	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/opt/bin/valgrind* $(1)/opt/bin/
-	$(INSTALL_DIR) $(1)/opt/lib/valgrind
+	$(INSTALL_DIR) $(1)/usr/bin
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/bin/valgrind* $(1)/usr/bin/
+	$(INSTALL_DIR) $(1)/usr/lib/valgrind
 	$(CP) \
 		./files/default.supp \
-		$(PKG_INSTALL_DIR)/opt/lib/valgrind/none-* \
-		$(PKG_INSTALL_DIR)/opt/lib/valgrind/vgpreload_core*.so \
-		$(PKG_INSTALL_DIR)/opt/lib/valgrind/$(BITS)-core*.xml \
-		$(PKG_INSTALL_DIR)/opt/lib/valgrind/$(BITS)-linux*.xml \
-		$(PKG_INSTALL_DIR)/opt/lib/valgrind/memcheck-* \
-		$(PKG_INSTALL_DIR)/opt/lib/valgrind/vgpreload_memcheck*.so \
-		$(1)/opt/lib/valgrind/
-	$(SED) 's,:/lib,:/opt/lib,g' $(1)/opt/lib/valgrind/default.supp
+		$(PKG_INSTALL_DIR)/usr/lib/valgrind/none-* \
+		$(PKG_INSTALL_DIR)/usr/lib/valgrind/vgpreload_core*.so \
+		$(PKG_INSTALL_DIR)/usr/lib/valgrind/$(BITS)-core*.xml \
+		$(PKG_INSTALL_DIR)/usr/lib/valgrind/$(BITS)-linux*.xml \
+		$(PKG_INSTALL_DIR)/usr/lib/valgrind/memcheck-* \
+		$(PKG_INSTALL_DIR)/usr/lib/valgrind/vgpreload_memcheck*.so \
+		$(1)/usr/lib/valgrind/
+	$(SED) 's,:/lib,:/usr/lib,g' $(1)/usr/lib/valgrind/default.supp
 
 ifneq ($(ARCH),aarch64)
 	$(CP) \
-		$(PKG_INSTALL_DIR)/opt/lib/valgrind/$(CPU)-*.xml \
-		$(1)/opt/lib/valgrind/
+		$(PKG_INSTALL_DIR)/usr/lib/valgrind/$(CPU)-*.xml \
+		$(1)/usr/lib/valgrind/
 endif
-	$(patsubst STRIP=%,STRIP="$(TARGET_CROSS)strip",$(RSTRIP)) $(PKG_INSTALL_DIR)/opt/bin
+	$(patsubst STRIP=%,STRIP="$(TARGET_CROSS)strip",$(RSTRIP)) $(PKG_INSTALL_DIR)/usr/bin
 	$(patsubst STRIP=%,STRIP="$(TARGET_CROSS)strip -g",$(RSTRIP)) \
-		$(PKG_INSTALL_DIR)/opt/lib/valgrind/none-* \
-		$(PKG_INSTALL_DIR)/opt/lib/valgrind/memcheck-*
+		$(PKG_INSTALL_DIR)/usr/lib/valgrind/none-* \
+		$(PKG_INSTALL_DIR)/usr/lib/valgrind/memcheck-*
 endef
 
 define Package/valgrind-cachegrind/install
-	$(INSTALL_DIR) $(1)/opt/bin
-	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/opt/bin/cg_* $(1)/opt/bin/
-	$(INSTALL_DIR) $(1)/opt/lib/valgrind
+	$(INSTALL_DIR) $(1)/usr/bin
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/bin/cg_* $(1)/usr/bin/
+	$(INSTALL_DIR) $(1)/usr/lib/valgrind
 	$(CP) \
-		$(PKG_INSTALL_DIR)/opt/lib/valgrind/cachegrind-* \
-		$(1)/opt/lib/valgrind/
-	$(patsubst STRIP=%,STRIP="$(TARGET_CROSS)strip",$(RSTRIP)) $(PKG_INSTALL_DIR)/opt/bin
-	$(patsubst STRIP=%,STRIP="$(TARGET_CROSS)strip -g",$(RSTRIP)) $(PKG_INSTALL_DIR)/opt/lib/valgrind/cachegrind-*
+		$(PKG_INSTALL_DIR)/usr/lib/valgrind/cachegrind-* \
+		$(1)/usr/lib/valgrind/
+	$(patsubst STRIP=%,STRIP="$(TARGET_CROSS)strip",$(RSTRIP)) $(PKG_INSTALL_DIR)/usr/bin
+	$(patsubst STRIP=%,STRIP="$(TARGET_CROSS)strip -g",$(RSTRIP)) $(PKG_INSTALL_DIR)/usr/lib/valgrind/cachegrind-*
 	# XXX Entware specific: fix exec path in scripts
-	$(SED) 's,^#!.*perl,#!/opt/bin/perl,' $(1)/opt/bin/cg_{annotate,diff}
+	$(SED) 's,^#!.*perl,#!/usr/bin/perl,' $(1)/usr/bin/cg_{annotate,diff}
 endef
 
 define Package/valgrind-callgrind/install
-	$(INSTALL_DIR) $(1)/opt/bin
-	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/opt/bin/callgrind* $(1)/opt/bin/
-	$(INSTALL_DIR) $(1)/opt/lib/valgrind
+	$(INSTALL_DIR) $(1)/usr/bin
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/bin/callgrind* $(1)/usr/bin/
+	$(INSTALL_DIR) $(1)/usr/lib/valgrind
 	$(CP) \
-		$(PKG_INSTALL_DIR)/opt/lib/valgrind/callgrind-* \
-		$(1)/opt/lib/valgrind/
-	$(patsubst STRIP=%,STRIP="$(TARGET_CROSS)strip",$(RSTRIP)) $(PKG_INSTALL_DIR)/opt/bin
-	$(patsubst STRIP=%,STRIP="$(TARGET_CROSS)strip -g",$(RSTRIP)) $(PKG_INSTALL_DIR)/opt/lib/valgrind/callgrind-*
+		$(PKG_INSTALL_DIR)/usr/lib/valgrind/callgrind-* \
+		$(1)/usr/lib/valgrind/
+	$(patsubst STRIP=%,STRIP="$(TARGET_CROSS)strip",$(RSTRIP)) $(PKG_INSTALL_DIR)/usr/bin
+	$(patsubst STRIP=%,STRIP="$(TARGET_CROSS)strip -g",$(RSTRIP)) $(PKG_INSTALL_DIR)/usr/lib/valgrind/callgrind-*
 	# XXX Entware specific: fix exec path in scripts
-	$(SED) 's,^#!.*perl,#!/opt/bin/perl,' $(1)/opt/bin/callgrind_{annotate,control}
+	$(SED) 's,^#!.*perl,#!/usr/bin/perl,' $(1)/usr/bin/callgrind_{annotate,control}
 endef
 
 define Package/valgrind-drd/install
-	$(INSTALL_DIR) $(1)/opt/lib/valgrind
+	$(INSTALL_DIR) $(1)/usr/lib/valgrind
 	$(CP) \
-		$(PKG_INSTALL_DIR)/opt/lib/valgrind/drd-* \
-		$(PKG_INSTALL_DIR)/opt/lib/valgrind/vgpreload_drd*.so \
-		$(1)/opt/lib/valgrind/
-	$(patsubst STRIP=%,STRIP="$(TARGET_CROSS)strip",$(RSTRIP)) $(PKG_INSTALL_DIR)/opt/bin
-	$(patsubst STRIP=%,STRIP="$(TARGET_CROSS)strip -g",$(RSTRIP)) $(PKG_INSTALL_DIR)/opt/lib/valgrind/drd-*
+		$(PKG_INSTALL_DIR)/usr/lib/valgrind/drd-* \
+		$(PKG_INSTALL_DIR)/usr/lib/valgrind/vgpreload_drd*.so \
+		$(1)/usr/lib/valgrind/
+	$(patsubst STRIP=%,STRIP="$(TARGET_CROSS)strip",$(RSTRIP)) $(PKG_INSTALL_DIR)/usr/bin
+	$(patsubst STRIP=%,STRIP="$(TARGET_CROSS)strip -g",$(RSTRIP)) $(PKG_INSTALL_DIR)/usr/lib/valgrind/drd-*
 endef
 
 define Package/valgrind-massif/install
-	$(INSTALL_DIR) $(1)/opt/bin
-	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/opt/bin/ms_print $(1)/opt/bin/
-	$(INSTALL_DIR) $(1)/opt/lib/valgrind
+	$(INSTALL_DIR) $(1)/usr/bin
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/bin/ms_print $(1)/usr/bin/
+	$(INSTALL_DIR) $(1)/usr/lib/valgrind
 	$(CP) \
-		$(PKG_INSTALL_DIR)/opt/lib/valgrind/massif-* \
-		$(PKG_INSTALL_DIR)/opt/lib/valgrind/vgpreload_massif*.so \
-		$(1)/opt/lib/valgrind/
-	$(patsubst STRIP=%,STRIP="$(TARGET_CROSS)strip",$(RSTRIP)) $(PKG_INSTALL_DIR)/opt/bin
-	$(patsubst STRIP=%,STRIP="$(TARGET_CROSS)strip -g",$(RSTRIP)) $(PKG_INSTALL_DIR)/opt/lib/valgrind/massif-*
+		$(PKG_INSTALL_DIR)/usr/lib/valgrind/massif-* \
+		$(PKG_INSTALL_DIR)/usr/lib/valgrind/vgpreload_massif*.so \
+		$(1)/usr/lib/valgrind/
+	$(patsubst STRIP=%,STRIP="$(TARGET_CROSS)strip",$(RSTRIP)) $(PKG_INSTALL_DIR)/usr/bin
+	$(patsubst STRIP=%,STRIP="$(TARGET_CROSS)strip -g",$(RSTRIP)) $(PKG_INSTALL_DIR)/usr/lib/valgrind/massif-*
 	# XXX Entware specific: fix exec path in scripts
-	$(SED) 's,^#!.*perl,#!/opt/bin/perl,' $(1)/opt/bin/ms_print
+	$(SED) 's,^#!.*perl,#!/usr/bin/perl,' $(1)/usr/bin/ms_print
 endef
 
 define Package/valgrind-helgrind/install
-	$(INSTALL_DIR) $(1)/opt/lib/valgrind
+	$(INSTALL_DIR) $(1)/usr/lib/valgrind
 	$(CP) \
-		$(PKG_INSTALL_DIR)/opt/lib/valgrind/helgrind-* \
-		$(PKG_INSTALL_DIR)/opt/lib/valgrind/vgpreload_helgrind*.so \
-		$(1)/opt/lib/valgrind/
-	$(patsubst STRIP=%,STRIP="$(TARGET_CROSS)strip",$(RSTRIP)) $(PKG_INSTALL_DIR)/opt/bin
-	$(patsubst STRIP=%,STRIP="$(TARGET_CROSS)strip -g",$(RSTRIP)) $(PKG_INSTALL_DIR)/opt/lib/valgrind/helgrind-*
+		$(PKG_INSTALL_DIR)/usr/lib/valgrind/helgrind-* \
+		$(PKG_INSTALL_DIR)/usr/lib/valgrind/vgpreload_helgrind*.so \
+		$(1)/usr/lib/valgrind/
+	$(patsubst STRIP=%,STRIP="$(TARGET_CROSS)strip",$(RSTRIP)) $(PKG_INSTALL_DIR)/usr/bin
+	$(patsubst STRIP=%,STRIP="$(TARGET_CROSS)strip -g",$(RSTRIP)) $(PKG_INSTALL_DIR)/usr/lib/valgrind/helgrind-*
 endef
 
 define Package/valgrind-vgdb/install
-	$(INSTALL_DIR) $(1)/opt/bin
-	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/opt/bin/vgdb $(1)/opt/bin/
-	$(patsubst STRIP=%,STRIP="$(TARGET_CROSS)strip",$(RSTRIP)) $(PKG_INSTALL_DIR)/opt/bin
+	$(INSTALL_DIR) $(1)/usr/bin
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/bin/vgdb $(1)/usr/bin/
+	$(patsubst STRIP=%,STRIP="$(TARGET_CROSS)strip",$(RSTRIP)) $(PKG_INSTALL_DIR)/usr/bin
 endef
 
 $(eval $(call BuildPackage,valgrind))

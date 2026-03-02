@@ -49,27 +49,27 @@ CONFIGURE_ARGS += \
 	--enable-shared \
 
 define Build/InstallDev
-	$(INSTALL_DIR) $(1)/opt/include/libnetfilter_conntrack
+	$(INSTALL_DIR) $(1)/usr/include/libnetfilter_conntrack
 	$(CP) \
-		$(PKG_INSTALL_DIR)/opt/include/libnetfilter_conntrack/*.h \
-		$(1)/opt/include/libnetfilter_conntrack/
+		$(PKG_INSTALL_DIR)/usr/include/libnetfilter_conntrack/*.h \
+		$(1)/usr/include/libnetfilter_conntrack/
 
-	$(INSTALL_DIR) $(1)/opt/lib
+	$(INSTALL_DIR) $(1)/usr/lib
 	$(CP) \
-		$(PKG_INSTALL_DIR)/opt/lib/libnetfilter_conntrack.{so*,a,la} \
-		$(1)/opt/lib/
+		$(PKG_INSTALL_DIR)/usr/lib/libnetfilter_conntrack.{so*,a,la} \
+		$(1)/usr/lib/
 
-	$(INSTALL_DIR) $(1)/opt/lib/pkgconfig
+	$(INSTALL_DIR) $(1)/usr/lib/pkgconfig
 	$(CP) \
-		$(PKG_INSTALL_DIR)/opt/lib/pkgconfig/libnetfilter_conntrack.pc \
-		$(1)/opt/lib/pkgconfig/
+		$(PKG_INSTALL_DIR)/usr/lib/pkgconfig/libnetfilter_conntrack.pc \
+		$(1)/usr/lib/pkgconfig/
 endef
 
 define Package/libnetfilter-conntrack/install
-	$(INSTALL_DIR) $(1)/opt/lib
+	$(INSTALL_DIR) $(1)/usr/lib
 	$(CP) \
-		$(PKG_INSTALL_DIR)/opt/lib/libnetfilter_conntrack.so.* \
-		$(1)/opt/lib/
+		$(PKG_INSTALL_DIR)/usr/lib/libnetfilter_conntrack.so.* \
+		$(1)/usr/lib/
 endef
 
 $(eval $(call BuildPackage,libnetfilter-conntrack))

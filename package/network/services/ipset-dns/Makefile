@@ -49,8 +49,8 @@ ifdef CONFIG_LINUX_2_6_36
 endif
 
 define Package/ipset-dns/install
-	$(INSTALL_DIR) $(1)/opt/sbin
-	$(INSTALL_BIN) $(PKG_BUILD_DIR)/ipset-dns $(1)/opt/sbin/ipset-dns
+	$(INSTALL_DIR) $(1)/usr/sbin
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/ipset-dns $(1)/usr/sbin/ipset-dns
 endef
 
 $(eval $(call BuildPackage,ipset-dns))

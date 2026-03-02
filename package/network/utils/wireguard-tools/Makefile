@@ -5,6 +5,8 @@
 #
 # This is free software, licensed under the GNU General Public License v2.
 # See /LICENSE for more information.
+#
+# EE71: Synced with upstream Entware. Added lto+gc-sections, /opt→/usr paths.
 
 include $(TOPDIR)/rules.mk
 
@@ -21,6 +23,7 @@ PKG_LICENSE:=GPL-2.0
 PKG_LICENSE_FILES:=COPYING
 
 PKG_BUILD_PARALLEL:=1
+PKG_BUILD_FLAGS:=lto gc-sections
 
 include $(INCLUDE_DIR)/package.mk
 
@@ -32,12 +35,8 @@ define Package/wireguard-tools
   CATEGORY:=Network
   SUBMENU:=VPN
   URL:=https://www.wireguard.com
-  MAINTAINER:=Jason A. Donenfeld <Jason@zx2c4.com>
   TITLE:=WireGuard userspace control program (wg)
-  DEPENDS:= \
-	  @!LINUX_2_6_36 \
-	  +!BUSYBOX_CONFIG_IP:ip \
-	  +!BUSYBOX_CONFIG_FEATURE_IP_LINK:ip
+  DEPENDS:=+libc
 endef
 
 define Package/wireguard-tools/description
@@ -48,17 +47,13 @@ define Package/wireguard-tools/description
   general purpose VPN for running on embedded interfaces and super computers
   alike, fit for many different circumstances. It uses UDP.
 
-  This package provides the userspace control program for WireGuard,
-  `wg(8)`, a netifd protocol helper, and a re-resolve watchdog script.
+  This package provides the userspace control program for WireGuard, wg(8).
 endef
 
 define Package/wireguard-tools/install
-	$(INSTALL_DIR) $(1)/opt/bin/
-	$(INSTALL_BIN) $(PKG_BUILD_DIR)/src/wg $(1)/opt/bin/
-#	$(INSTALL_BIN) ./files/wireguard_watchdog $(1)/usr/bin/
-#	$(INSTALL_DIR) $(1)/lib/netifd/proto/
-#	$(INSTALL_BIN) ./files/wireguard.sh $(1)/lib/netifd/proto/
-	$(INSTALL_DIR) $(1)/opt/etc/wireguard $(1)/opt/var/run/wireguard
+	$(INSTALL_DIR) $(1)/usr/bin
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/src/wg $(1)/usr/bin/
+	$(INSTALL_DIR) $(1)/etc/wireguard $(1)/var/run/wireguard
 endef
 
 $(eval $(call BuildPackage,wireguard-tools))

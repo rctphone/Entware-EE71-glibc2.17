@@ -1,0 +1,32 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          wireguard_modules
+# Required-Start:    $local_fs
+# Default-Start:     2 3 4 5
+# Short-Description: Load TUN and WireGuard kernel modules
+### END INIT INFO
+
+TUN_MOD=/lib/modules/3.10.49/kernel/drivers/net/tun.ko
+WG_MOD=/lib/modules/3.10.49/kernel/drivers/net/wireguard.ko
+
+case "$1" in
+  start)
+    if ! lsmod | grep -q "^tun "; then
+      insmod "$TUN_MOD" && echo "wireguard_modules: tun.ko loaded" || echo "[ERR] tun.ko failed"
+    fi
+    if ! lsmod | grep -q "^wireguard "; then
+      insmod "$WG_MOD" && echo "wireguard_modules: wireguard.ko loaded" || echo "[ERR] wireguard.ko failed"
+    fi
+    # Ensure /dev/net/tun exists
+    mkdir -p /dev/net
+    [ -c /dev/net/tun ] || mknod /dev/net/tun c 10 200
+    ;;
+  stop)
+    rmmod wireguard 2>/dev/null && echo "wireguard_modules: wireguard.ko unloaded" || true
+    rmmod tun 2>/dev/null && echo "wireguard_modules: tun.ko unloaded" || true
+    ;;
+  restart) $0 stop; $0 start ;;
+  status) lsmod | grep -E "^(tun|wireguard) " || echo "no modules loaded" ;;
+  *) echo "Usage: $0 { start | stop | restart | status }" >&2; exit 1 ;;
+esac
+exit 0
