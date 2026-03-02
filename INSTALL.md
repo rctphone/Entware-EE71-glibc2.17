@@ -5,11 +5,63 @@ via ADB, sets up the package manager.
 
 ## Requirements
 
-- **USB cable** — connect EE71 to computer
+- **USB cable** — must support data transfer (not charge-only)
 - **ADB** — Android Debug Bridge (part of Android Platform Tools)
   - macOS: `brew install android-platform-tools`
   - Linux: `apt install adb`
   - Windows: [download](https://developer.android.com/tools/releases/platform-tools), extract, add to PATH
+
+## Enabling ADB on a fresh device
+
+Stock EE71 does not expose ADB. There are three ways to get ADB access:
+
+### Method 1: Recovery mode (recommended)
+
+Recovery mode always has ADB enabled. No extra tools needed.
+
+1. Turn off the device
+2. Press and hold the **Reset** button (small hole on the side)
+3. While holding Reset, connect USB cable to computer, then to device
+4. Release Reset when indicators start blinking (~10 seconds)
+5. Check: `adb devices` — device should appear
+
+After running the installer in recovery mode, the USB kernel patch is
+installed automatically so ADB works in normal mode too.
+
+### Method 2: USB mode switch via Python script
+
+If the device is in normal mode and appears as a USB mass storage device
+(hidden disk), you can switch it to ADB mode:
+
+```bash
+# Install dependencies
+pip install pyusb
+# macOS: brew install libusb
+# Linux: apt install libusb-1.0-0
+
+# Download and run
+curl -sLO https://raw.githubusercontent.com/rctphone/ee71-tools/main/enable_adb_python/enable_adb.py
+python3 enable_adb.py
+```
+
+The script sends a SCSI CDB command (`16 f9 ...`) via USB Mass Storage
+interface to switch the device to ADB mode. Cross-platform replacement
+for the Windows-only `TCL_SWITCH_UTILITY.exe`.
+
+Options:
+```bash
+python3 enable_adb.py --list      # list USB devices
+python3 enable_adb.py --verbose   # debug output
+python3 enable_adb.py --vidpid 1bbb:0908  # specific device
+```
+
+### Method 3: Windows — TCL_SWITCH_UTILITY.exe
+
+Use the original TCL utility (Windows only):
+1. Install Qualcomm USB drivers
+2. Connect device via USB
+3. Run `TCL_SWITCH_UTILITY.exe`
+4. Check: `adb devices`
 
 ## Quick start
 
