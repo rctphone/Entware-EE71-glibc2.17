@@ -11,7 +11,7 @@
 /staging_dir
 /tmp
 /logs
-/feeds
+/feeds/*
 !/feeds/rctphone/
 /feeds.conf
 /files
