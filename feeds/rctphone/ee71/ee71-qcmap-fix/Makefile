@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=ee71-qcmap-fix
-PKG_VERSION:=1.0.0
+PKG_VERSION:=1.1.0
 PKG_RELEASE:=1
 
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)
@@ -11,16 +11,22 @@ include $(INCLUDE_DIR)/package.mk
 define Package/ee71-qcmap-fix
   SECTION:=ee71
   CATEGORY:=EE71
-  TITLE:=QCMAP_ConnectionManager zero-length netlink fix
+  TITLE:=QCMAP_ConnectionManager binary patches
   DEPENDS:=+libc
 endef
 
 define Package/ee71-qcmap-fix/description
-  Patches QCMAP_ConnectionManager binary to fix infinite busy loop
-  caused by zero-length netlink TLV attributes. 12-byte ARM32 patch
-  at vaddr 0x244C4 adds a zero-step guard in the attribute parser.
-  Includes Python patcher script and init script that applies patch
-  on boot (backs up original, verifies before patching).
+  Patches QCMAP_ConnectionManager binary on boot.
+
+  Patch 1 — zero-length netlink fix (12 bytes at 0x1C4C4):
+  Fixes infinite busy loop when netlink TLV attribute has length=0.
+
+  Patch 2 — preserve dnsmasq leases (1 byte at 0x6A858):
+  Disables rm of /var/lib/misc/dnsmasq.leases on dnsmasq restart.
+  QCMAP kills and restarts dnsmasq on WAN reconnect, deleting leases.
+  This patch comments out the rm command so clients keep their IPs.
+
+  Init script backs up original, applies both patches, verifies.
 endef
 
 define Build/Compile
