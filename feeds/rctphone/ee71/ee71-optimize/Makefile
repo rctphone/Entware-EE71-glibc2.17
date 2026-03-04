@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=ee71-optimize
-PKG_VERSION:=1.0.0
+PKG_VERSION:=1.1.0
 PKG_RELEASE:=1
 
 include $(INCLUDE_DIR)/package.mk
@@ -14,55 +14,23 @@ define Package/ee71-optimize
 endef
 
 define Package/ee71-optimize/description
-  EE71 performance optimization — all phases from optimization design doc.
+  EE71 performance optimization suite.
 
-  Phase 1 (oem_watch cleanup):
-  - Remove drop_caches anti-pattern (7 occurrences, destroyed page cache)
-  - Remove sysrq-trigger memory dumps
-  - Skip sqlite3_integrity_check on boot
-  - Increase oem_watch sleep from 15s to 60s
+  One-time (marker file, skipped on subsequent boots):
+  - Disable unused init scripts (bootlogd, hwclock, alx, eMBMs, ramdump, dbus)
+  - Disable getty, nbnsd, reduce misc-daemon timeout
+  - Patch find_partitions.sh with noatime, install optimized fstab
+  - Remove unused binaries (~4 MB: bluetooth, perl, QMI test, audio, keyboard)
 
-  Phase 1 (init script cleanup):
-  - Disable bootlogd (debug only)
-  - Disable hwclock.sh (no RTC hardware)
-  - Disable start_alx_le (Atheros ethernet, no hardware)
-  - Disable eMBMs_TunnelingModule (LTE broadcast, unused)
-  - Disable start_subsystem_ramdump (debug only)
-  - Disable stop-bootlogd
-  - Reduce misc-daemon modem timeout 10s to 3s
+  Every boot:
+  - Right-size tmpfs (203MB reserved → 100MB), clean stale CGI temp files
+  - Remount UBIFS with noatime, apply sysctl tuning
+  - bridge0 INPUT ACCEPT firewall rule
 
-  Phase 2 (service cleanup):
-  - Right-size tmpfs (203MB to 100MB: /run 4m, /var/volatile 48m, /media/ram 48m)
-  - Disable getty on ttyHSL0 (serial console)
-  - Disable nbnsd (NetBIOS, QCMAP-respawned — rename binary)
-
-  Phase 2 (filesystem):
-  - Remount all UBIFS with noatime (20-30% write savings)
-  - Rootfs noatime (kernel initial mount workaround)
-
-  Phase 2 (memory):
-  - Sysctl: swappiness=0, vfs_cache_pressure=50, min_free_kbytes=4096
-  - Sysctl: dirty_ratio=10, dirty_background_ratio=5, overcommit_memory=1
-  - Sysctl: dirty_expire_centisecs=1500, dirty_writeback_centisecs=500
-  - Sysctl: printk=3 3 3 3, panic=10
-
-  Phase 2 (storage cleanup):
-  - Remove Bluetooth tools (btmon, hci*, sdptool)
-  - Remove QMI test/ping utilities
-  - Remove audio tools (amix, aplay, arec)
-  - Remove keyboard tools (dumpkeys, loadkeys, setfont)
-  - Remove testCne
-
-  Phase 2 (firewall):
-  - LAN firewall accept rule (bridge0 INPUT)
-  - Disable dbus-daemon (no clients found on audit)
-
-  Phase 3 (boot parallelization):
-  - parallel_boot: backgrounds dropbear, syslog, thermal-engine, lan_accept, chgrp-diag
-  - Keeps modem stack sequential: qmuxd -> netmgrd -> QCMAP -> qti -> core_app
-
-  Phase 4 (runtime):
-  - qcmap_renice: renices QCMAP busy-loop threads to priority 19
+  Companion scripts (separate init entries):
+  - oem_watch_patch: remove drop_caches anti-pattern from watchdog
+  - parallel_boot: background dropbear/syslog/thermal-engine at boot
+  - qcmap_renice: renice QCMAP busy-loop threads to priority 19
 endef
 
 define Build/Compile
