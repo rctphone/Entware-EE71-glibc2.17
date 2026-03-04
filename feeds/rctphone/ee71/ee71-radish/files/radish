@@ -1,0 +1,30 @@
+#!/bin/sh
+# Wrapper for radish — adds RDNSS (-d) flag automatically
+#
+# QCMAP calls: radish -k -b rmnet_data0 -i rmnet_data0 -x -i bridge0 -x
+# This wrapper detects bridge0's link-local IPv6 address and appends
+# -d <fe80::addr> so that Router Advertisements include RDNSS option,
+# allowing IPv6 clients to discover the DNS server.
+#
+# Without -d, clients get IPv6 prefix via SLAAC but no DNS server info.
+#
+# Real binary is at /usr/libexec/radish (basename "radish") so that
+# after exec, /proc/PID/comm stays "radish" — QCMAP's pidof/killall
+# can find and manage the process correctly.
+# PATH is /sbin:/bin:/usr/sbin:/usr/bin, so this wrapper at /usr/sbin/radish
+# is found before any /usr/bin/radish.
+
+LAN_IFACE="bridge0"
+LOG_TAG="radish-wrapper"
+
+# Get bridge0 link-local address for RDNSS
+rdnss_addr=$(ip -6 addr show dev "$LAN_IFACE" scope link 2>/dev/null \
+    | grep "inet6 fe80" | head -1 | awk '{print $2}' | cut -d/ -f1)
+
+if [ -n "$rdnss_addr" ]; then
+    logger -t "$LOG_TAG" "adding RDNSS: -d $rdnss_addr" 2>/dev/null
+    exec /usr/libexec/radish "$@" -d "$rdnss_addr"
+else
+    logger -t "$LOG_TAG" "no link-local on $LAN_IFACE, starting without RDNSS" 2>/dev/null
+    exec /usr/libexec/radish "$@"
+fi
