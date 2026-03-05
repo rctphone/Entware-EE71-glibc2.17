@@ -41,10 +41,6 @@ csrf_check() {
 }
 
 # --- Helpers ---
-json_escape() {
-    printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/	/\\t/g'
-}
-
 is_wg_up() {
     ip link show "$IFACE" >/dev/null 2>&1 && echo 1 || echo 0
 }
@@ -70,7 +66,7 @@ GET)
 POST)
     csrf_check
     read -r BODY
-    ACTION=$(echo "$BODY" | sed -n 's/.*"action"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    ACTION=$(echo "$BODY" | jq -r '.action // empty')
     ;;
 esac
 
@@ -108,22 +104,18 @@ status)
             IFACE_PUBKEY=$(echo "$IFACE_LINE" | cut -f2)
             IFACE_PORT=$(echo "$IFACE_LINE" | cut -f3)
 
-            IFACE_JSON=$(printf '{"public_key":"%s","listen_port":"%s"}' \
-                "$(json_escape "$IFACE_PUBKEY")" \
-                "$(json_escape "$IFACE_PORT")")
+            IFACE_JSON=$(jq -n --arg pk "$IFACE_PUBKEY" --arg port "$IFACE_PORT" \
+                '{"public_key":$pk,"listen_port":$port}')
 
-            PEERS_INNER=$(echo "$WG_DUMP" | tail -n +2 | {
-                FIRST_PEER=1
+            # Build peers JSON array: collect each peer as a JSON object, then wrap
+            PEERS_JSON=$(echo "$WG_DUMP" | tail -n +2 | {
+                NOW=$(date +%s)
+                SEP=""
+                printf '['
                 while IFS='	' read -r PUBKEY PRESHARED ENDPOINT ALLOWED_IPS HANDSHAKE RX TX KEEPALIVE; do
                     [ -z "$PUBKEY" ] && continue
-                    if [ "$FIRST_PEER" = "1" ]; then
-                        FIRST_PEER=0
-                    else
-                        printf ','
-                    fi
                     HANDSHAKE_AGO=""
                     if [ "$HANDSHAKE" != "0" ] && [ -n "$HANDSHAKE" ]; then
-                        NOW=$(date +%s)
                         AGO=$((NOW - HANDSHAKE))
                         if [ "$AGO" -lt 60 ]; then
                             HANDSHAKE_AGO="${AGO}s ago"
@@ -133,23 +125,34 @@ status)
                             HANDSHAKE_AGO="$((AGO / 3600))h ago"
                         fi
                     fi
-                    printf '{"public_key":"%s","endpoint":"%s","allowed_ips":"%s","latest_handshake":"%s","transfer_rx":%s,"transfer_tx":%s,"persistent_keepalive":"%s"}' \
-                        "$(json_escape "$PUBKEY")" \
-                        "$(json_escape "$ENDPOINT")" \
-                        "$(json_escape "$ALLOWED_IPS")" \
-                        "$(json_escape "$HANDSHAKE_AGO")" \
-                        "${RX:-0}" "${TX:-0}" \
-                        "$(json_escape "$KEEPALIVE")"
+                    printf '%s' "$SEP"
+                    jq -n \
+                        --arg pk "$PUBKEY" \
+                        --arg ep "$ENDPOINT" \
+                        --arg aips "$ALLOWED_IPS" \
+                        --arg hs "$HANDSHAKE_AGO" \
+                        --argjson rx "${RX:-0}" \
+                        --argjson tx "${TX:-0}" \
+                        --arg ka "$KEEPALIVE" \
+                        '{"public_key":$pk,"endpoint":$ep,"allowed_ips":$aips,"latest_handshake":$hs,"transfer_rx":$rx,"transfer_tx":$tx,"persistent_keepalive":$ka}'
+                    SEP=","
                 done
+                printf ']'
             })
-            PEERS_JSON="[${PEERS_INNER}]"
         fi
     fi
 
-    printf '{"up":%d,"module_loaded":%d,"has_config":%d,"has_wg":%d,"auto_start":%d,"address":"%s","endpoint":"%s","interface":%s,"peers":%s}' \
-        "$UP" "$MODULE_LOADED" "$HAS_CONFIG" "$HAS_WG" "$AUTO_START" \
-        "$(json_escape "$WG_ADDRESS")" "$(json_escape "$CONF_ENDPOINT")" \
-        "$IFACE_JSON" "$PEERS_JSON"
+    jq -n \
+        --argjson up "$UP" \
+        --argjson ml "$MODULE_LOADED" \
+        --argjson hc "$HAS_CONFIG" \
+        --argjson hw "$HAS_WG" \
+        --argjson as "$AUTO_START" \
+        --arg addr "$WG_ADDRESS" \
+        --arg ep "$CONF_ENDPOINT" \
+        --argjson iface "$IFACE_JSON" \
+        --argjson peers "$PEERS_JSON" \
+        '{"up":$up,"module_loaded":$ml,"has_config":$hc,"has_wg":$hw,"auto_start":$as,"address":$addr,"endpoint":$ep,"interface":$iface,"peers":$peers}'
     ;;
 
 config)
@@ -158,13 +161,11 @@ config)
         exit 0
     fi
 
-    # Return raw config file — escape for JSON (backslash, quotes, newlines)
-    RAW=$(sed 's/\\/\\\\/g; s/"/\\"/g; s/	/\\t/g' "$WG_CONF" | awk '{if(NR>1)printf "\\n"; printf "%s",$0}')
-    printf '{"config":"%s"}' "$RAW"
+    jq -Rs '{"config":.}' "$WG_CONF"
     ;;
 
 save)
-    CONFIG=$(echo "$BODY" | sed -n 's/.*"config"[[:space:]]*:[[:space:]]*"\(.*\)".*/\1/p' | sed 's/\\n/\n/g; s/\\"/"/g; s/\\\\/\\/g')
+    CONFIG=$(echo "$BODY" | jq -r '.config // empty')
 
     if [ -z "$CONFIG" ]; then
         echo '{"error":"No config provided"}'
@@ -219,9 +220,8 @@ generate_key)
     PRIVKEY=$("$WG_BIN" genkey 2>/dev/null)
     PUBKEY=$(echo "$PRIVKEY" | "$WG_BIN" pubkey 2>/dev/null)
 
-    printf '{"private_key":"%s","public_key":"%s"}' \
-        "$(json_escape "$PRIVKEY")" \
-        "$(json_escape "$PUBKEY")"
+    jq -n --arg priv "$PRIVKEY" --arg pub "$PUBKEY" \
+        '{"private_key":$priv,"public_key":$pub}'
     ;;
 
 *)

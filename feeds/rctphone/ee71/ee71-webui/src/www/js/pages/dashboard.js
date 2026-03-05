@@ -1,7 +1,7 @@
 ;(function() {
     'use strict';
     var $ = App.$, icon = App.icon, escHtml = App.escHtml, actionAttr = App.actionAttr;
-    var formatBytes = App.formatBytes, formatSpeed = App.formatSpeed, formatUptime = App.formatUptime;
+    var formatBytes = App.formatBytes, formatSpeed = App.formatSpeed, formatSpeedPair = App.formatSpeedPair, formatUptime = App.formatUptime;
 
     var _dashTimer = null;
     var _miniChart = null;
@@ -26,14 +26,14 @@
                     '<h3>' + icon('ic-traffic') + ' Speed</h3>' +
                     '<div class="speed-pair">' +
                         '<div class="speed-display">' +
+                            '<div class="speed-label">Download</div>' +
                             '<div class="speed-value" id="d-dl-speed">\u2014</div>' +
                             '<div class="speed-unit" id="d-dl-unit"></div>' +
-                            '<div class="speed-label">Download</div>' +
                         '</div>' +
                         '<div class="speed-display">' +
+                            '<div class="speed-label">Upload</div>' +
                             '<div class="speed-value" id="d-ul-speed">\u2014</div>' +
                             '<div class="speed-unit" id="d-ul-unit"></div>' +
-                            '<div class="speed-label">Upload</div>' +
                         '</div>' +
                     '</div>' +
                     '<div class="chart-container" id="d-speed-chart" style="min-height:120px"></div>' +
@@ -46,12 +46,13 @@
                 '<div class="card" id="dash-usage">' +
                     '<h3>' + icon('ic-traffic') + ' Data Usage</h3>' +
                     '<div class="stat-row">' +
-                        '<span class="label">Monthly</span><span class="value" id="d-usage-month">\u2014</span>' +
-                        '<div class="progress-thin green" id="d-usage-month-bar"><div class="fill" style="width:0%"></div></div>' +
+                        '<span class="label">Total</span><span class="value" id="d-usage-total">\u2014</span>' +
                     '</div>' +
                     '<div class="stat-row">' +
-                        '<span class="label">Today</span><span class="value" id="d-usage-today">\u2014</span>' +
-                        '<div class="progress-thin green" id="d-usage-today-bar"><div class="fill" style="width:0%"></div></div>' +
+                        '<span class="label">\u2193 Download</span><span class="value" id="d-usage-dl">\u2014</span>' +
+                    '</div>' +
+                    '<div class="stat-row">' +
+                        '<span class="label">\u2191 Upload</span><span class="value" id="d-usage-ul">\u2014</span>' +
                     '</div>' +
                 '</div>' +
                 '<div class="card" id="dash-system">' +
@@ -73,15 +74,18 @@
                 '<div class="card" id="dash-toggles">' +
                     '<h3>' + icon('ic-power') + ' Quick Toggles</h3>' +
                     '<div class="quick-toggles">' +
-                        '<button class="toggle-btn" id="t-wifi" ' + actionAttr('toggleWifi') + '>' +
-                            icon('ic-wifi') + ' WiFi' +
-                        '</button>' +
-                        '<button class="toggle-btn" id="t-data" ' + actionAttr('toggleData') + '>' +
-                            icon('ic-globe') + ' Data' +
-                        '</button>' +
-                        '<button class="toggle-btn" id="t-vpn" ' + actionAttr('toggleVpn') + '>' +
-                            icon('ic-vpn') + ' VPN' +
-                        '</button>' +
+                        '<div class="switch-row">' +
+                            '<span class="switch-row-label">' + icon('ic-wifi') + ' WiFi</span>' +
+                            '<label class="switch"><input type="checkbox" id="t-wifi" ' + actionAttr('toggleWifi') + '><span class="slider"></span></label>' +
+                        '</div>' +
+                        '<div class="switch-row">' +
+                            '<span class="switch-row-label">' + icon('ic-globe') + ' Data</span>' +
+                            '<label class="switch"><input type="checkbox" id="t-data" ' + actionAttr('toggleData') + '><span class="slider"></span></label>' +
+                        '</div>' +
+                        '<div class="switch-row">' +
+                            '<span class="switch-row-label">' + icon('ic-vpn') + ' VPN</span>' +
+                            '<label class="switch"><input type="checkbox" id="t-vpn" ' + actionAttr('toggleVpn') + '><span class="slider"></span></label>' +
+                        '</div>' +
                     '</div>' +
                 '</div>' +
             '</div>';
@@ -115,7 +119,7 @@
             if (netInfo) {
                 var opName = netInfo.NetworkName || netInfo.Domestic || '';
                 if (el('d-operator')) el('d-operator').textContent = opName || '\u2014';
-                if (el('d-tech')) el('d-tech').textContent = netInfo.NetworkType || '\u2014';
+                if (el('d-tech')) el('d-tech').textContent = App.techLabel(netInfo.NetworkType) || '\u2014';
                 if (el('d-rsrp')) {
                     var rsrp = netInfo.RSRP;
                     var v = parseInt(rsrp, 10);
@@ -129,7 +133,22 @@
                         );
                     }
                 }
-                if (el('d-band')) el('d-band').textContent = netInfo.Band || '\u2014';
+                // Band — use CA data if available, fallback to GetNetworkInfo
+                API.cgiGet('signal.cgi', { action: 'ca' }).then(function(ca) {
+                    if (!el('d-band')) return;
+                    if (ca && ca.ca && ca.bands && ca.bands.length > 1) {
+                        el('d-band').textContent = ca.bands.map(function(b) { return 'B' + b; }).join('+');
+                        el('d-band').title = ca.cells.map(function(c) {
+                            return c.type.toUpperCase() + ': LTE B' + c.band + ' (EARFCN ' + c.earfcn + ', ' + (c.rsrp != null ? c.rsrp + ' dBm' : '') + ')';
+                        }).join('\n');
+                    } else if (ca && ca.bands && ca.bands.length === 1) {
+                        el('d-band').textContent = 'LTE B' + ca.bands[0];
+                    } else {
+                        el('d-band').textContent = App.formatBand(netInfo.Band) || '\u2014';
+                    }
+                }).catch(function() {
+                    if (el('d-band')) el('d-band').textContent = App.formatBand(netInfo.Band) || '\u2014';
+                });
 
                 // Connection status dot
                 var dot = el('d-conn-dot');
@@ -149,14 +168,13 @@
                 if (elIp6Row) elIp6Row.style.display = ipv6 ? '' : 'none';
             }
 
-            // Speed (from traffic_stats)
+            // Speed (from traffic_stats) — same unit for DL/UL
             if (trafficData && trafficData.wan) {
-                var dl = formatSpeed(trafficData.wan.dl_speed);
-                var ul = formatSpeed(trafficData.wan.ul_speed);
-                if (el('d-dl-speed')) el('d-dl-speed').textContent = dl.value;
-                if (el('d-dl-unit')) el('d-dl-unit').textContent = dl.unit;
-                if (el('d-ul-speed')) el('d-ul-speed').textContent = ul.value;
-                if (el('d-ul-unit')) el('d-ul-unit').textContent = ul.unit;
+                var sp = formatSpeedPair(trafficData.wan.rx_speed, trafficData.wan.tx_speed);
+                if (el('d-dl-speed')) el('d-dl-speed').textContent = sp.dl.value;
+                if (el('d-dl-unit')) el('d-dl-unit').textContent = sp.unit;
+                if (el('d-ul-speed')) el('d-ul-speed').textContent = sp.ul.value;
+                if (el('d-ul-unit')) el('d-ul-unit').textContent = sp.unit;
             }
 
             // Devices
@@ -189,14 +207,13 @@
                 }
             }
 
-            // Usage
+            // Usage (from modem counters)
             if (usage) {
-                if (el('d-usage-month')) el('d-usage-month').textContent = formatBytes(
-                    (parseInt(usage.HMonthlyUpload, 10) || 0) + (parseInt(usage.HMonthlyDownload, 10) || 0)
-                );
-                if (el('d-usage-today')) el('d-usage-today').textContent = formatBytes(
-                    (parseInt(usage.HUpload, 10) || 0) + (parseInt(usage.HDownload, 10) || 0)
-                );
+                var ul = parseInt(usage.HCurrUseUL, 10) || 0;
+                var dlBytes = parseInt(usage.HCurrUseDL, 10) || 0;
+                if (el('d-usage-total')) el('d-usage-total').textContent = formatBytes(ul + dlBytes);
+                if (el('d-usage-dl')) el('d-usage-dl').textContent = formatBytes(dlBytes);
+                if (el('d-usage-ul')) el('d-usage-ul').textContent = formatBytes(ul);
             }
 
             // Battery
@@ -240,12 +257,12 @@
             // Toggle states
             API.webapi('GetWlanState').then(function(wlanSt) {
                 var tWifi = el('t-wifi');
-                if (tWifi && wlanSt) tWifi.classList.toggle('on', wlanSt.WlanState === 1 || wlanSt.WlanState === '1');
+                if (tWifi && wlanSt) tWifi.checked = (wlanSt.WlanState === 1 || wlanSt.WlanState === '1');
             }).catch(function() {});
 
             var tData = el('t-data');
             if (tData && connSt) {
-                tData.classList.toggle('on', connSt.ConnectionStatus === 2 || connSt.ConnectionStatus === '2');
+                tData.checked = (connSt.ConnectionStatus === 2 || connSt.ConnectionStatus === '2');
             }
 
             // VPN toggle state
@@ -254,7 +271,7 @@
                 API.cgiGet('shadowsocks.cgi', { action: 'status' }).catch(function() { return {}; }),
             ]).then(function(vpnRes) {
                 var tVpn = el('t-vpn');
-                if (tVpn) tVpn.classList.toggle('on', !!(vpnRes[0].up || vpnRes[1].running));
+                if (tVpn) tVpn.checked = !!(vpnRes[0].up || vpnRes[1].running);
             }).catch(function() {});
 
             // Mini speed chart
@@ -302,8 +319,8 @@
 
         var now = Math.floor(Date.now() / 1000);
         _speedHistory.t.push(now);
-        _speedHistory.dl.push((trafficData.wan.dl_speed || 0) * 8 / 1000000);
-        _speedHistory.ul.push((trafficData.wan.ul_speed || 0) * 8 / 1000000);
+        _speedHistory.dl.push((trafficData.wan.rx_speed || 0) * 8 / 1000000);
+        _speedHistory.ul.push((trafficData.wan.tx_speed || 0) * 8 / 1000000);
         var MAX = 36;
         if (_speedHistory.t.length > MAX) {
             _speedHistory.t = _speedHistory.t.slice(-MAX);

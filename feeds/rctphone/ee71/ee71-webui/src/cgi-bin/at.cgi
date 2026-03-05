@@ -55,12 +55,6 @@ validate_cmd() {
     fi
 }
 
-json_escape_str() {
-    printf '%s' "$1" | tr -d '\r' | \
-        sed 's/\\/\\\\/g; s/"/\\"/g; s/	/\\t/g' | \
-        awk 'NR>1{printf "\\n"}{printf "%s",$0}'
-}
-
 # --- Parse action ---
 case "$REQUEST_METHOD" in
 GET)
@@ -70,7 +64,7 @@ GET)
 POST)
     csrf_check
     read -r BODY
-    ACTION=$(echo "$BODY" | sed -n 's/.*"action"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    ACTION=$(echo "$BODY" | jq -r '.action // empty')
     ;;
 esac
 
@@ -133,7 +127,7 @@ TEMPLATES_EOF
     ;;
 
 send)
-    CMD=$(echo "$BODY" | sed -n 's/.*"cmd"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    CMD=$(echo "$BODY" | jq -r '.cmd // empty')
     validate_cmd "$CMD"
 
     if [ ! -c "$AT_DEV" ]; then
@@ -146,8 +140,8 @@ send)
     printf '%s\r' "$CMD" >&3
     OUTPUT=$(timeout 3 cat <&3 2>/dev/null | head -50)
     exec 3>&-
-    ESCAPED=$(json_escape_str "$OUTPUT")
-    printf '{"ok":true,"cmd":"%s","output":"%s"}' "$(json_escape_str "$CMD")" "$ESCAPED"
+    jq -n --arg cmd "$CMD" --arg output "$OUTPUT" \
+        '{"ok":true,"cmd":$cmd,"output":$output}'
     ;;
 
 *)

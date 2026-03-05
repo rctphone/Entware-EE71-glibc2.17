@@ -26,8 +26,8 @@ const API = (() => {
     let _verificationToken = '';
     let _heartbeatTimer = null;
 
-    // --- Client-side inactivity timeout (matches stock: 5 min) ---
-    const INACTIVITY_MS = 300000; // 5 minutes (stock: 3e5)
+    // --- Client-side inactivity timeout ---
+    const INACTIVITY_MS = 900000; // 15 minutes (stock was 5 min — too aggressive)
     let _inactivityTimer = null;
 
     // --- API error class ---
@@ -363,31 +363,59 @@ const API = (() => {
     const ERR_SESSION_EXPIRED = ['010101', '-32699', '-32698', '010104'];
     const ERR_LOGIN_LOCKED = '010103';
 
-    // --- Request queue ---
-    // GoAhead on the EE71 drops sessions when overwhelmed by concurrent requests.
-    // Limit concurrency to 3 (server fails at ~14, safe at 3).
-    let _inflight = 0;
-    const _MAX_CONCURRENT = 3;
-    const _pending = [];
+    // --- Request queues ---
+    // Webapi calls are serialized (max 1) because the server rotates the
+    // verification token via Set-Cookie after each response. Concurrent
+    // webapi requests would all send the same token — the server invalidates
+    // it after the first response, causing session errors on the rest.
+    // CGI calls don't use tokens, so they can run concurrently (max 3).
+    let _webapiInflight = 0;
+    const _webapiPending = [];
 
-    function _throttled(fn) {
+    let _cgiInflight = 0;
+    const _CGI_MAX = 3;
+    const _cgiPending = [];
+
+    function _webapiThrottled(fn) {
         return new Promise((resolve, reject) => {
             function run() {
-                _inflight++;
+                _webapiInflight++;
                 fn().then(
-                    (v) => { _inflight--; drain(); resolve(v); },
-                    (e) => { _inflight--; drain(); reject(e); }
+                    (v) => { _webapiInflight--; drain(); resolve(v); },
+                    (e) => { _webapiInflight--; drain(); reject(e); }
                 );
             }
             function drain() {
-                while (_pending.length > 0 && _inflight < _MAX_CONCURRENT) {
-                    _pending.shift()();
+                if (_webapiPending.length > 0 && _webapiInflight < 1) {
+                    _webapiPending.shift()();
                 }
             }
-            if (_inflight < _MAX_CONCURRENT) {
+            if (_webapiInflight < 1) {
                 run();
             } else {
-                _pending.push(run);
+                _webapiPending.push(run);
+            }
+        });
+    }
+
+    function _cgiThrottled(fn) {
+        return new Promise((resolve, reject) => {
+            function run() {
+                _cgiInflight++;
+                fn().then(
+                    (v) => { _cgiInflight--; drain(); resolve(v); },
+                    (e) => { _cgiInflight--; drain(); reject(e); }
+                );
+            }
+            function drain() {
+                while (_cgiPending.length > 0 && _cgiInflight < _CGI_MAX) {
+                    _cgiPending.shift()();
+                }
+            }
+            if (_cgiInflight < _CGI_MAX) {
+                run();
+            } else {
+                _cgiPending.push(run);
             }
         });
     }
@@ -395,7 +423,7 @@ const API = (() => {
     // --- Webapi JSON-RPC ---
 
     function webapi(method, params) {
-        return _throttled(async () => {
+        return _webapiThrottled(async () => {
             const body = JSON.stringify({
                 id: '1',
                 jsonrpc: '2.0',
@@ -440,7 +468,7 @@ const API = (() => {
     // --- CGI fetch wrapper ---
 
     function cgiGet(path, params) {
-        return _throttled(async () => {
+        return _cgiThrottled(async () => {
             let url = '/cgi-bin/' + path;
             if (params) {
                 const qs = new URLSearchParams(params).toString();
@@ -468,7 +496,7 @@ const API = (() => {
     }
 
     function cgiPost(path, data) {
-        return _throttled(async () => {
+        return _cgiThrottled(async () => {
             const resp = await fetch('/cgi-bin/' + path, {
                 method: 'POST',
                 redirect: 'manual',
@@ -570,7 +598,10 @@ const API = (() => {
         _stopInactivityTimer();
     }
 
-    // --- Client-side inactivity timeout (matches stock UI) ---
+    // --- Client-side inactivity timeout ---
+
+    const _ACTIVITY_EVENTS = ['click', 'keydown', 'scroll', 'touchstart'];
+    let _mouseMoveThrottle = 0;
 
     function _resetInactivity() {
         if (_inactivityTimer) {
@@ -579,12 +610,20 @@ const API = (() => {
         }
     }
 
+    function _onMouseMove() {
+        var now = Date.now();
+        if (now - _mouseMoveThrottle < 10000) return; // throttle to once per 10s
+        _mouseMoveThrottle = now;
+        _resetInactivity();
+    }
+
     function _startInactivityTimer() {
         _stopInactivityTimer();
         _inactivityTimer = setTimeout(_handleInactivityLogout, INACTIVITY_MS);
-        ['click', 'keydown', 'keyup'].forEach(function(ev) {
-            document.addEventListener(ev, _resetInactivity);
+        _ACTIVITY_EVENTS.forEach(function(ev) {
+            document.addEventListener(ev, _resetInactivity, { passive: true });
         });
+        document.addEventListener('mousemove', _onMouseMove, { passive: true });
     }
 
     function _stopInactivityTimer() {
@@ -592,9 +631,10 @@ const API = (() => {
             clearTimeout(_inactivityTimer);
             _inactivityTimer = null;
         }
-        ['click', 'keydown', 'keyup'].forEach(function(ev) {
+        _ACTIVITY_EVENTS.forEach(function(ev) {
             document.removeEventListener(ev, _resetInactivity);
         });
+        document.removeEventListener('mousemove', _onMouseMove);
     }
 
     function _handleInactivityLogout() {
@@ -671,3 +711,4 @@ const API = (() => {
         _pbkdf2Sha512: pbkdf2Sha512
     };
 })();
+window.API = API;

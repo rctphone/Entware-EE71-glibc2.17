@@ -72,8 +72,8 @@ GET)
 POST)
     csrf_check
     read -r BODY
-    # Extract action from JSON body: {"action":"..."}
-    ACTION=$(echo "$BODY" | sed -n 's/.*"action"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    # Extract action from JSON body
+    ACTION=$(echo "$BODY" | jq -r '.action // empty')
     ;;
 esac
 
@@ -89,19 +89,21 @@ status)
     IPV4_RULES=$(iptables -t mangle -L -n -v --line-numbers 2>/dev/null | grep -c 'TTL' || echo 0)
     IPV6_RULES=$(ip6tables -t mangle -L -n -v --line-numbers 2>/dev/null | grep -c 'HL' || echo 0)
 
-    printf '{"ttl":%d,"iface":"%s","active":%d,"init_exists":%d,"ipv4_rules":%d,"ipv6_rules":%d}' \
-        "$TTL_VAL" "$TTL_IFACE" "$ACTIVE" "$INIT_EXISTS" "$IPV4_RULES" "$IPV6_RULES"
+    jq -n --argjson ttl "$TTL_VAL" --arg iface "$TTL_IFACE" \
+        --argjson active "$ACTIVE" --argjson init "$INIT_EXISTS" \
+        --argjson v4 "$IPV4_RULES" --argjson v6 "$IPV6_RULES" \
+        '{"ttl":$ttl,"iface":$iface,"active":$active,"init_exists":$init,"ipv4_rules":$v4,"ipv6_rules":$v6}'
     ;;
 
 set)
     # Extract ttl value and interface from JSON body
-    NEW_TTL=$(echo "$BODY" | sed -n 's/.*"ttl"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p')
+    NEW_TTL=$(echo "$BODY" | jq -r '.ttl // empty')
     if [ -z "$NEW_TTL" ] || [ "$NEW_TTL" -lt 1 ] 2>/dev/null || [ "$NEW_TTL" -gt 255 ] 2>/dev/null; then
         printf '{"error":"TTL must be 1-255"}'
         exit 0
     fi
 
-    NEW_IFACE=$(echo "$BODY" | sed -n 's/.*"iface"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    NEW_IFACE=$(echo "$BODY" | jq -r '.iface // empty')
     # Validate interface: alphanumeric and + only
     case "$NEW_IFACE" in
         *[!a-zA-Z0-9+_]*|"") NEW_IFACE="$DEFAULT_IFACE" ;;
@@ -115,7 +117,8 @@ set)
         "$TTL_INIT" restart >/dev/null 2>&1
     fi
 
-    printf '{"ok":true,"ttl":%d,"iface":"%s"}' "$NEW_TTL" "$NEW_IFACE"
+    jq -n --argjson ttl "$NEW_TTL" --arg iface "$NEW_IFACE" \
+        '{"ok":true,"ttl":$ttl,"iface":$iface}'
     ;;
 
 enable)
@@ -125,7 +128,7 @@ enable)
     fi
     "$TTL_INIT" start >/dev/null 2>&1
     ACTIVE=$(is_ttl_active)
-    printf '{"ok":true,"active":%d}' "$ACTIVE"
+    jq -n --argjson active "$ACTIVE" '{"ok":true,"active":$active}'
     ;;
 
 disable)
@@ -133,7 +136,7 @@ disable)
         "$TTL_INIT" stop >/dev/null 2>&1
     fi
     ACTIVE=$(is_ttl_active)
-    printf '{"ok":true,"active":%d}' "$ACTIVE"
+    jq -n --argjson active "$ACTIVE" '{"ok":true,"active":$active}'
     ;;
 
 *)

@@ -46,11 +46,6 @@ read_conf() {
     fi
 }
 
-# --- Helpers ---
-json_escape() {
-    printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/	/\\t/g'
-}
-
 # --- Parse action ---
 case "$REQUEST_METHOD" in
 GET)
@@ -60,7 +55,7 @@ GET)
 POST)
     csrf_check
     read -r BODY
-    ACTION=$(echo "$BODY" | sed -n 's/.*"action"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    ACTION=$(echo "$BODY" | jq -r '.action // empty')
     ;;
 esac
 
@@ -80,25 +75,29 @@ status)
         LAST4=$(printf '%s' "$TELEGRAM_BOT_TOKEN" | tail -c 4)
         MASKED_TOKEN="****${LAST4}"
     fi
-    printf '{"telegram_enabled":%d,"telegram_bot_token":"%s","telegram_chat_id":"%s","phone_enabled":%d,"phone_target":"%s","filter_numbers":"%s","running":%d,"has_token":%d}' \
-        "$TELEGRAM_ENABLED" \
-        "$(json_escape "$MASKED_TOKEN")" \
-        "$(json_escape "$TELEGRAM_CHAT_ID")" \
-        "$PHONE_ENABLED" \
-        "$(json_escape "$PHONE_TARGET")" \
-        "$(json_escape "$FILTER_NUMBERS")" \
-        "$RUNNING" \
-        "$([ -n "$TELEGRAM_BOT_TOKEN" ] && echo 1 || echo 0)"
+    HAS_TOKEN=0
+    [ -n "$TELEGRAM_BOT_TOKEN" ] && HAS_TOKEN=1
+
+    jq -n \
+        --argjson telegram_enabled "$TELEGRAM_ENABLED" \
+        --arg telegram_bot_token "$MASKED_TOKEN" \
+        --arg telegram_chat_id "$TELEGRAM_CHAT_ID" \
+        --argjson phone_enabled "$PHONE_ENABLED" \
+        --arg phone_target "$PHONE_TARGET" \
+        --arg filter_numbers "$FILTER_NUMBERS" \
+        --argjson running "$RUNNING" \
+        --argjson has_token "$HAS_TOKEN" \
+        '{telegram_enabled:$telegram_enabled,telegram_bot_token:$telegram_bot_token,telegram_chat_id:$telegram_chat_id,phone_enabled:$phone_enabled,phone_target:$phone_target,filter_numbers:$filter_numbers,running:$running,has_token:$has_token}'
     ;;
 
 save)
     # Extract fields from JSON body
-    TG_EN=$(echo "$BODY" | sed -n 's/.*"telegram_enabled"[[:space:]]*:[[:space:]]*\([01]\).*/\1/p')
-    TG_TOKEN=$(echo "$BODY" | sed -n 's/.*"telegram_bot_token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
-    TG_CHAT=$(echo "$BODY" | sed -n 's/.*"telegram_chat_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
-    PH_EN=$(echo "$BODY" | sed -n 's/.*"phone_enabled"[[:space:]]*:[[:space:]]*\([01]\).*/\1/p')
-    PH_TARGET=$(echo "$BODY" | sed -n 's/.*"phone_target"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
-    FILTER=$(echo "$BODY" | sed -n 's/.*"filter_numbers"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    TG_EN=$(echo "$BODY" | jq -r '.telegram_enabled // empty')
+    TG_TOKEN=$(echo "$BODY" | jq -r '.telegram_bot_token // empty')
+    TG_CHAT=$(echo "$BODY" | jq -r '.telegram_chat_id // empty')
+    PH_EN=$(echo "$BODY" | jq -r '.phone_enabled // empty')
+    PH_TARGET=$(echo "$BODY" | jq -r '.phone_target // empty')
+    FILTER=$(echo "$BODY" | jq -r '.filter_numbers // empty')
 
     # Defaults
     TG_EN="${TG_EN:-0}"
@@ -157,8 +156,8 @@ EOF
 
 test_telegram)
     # Extract token and chat_id from POST body
-    TG_TOKEN=$(echo "$BODY" | sed -n 's/.*"telegram_bot_token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
-    TG_CHAT=$(echo "$BODY" | sed -n 's/.*"telegram_chat_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    TG_TOKEN=$(echo "$BODY" | jq -r '.telegram_bot_token // empty')
+    TG_CHAT=$(echo "$BODY" | jq -r '.telegram_chat_id // empty')
 
     if [ -z "$TG_TOKEN" ] || [ -z "$TG_CHAT" ]; then
         echo '{"error":"Bot token and chat ID required"}'
@@ -179,12 +178,11 @@ test_telegram)
         -d "text=${MSG}" \
         -d "parse_mode=HTML" 2>&1)
 
-    if echo "$RESULT" | grep -q '"ok":true'; then
+    if echo "$RESULT" | jq -e '.ok == true' >/dev/null 2>&1; then
         printf '{"ok":true,"message":"Test message sent successfully"}'
     else
-        ERR=$(echo "$RESULT" | sed -n 's/.*"description"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
-        ERR="${ERR:-Unknown error}"
-        printf '{"error":"Telegram API: %s"}' "$(json_escape "$ERR")"
+        ERR=$(echo "$RESULT" | jq -r '.description // "Unknown error"')
+        jq -n --arg err "Telegram API: $ERR" '{error:$err}'
     fi
     ;;
 
@@ -205,14 +203,17 @@ bot_info)
     fi
 
     RESULT=$(curl -s -m 10 "https://api.telegram.org/bot${TOKEN}/getMe" 2>&1)
-    if echo "$RESULT" | grep -q '"ok":true'; then
-        USERNAME=$(echo "$RESULT" | sed -n 's/.*"username"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
-        FIRST=$(echo "$RESULT" | sed -n 's/.*"first_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
-        printf '{"ok":true,"username":"%s","first_name":"%s","link":"https://t.me/%s"}' \
-            "$(json_escape "$USERNAME")" "$(json_escape "$FIRST")" "$(json_escape "$USERNAME")"
+    if echo "$RESULT" | jq -e '.ok == true' >/dev/null 2>&1; then
+        USERNAME=$(echo "$RESULT" | jq -r '.result.username // empty')
+        FIRST=$(echo "$RESULT" | jq -r '.result.first_name // empty')
+        jq -n \
+            --arg username "$USERNAME" \
+            --arg first_name "$FIRST" \
+            --arg link "https://t.me/$USERNAME" \
+            '{ok:true,username:$username,first_name:$first_name,link:$link}'
     else
-        ERR=$(echo "$RESULT" | sed -n 's/.*"description"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
-        printf '{"error":"Telegram API: %s"}' "$(json_escape "${ERR:-Unknown error}")"
+        ERR=$(echo "$RESULT" | jq -r '.description // "Unknown error"')
+        jq -n --arg err "Telegram API: $ERR" '{error:$err}'
     fi
     ;;
 
@@ -231,51 +232,25 @@ recent_chats)
     fi
 
     RESULT=$(curl -s -m 10 "https://api.telegram.org/bot${TOKEN}/getUpdates?limit=50" 2>&1)
-    if echo "$RESULT" | grep -q '"ok":true'; then
-        # Extract unique chat IDs and names using sed/awk
-        # Output: [{"id":"123","title":"Chat Name","type":"private"}, ...]
-        # Simple approach: extract chat objects
-        printf '{"ok":true,"chats":['
-        FIRST_CHAT=1
-        SEEN_IDS=""
-        # Parse each chat block - extract id, first_name/title, type
-        echo "$RESULT" | tr '{}' '\n' | grep '"chat"' | while IFS= read -r LINE; do
-            CHAT_ID=$(echo "$LINE" | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*\(-\{0,1\}[0-9]*\).*/\1/p')
-            [ -z "$CHAT_ID" ] && continue
-            # Skip if already seen
-            echo "$SEEN_IDS" | grep -qF "|${CHAT_ID}|" && continue
-            SEEN_IDS="${SEEN_IDS}|${CHAT_ID}|"
-
-            CHAT_TYPE=$(echo "$LINE" | sed -n 's/.*"type"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
-            CHAT_TITLE=$(echo "$LINE" | sed -n 's/.*"first_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
-            [ -z "$CHAT_TITLE" ] && CHAT_TITLE=$(echo "$LINE" | sed -n 's/.*"title"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
-            CHAT_TITLE="${CHAT_TITLE:-Unknown}"
-
-            if [ "$FIRST_CHAT" = "1" ]; then
-                FIRST_CHAT=0
-            else
-                printf ','
-            fi
-            printf '{"id":"%s","title":"%s","type":"%s"}' \
-                "$(json_escape "$CHAT_ID")" "$(json_escape "$CHAT_TITLE")" "$(json_escape "$CHAT_TYPE")"
-        done
-        printf ']}'
+    if echo "$RESULT" | jq -e '.ok == true' >/dev/null 2>&1; then
+        echo "$RESULT" | jq '{ok:true,chats:[.result[].message.chat // empty | {id:(.id|tostring),title:(.first_name // .title // "Unknown"),type:.type}] | unique_by(.id)}'
     else
-        ERR=$(echo "$RESULT" | sed -n 's/.*"description"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
-        printf '{"error":"Telegram API: %s"}' "$(json_escape "${ERR:-Unknown error}")"
+        ERR=$(echo "$RESULT" | jq -r '.description // "Unknown error"')
+        jq -n --arg err "Telegram API: $ERR" '{error:$err}'
     fi
     ;;
 
 config)
     # Full config for backup (unmasked token)
     read_conf
-    printf '{"telegram_enabled":%d,"telegram_bot_token":"%s","telegram_chat_id":"%s","phone_enabled":%d,"phone_target":"%s","filter_numbers":"%s"}' \
-        "$TELEGRAM_ENABLED" \
-        "$(json_escape "$TELEGRAM_BOT_TOKEN")" \
-        "$(json_escape "$TELEGRAM_CHAT_ID")" \
-        "$PHONE_ENABLED" \
-        "$(json_escape "$PHONE_TARGET")" \
-        "$(json_escape "$FILTER_NUMBERS")"
+    jq -n \
+        --argjson telegram_enabled "$TELEGRAM_ENABLED" \
+        --arg telegram_bot_token "$TELEGRAM_BOT_TOKEN" \
+        --arg telegram_chat_id "$TELEGRAM_CHAT_ID" \
+        --argjson phone_enabled "$PHONE_ENABLED" \
+        --arg phone_target "$PHONE_TARGET" \
+        --arg filter_numbers "$FILTER_NUMBERS" \
+        '{telegram_enabled:$telegram_enabled,telegram_bot_token:$telegram_bot_token,telegram_chat_id:$telegram_chat_id,phone_enabled:$phone_enabled,phone_target:$phone_target,filter_numbers:$filter_numbers}'
     ;;
 
 *)

@@ -35,13 +35,25 @@
     // Last fetched settings, kept for advanced panel access
     var _wifiSettings = null;
 
-    // Build full SetWlanSettings params — firmware resets omitted fields to empty.
+    // Build full WiFi params — firmware resets omitted fields to empty.
     // Three sections needed:
     //   AP2G       — 2.4GHz primary (wlan0)
     //   AP5G       — 5GHz settings (band-switch mode, kept in sync)
     //   AP2G_guest — Guest AP = wlan1 in AP-AP mode (the actual 5GHz interface)
     // SecurityMode 4 (WPA/WPA2) and 2 (WPA) generate broken hostapd config — clamp to safe values
     function _safeSecMode(mode) { return (mode === 0) ? 0 : 3; }
+
+    // Apply WiFi settings via wifi.cgi → qcmap_wifi_ctl.
+    // This generates hostapd-wlan1.conf BEFORE triggering core_app,
+    // so QCMAP finds both configs when it restarts WiFi.
+    function _applyWifi(params) {
+        var data = { action: 'apply' };
+        if (params.AP2G) data.AP2G = params.AP2G;
+        if (params.AP5G) data.AP5G = params.AP5G;
+        if (params.AP2G_guest) data.AP2G_guest = params.AP2G_guest;
+        if (params.AP5G_guest) data.AP5G_guest = params.AP5G_guest;
+        return API.cgiPost('wifi.cgi', data);
+    }
 
     function _fullParams(overrides2g, overrides5g) {
         var s = _wifiSettings || {};
@@ -58,14 +70,16 @@
         // Cascade: 5G value → 2G value + "_5G" suffix → default "EE71_5G" / "12345678"
         var guestSsid = ap5g.Ssid || (ap2g.Ssid ? ap2g.Ssid + '_5G' : 'EE71_5G');
         var guestKey = ap5g.WpaKey || ap2g.WpaKey || '12345678';
-        var ap2g_guest = {
+        var guest = {
             ApStatus: ap5g.ApStatus,
             Ssid: guestSsid,
             WpaKey: guestKey,
             SecurityMode: ap5g.SecurityMode,
             WpaType: ap5g.WpaType
         };
-        return { AP2G: ap2g, AP5G: ap5g, AP2G_guest: ap2g_guest };
+        // Both AP2G_guest and AP5G_guest map to the same Guest5G* DB fields.
+        // core_app expects both in SetWlanSettings (WlanAPID 2 and 3).
+        return { AP2G: ap2g, AP5G: ap5g, AP2G_guest: guest, AP5G_guest: guest };
     }
 
     function _toast(msg, isErr) {
@@ -163,7 +177,7 @@
 
         $('#wifi-2g-sw').addEventListener('change', function() {
             var params = _fullParams({ ApStatus: wifiOn ? 0 : 1 }, null);
-            API.webapi('SetWlanSettings', params).then(function() {
+            _applyWifi(params).then(function() {
                 _toast(wifiOn ? '2.4 GHz off' : '2.4 GHz on');
                 setTimeout(_loadWifiSettings, 3000);
             }).catch(function(e) { _toast('Error: ' + e.message, true); });
@@ -203,7 +217,7 @@
 
         $('#wifi-5g-sw').addEventListener('change', function() {
             var params = _fullParams(null, { ApStatus: ap5on ? 0 : 1 });
-            API.webapi('SetWlanSettings', params).then(function() {
+            _applyWifi(params).then(function() {
                 _toast(ap5on ? '5 GHz off' : '5 GHz on');
                 setTimeout(_loadWifiSettings, 3000);
             }).catch(function(e) { _toast('Error: ' + e.message, true); });
@@ -283,7 +297,7 @@
             };
 
             var params = is5g ? _fullParams(null, advFields) : _fullParams(advFields, null);
-            API.webapi('SetWlanSettings', params).then(function() {
+            _applyWifi(params).then(function() {
                 _hidePanel();
                 _toast('Saved');
                 setTimeout(_loadWifiSettings, 3000);
@@ -329,7 +343,7 @@
             _toast('Password must be at least 8 characters', true); return;
         }
         var params = _fullParams({ Ssid: $('#w-ssid').value, WpaKey: pw, SecurityMode: SEC_REV[security] != null ? SEC_REV[security] : 3 }, null);
-        API.webapi('SetWlanSettings', params).then(function() {
+        _applyWifi(params).then(function() {
             _toast('Saved');
             setTimeout(_loadWifiSettings, 3000);
         }).catch(function(e) { _toast('Error: ' + e.message, true); });
@@ -342,7 +356,7 @@
             _toast('Password must be at least 8 characters', true); return;
         }
         var params = _fullParams(null, { Ssid: $('#w5-ssid').value, WpaKey: pw, SecurityMode: SEC_REV[security] != null ? SEC_REV[security] : 3 });
-        API.webapi('SetWlanSettings', params).then(function() {
+        _applyWifi(params).then(function() {
             _toast('Saved');
             setTimeout(_loadWifiSettings, 3000);
         }).catch(function(e) { _toast('Error: ' + e.message, true); });
@@ -363,7 +377,7 @@
             { Ssid: ($('#w-ssid') || {}).value || '', WpaKey: pw2g, SecurityMode: SEC_REV[sec2g] != null ? SEC_REV[sec2g] : 3 },
             { Ssid: ($('#w5-ssid') || {}).value || '', WpaKey: pw5g, SecurityMode: SEC_REV[sec5g] != null ? SEC_REV[sec5g] : 3 }
         );
-        API.webapi('SetWlanSettings', params).then(function() {
+        _applyWifi(params).then(function() {
             _toast('Saved');
             setTimeout(_loadWifiSettings, 3000);
         }).catch(function(e) { _toast('Error: ' + e.message, true); });

@@ -17,7 +17,6 @@ import './pages/lan.js';
 import './pages/firewall.js';
 import './pages/upnp.js';
 import './pages/ttl-fix.js';
-import './pages/ussd.js';
 import './pages/sms.js';
 import './pages/vpn.js';
 import './pages/diagnostics.js';

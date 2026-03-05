@@ -48,13 +48,6 @@ validate_target() {
     fi
 }
 
-# Escape a string for safe JSON output
-json_escape_str() {
-    printf '%s' "$1" | tr -d '\r' | \
-        sed 's/\\/\\\\/g; s/"/\\"/g; s/	/\\t/g' | \
-        awk 'NR>1{printf "\\n"}{printf "%s",$0}'
-}
-
 # --- Parse action ---
 case "$REQUEST_METHOD" in
 GET)
@@ -64,7 +57,7 @@ GET)
 POST)
     csrf_check
     read -r BODY
-    ACTION=$(echo "$BODY" | sed -n 's/.*"action"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    ACTION=$(echo "$BODY" | jq -r '.action // empty')
     ;;
 esac
 
@@ -94,8 +87,8 @@ syslog)
     else
         OUTPUT=$(logread 2>/dev/null | tail -n "$LINES")
     fi
-    ESCAPED=$(json_escape_str "$OUTPUT")
-    printf '{"lines":%d,"output":"%s"}' "$LINES" "$ESCAPED"
+    jq -n --argjson lines "$LINES" --arg output "$OUTPUT" \
+        '{"lines":$lines,"output":$output}'
     ;;
 
 dmesg)
@@ -111,99 +104,103 @@ dmesg)
     [ "$LINES" -gt 1000 ] 2>/dev/null && LINES=1000
 
     OUTPUT=$(dmesg 2>/dev/null | tail -n "$LINES")
-    ESCAPED=$(json_escape_str "$OUTPUT")
-    printf '{"lines":%d,"output":"%s"}' "$LINES" "$ESCAPED"
+    jq -n --argjson lines "$LINES" --arg output "$OUTPUT" \
+        '{"lines":$lines,"output":$output}'
     ;;
 
 netinfo)
-    # Combined network info
-    echo "{"
-    # Interfaces
-    printf '"interfaces":['
+    # Build interfaces array
+    IFACES="["
     FIRST=1
     ip addr show 2>/dev/null | while IFS= read -r LINE; do
         case "$LINE" in
             [0-9]*:\ *)
-                if [ "$FIRST" = "0" ]; then echo ","; fi
-                FIRST=0
                 IFACE=$(echo "$LINE" | sed 's/^[0-9]*: *\([^:]*\).*/\1/')
                 STATE="down"
                 case "$LINE" in *UP*) STATE="up" ;; esac
-                printf '{"name":"%s","state":"%s"}' "$IFACE" "$STATE"
+                ENTRY=$(jq -n --arg name "$IFACE" --arg state "$STATE" \
+                    '{"name":$name,"state":$state}')
+                if [ "$FIRST" = "1" ]; then
+                    printf '%s' "$ENTRY"
+                    FIRST=0
+                else
+                    printf ',%s' "$ENTRY"
+                fi
                 ;;
         esac
-    done
-    echo '],'
-    # ARP table
-    printf '"arp":['
-    FIRST=1
+    done > /tmp/cgi_ifaces.$$
+    IFACES_JSON="[$(cat /tmp/cgi_ifaces.$$ 2>/dev/null)]"
+    rm -f /tmp/cgi_ifaces.$$
+
+    # Build ARP array
     cat /proc/net/arp 2>/dev/null | tail -n +2 | while IFS= read -r LINE; do
-        if [ "$FIRST" = "0" ]; then printf ","; fi
-        FIRST=0
         IP=$(echo "$LINE" | awk '{print $1}')
         MAC=$(echo "$LINE" | awk '{print $4}')
         DEV=$(echo "$LINE" | awk '{print $6}')
-        printf '{"ip":"%s","mac":"%s","dev":"%s"}' "$IP" "$MAC" "$DEV"
-    done
-    echo '],'
-    # Routes
-    printf '"routes":['
-    FIRST=1
+        jq -n --arg ip "$IP" --arg mac "$MAC" --arg dev "$DEV" \
+            '{"ip":$ip,"mac":$mac,"dev":$dev}'
+    done > /tmp/cgi_arp.$$
+    ARP_JSON=$(jq -s '.' /tmp/cgi_arp.$$ 2>/dev/null || echo "[]")
+    rm -f /tmp/cgi_arp.$$
+
+    # Build routes array
     ip route show 2>/dev/null | while IFS= read -r LINE; do
-        if [ "$FIRST" = "0" ]; then printf ","; fi
-        FIRST=0
-        ESCAPED=$(printf '%s' "$LINE" | sed 's/\\/\\\\/g; s/"/\\"/g')
-        printf '"%s"' "$ESCAPED"
-    done
-    echo '],'
+        jq -n --arg r "$LINE" '$r'
+    done > /tmp/cgi_routes.$$
+    ROUTES_JSON=$(jq -s '.' /tmp/cgi_routes.$$ 2>/dev/null || echo "[]")
+    rm -f /tmp/cgi_routes.$$
+
     # Conntrack
     COUNT=$(cat /proc/sys/net/netfilter/nf_conntrack_count 2>/dev/null || echo 0)
     MAX=$(cat /proc/sys/net/netfilter/nf_conntrack_max 2>/dev/null || echo 0)
-    printf '"conntrack":{"count":%s,"max":%s}' "$COUNT" "$MAX"
-    echo "}"
+
+    jq -n \
+        --argjson interfaces "$IFACES_JSON" \
+        --argjson arp "$ARP_JSON" \
+        --argjson routes "$ROUTES_JSON" \
+        --argjson count "$COUNT" \
+        --argjson max "$MAX" \
+        '{"interfaces":$interfaces,"arp":$arp,"routes":$routes,"conntrack":{"count":$count,"max":$max}}'
     ;;
 
 ping)
-    TARGET=$(echo "$BODY" | sed -n 's/.*"target"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    TARGET=$(echo "$BODY" | jq -r '.target // empty')
     validate_target "$TARGET"
-    COUNT=$(echo "$BODY" | sed -n 's/.*"count"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p')
+    COUNT=$(echo "$BODY" | jq -r '.count // empty')
     COUNT="${COUNT:-4}"
     [ "$COUNT" -gt 20 ] 2>/dev/null && COUNT=20
     [ "$COUNT" -lt 1 ] 2>/dev/null && COUNT=1
 
     OUTPUT=$(timeout 60 ping -c "$COUNT" -- "$TARGET" 2>&1)
-    ESCAPED=$(json_escape_str "$OUTPUT")
-    printf '{"ok":true,"output":"%s"}' "$ESCAPED"
+    jq -n --arg output "$OUTPUT" '{"ok":true,"output":$output}'
     ;;
 
 traceroute)
-    TARGET=$(echo "$BODY" | sed -n 's/.*"target"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    TARGET=$(echo "$BODY" | jq -r '.target // empty')
     validate_target "$TARGET"
-    MAXHOPS=$(echo "$BODY" | sed -n 's/.*"maxhops"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p')
+    MAXHOPS=$(echo "$BODY" | jq -r '.maxhops // empty')
     MAXHOPS="${MAXHOPS:-30}"
     [ "$MAXHOPS" -gt 30 ] 2>/dev/null && MAXHOPS=30
 
     OUTPUT=$(timeout 60 traceroute -m "$MAXHOPS" -- "$TARGET" 2>&1)
-    ESCAPED=$(json_escape_str "$OUTPUT")
-    printf '{"ok":true,"output":"%s"}' "$ESCAPED"
+    jq -n --arg output "$OUTPUT" '{"ok":true,"output":$output}'
     ;;
 
 iperf3)
-    SERVER=$(echo "$BODY" | sed -n 's/.*"server"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    SERVER=$(echo "$BODY" | jq -r '.server // empty')
     validate_target "$SERVER"
-    PORT=$(echo "$BODY" | sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p')
+    PORT=$(echo "$BODY" | jq -r '.port // empty')
     PORT="${PORT:-5201}"
-    DURATION=$(echo "$BODY" | sed -n 's/.*"duration"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p')
+    DURATION=$(echo "$BODY" | jq -r '.duration // empty')
     DURATION="${DURATION:-10}"
     [ "$DURATION" -gt 30 ] 2>/dev/null && DURATION=30
-    PROTO=$(echo "$BODY" | sed -n 's/.*"proto"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    PROTO=$(echo "$BODY" | jq -r '.proto // empty')
 
     EXTRA=""
     [ "$PROTO" = "udp" ] && EXTRA="-u"
 
     OUTPUT=$(timeout 60 iperf3 -c "$SERVER" -p "$PORT" -t "$DURATION" $EXTRA 2>&1)
-    ESCAPED=$(json_escape_str "$OUTPUT")
-    printf '{"ok":true,"output":"%s"}' "$ESCAPED"
+    jq -n --arg output "$OUTPUT" '{"ok":true,"output":$output}'
     ;;
 
 *)

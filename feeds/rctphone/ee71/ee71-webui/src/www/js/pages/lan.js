@@ -4,7 +4,13 @@
 
     var _lanData = null;
     var _dnsData = null;
-    var _dhcpExpanded = false;
+
+    var DNS_PRESETS = [
+        { label: 'Auto (from carrier)', v1: '', v2: '' },
+        { label: 'Google', v1: '8.8.8.8', v2: '8.8.4.4' },
+        { label: 'Cloudflare', v1: '1.1.1.1', v2: '1.0.0.1' },
+        { label: 'Yandex', v1: '77.88.8.8', v2: '77.88.8.1' },
+    ];
 
     var MASKS = [
         ['255.255.255.0', '/24'],
@@ -36,15 +42,7 @@
             if (!el) return;
 
             var lan = _lanData || {};
-            var dns = _dnsData || {};
             var dhcpOn = lan.DHCPServerStatus === 1 || lan.DHCPServerStatus === '1';
-
-            // Pool size from start/end
-            var startIP = lan.StartIPAddress || '';
-            var endIP = lan.EndIPAddress || '';
-            var poolSize = _poolSize(startIP, endIP);
-            var leaseHours = parseInt(lan.DHCPLeaseTime || 24, 10);
-            var leaseSec = leaseHours * 3600;
 
             var html = '<div class="card">' +
                 '<h3>IP Settings</h3>' +
@@ -80,32 +78,9 @@
                     '<label class="radio-opt"><input type="radio" name="dhcp-mode" value="0"' + (!dhcpOn ? ' checked' : '') + '> Disabled</label>' +
                 '</div>' +
 
-                // Expandable DHCP settings
-                '<div class="expand-toggle" id="dhcp-toggle" ' + actionAttr('toggleDhcp') + '>' +
-                    '<span id="dhcp-toggle-text">' + (_dhcpExpanded ? 'Hide' : 'Show') + ' DHCP settings</span>' +
-                    '<span class="expand-arrow' + (_dhcpExpanded ? ' open' : '') + '" id="dhcp-arrow">\u25be</span>' +
-                '</div>' +
-                '<div class="expand-section' + (_dhcpExpanded ? ' open' : '') + '" id="dhcp-section">' +
-                    '<div class="float-field">' +
-                        '<label>Starting IP of the pool</label>' +
-                        '<input type="text" id="lan-dhcp-start" value="' + escHtml(startIP) + '" placeholder="192.168.1.100">' +
-                    '</div>' +
-                    '<div class="float-field">' +
-                        '<label>Address pool size</label>' +
-                        '<input type="number" id="lan-pool-size" value="' + poolSize + '" min="1" max="254">' +
-                    '</div>' +
-                    '<div class="float-field">' +
-                        '<label>Lease time, sec</label>' +
-                        '<input type="number" id="lan-lease" value="' + leaseSec + '" min="60" max="2592000">' +
-                    '</div>' +
-                    '<div class="float-field">' +
-                        '<label>DNS server 1</label>' +
-                        '<input type="text" id="lan-dns1" value="' + escHtml(dns.DNSAddress1 || lan.DNSAddress1 || '') + '" placeholder="Auto">' +
-                    '</div>' +
-                    '<div class="float-field">' +
-                        '<label>DNS server 2</label>' +
-                        '<input type="text" id="lan-dns2" value="' + escHtml(dns.DNSAddress2 || lan.DNSAddress2 || '') + '" placeholder="Auto">' +
-                    '</div>' +
+                // DHCP settings link (opens slide-in panel)
+                '<div class="wifi-adv-link">' +
+                    '<a ' + actionAttr('showDhcpPanel') + '>DHCP settings \u203a</a>' +
                 '</div>' +
 
                 // Save
@@ -156,26 +131,167 @@
         return parts.join('.');
     }
 
-    function _toggleDhcp() {
-        _dhcpExpanded = !_dhcpExpanded;
-        var section = $('#dhcp-section');
-        var text = $('#dhcp-toggle-text');
-        var arrow = $('#dhcp-arrow');
-        if (section) section.classList.toggle('open', _dhcpExpanded);
-        if (text) text.textContent = _dhcpExpanded ? 'Hide DHCP settings' : 'Show DHCP settings';
-        if (arrow) arrow.classList.toggle('open', _dhcpExpanded);
+    // --- DHCP slide-in panel ---
+
+    function _showDhcpPanel() {
+        var lan = _lanData || {};
+        var dns = _dnsData || {};
+        var startIP = lan.StartIPAddress || '';
+        var endIP = lan.EndIPAddress || '';
+        var poolSize = _poolSize(startIP, endIP);
+        var leaseHours = parseInt(lan.DHCPLeaseTime || 24, 10);
+        var leaseSec = leaseHours * 3600;
+
+        var curDns1 = dns.DNSAddress1 || lan.DNSAddress1 || '';
+        var curDns2 = dns.DNSAddress2 || lan.DNSAddress2 || '';
+
+        // Find matching preset
+        var presetIdx = -1;
+        for (var pi = 0; pi < DNS_PRESETS.length; pi++) {
+            if (DNS_PRESETS[pi].v1 === curDns1 && DNS_PRESETS[pi].v2 === curDns2) { presetIdx = pi; break; }
+        }
+
+        var presetOpts = DNS_PRESETS.map(function(p, i) {
+            return '<option value="' + i + '"' + (i === presetIdx ? ' selected' : '') + '>' +
+                escHtml(p.label) + (p.v1 ? ' (' + p.v1 + ')' : '') + '</option>';
+        }).join('') +
+        '<option value="custom"' + (presetIdx === -1 && (curDns1 || curDns2) ? ' selected' : '') + '>Custom</option>';
+
+        var fieldsHTML =
+            '<div class="float-field">' +
+                '<label>Starting IP of the pool</label>' +
+                '<input type="text" id="lan-dhcp-start" value="' + escHtml(startIP) + '" placeholder="192.168.1.100">' +
+            '</div>' +
+            '<div class="float-field">' +
+                '<label>Address pool size</label>' +
+                '<input type="number" id="lan-pool-size" value="' + poolSize + '" min="1" max="254">' +
+            '</div>' +
+            '<div class="float-field">' +
+                '<label>Lease time, sec</label>' +
+                '<input type="number" id="lan-lease" value="' + leaseSec + '" min="60" max="2592000">' +
+            '</div>' +
+            '<div class="float-field">' +
+                '<label>DNS preset</label>' +
+                '<select id="lan-dns-preset">' + presetOpts + '</select>' +
+            '</div>' +
+            '<div class="float-field">' +
+                '<label>DNS server 1</label>' +
+                '<input type="text" id="lan-dns1" value="' + escHtml(curDns1) + '" placeholder="Auto">' +
+            '</div>' +
+            '<div class="float-field">' +
+                '<label>DNS server 2</label>' +
+                '<input type="text" id="lan-dns2" value="' + escHtml(curDns2) + '" placeholder="Auto">' +
+            '</div>';
+
+        _showPanel('DHCP Settings', fieldsHTML, _saveDhcp);
+
+        // Wire up DNS preset dropdown
+        var presetSel = $('#lan-dns-preset');
+        var dns1Input = $('#lan-dns1');
+        var dns2Input = $('#lan-dns2');
+        if (presetSel) {
+            _syncDnsInputs(presetSel, dns1Input, dns2Input);
+            presetSel.addEventListener('change', function() {
+                _syncDnsInputs(presetSel, dns1Input, dns2Input);
+            });
+            // When user edits DNS inputs manually, switch to Custom
+            dns1Input.addEventListener('input', function() { _markDnsCustom(presetSel, dns1Input, dns2Input); });
+            dns2Input.addEventListener('input', function() { _markDnsCustom(presetSel, dns1Input, dns2Input); });
+        }
     }
+
+    function _syncDnsInputs(sel, inp1, inp2) {
+        var val = sel.value;
+        if (val === 'custom') {
+            inp1.readOnly = false;
+            inp2.readOnly = false;
+            return;
+        }
+        var idx = parseInt(val, 10);
+        var preset = DNS_PRESETS[idx];
+        if (preset) {
+            inp1.value = preset.v1;
+            inp2.value = preset.v2;
+            inp1.readOnly = true;
+            inp2.readOnly = true;
+        }
+    }
+
+    function _markDnsCustom(sel, inp1, inp2) {
+        // Check if current values still match selected preset
+        var val = sel.value;
+        if (val === 'custom') return;
+        var idx = parseInt(val, 10);
+        var preset = DNS_PRESETS[idx];
+        if (preset && (inp1.value !== preset.v1 || inp2.value !== preset.v2)) {
+            sel.value = 'custom';
+            inp1.readOnly = false;
+            inp2.readOnly = false;
+        }
+    }
+
+    function _saveDhcp() {
+        var startIP = $('#lan-dhcp-start').value;
+        var poolSize = parseInt($('#lan-pool-size').value, 10) || 101;
+        var endIP = _endIPFromPool(startIP, poolSize);
+        var leaseSec = parseInt($('#lan-lease').value, 10) || 86400;
+        var leaseHours = Math.max(1, Math.round(leaseSec / 3600));
+
+        var params = {
+            StartIPAddress: startIP,
+            EndIPAddress: endIP,
+            DHCPLeaseTime: String(leaseHours),
+        };
+
+        var dns1 = ($('#lan-dns1') || {}).value || '';
+        var dns2 = ($('#lan-dns2') || {}).value || '';
+
+        API.webapi('SetLanSettings', params).then(function() {
+            return API.webapi('setDNSInfo', {
+                DNSMode: (dns1 || dns2) ? '1' : '0',
+                PrimaryDNS: dns1,
+                SecondaryDNS: dns2,
+            }).catch(function() {});
+        }).then(function() {
+            _hidePanel();
+            _loadLan();
+        }).catch(function(e) { alert('Error: ' + e.message); });
+    }
+
+    function _showPanel(title, fieldsHTML, onSave) {
+        _hidePanel();
+        var overlay = document.createElement('div');
+        overlay.id = 'rule-panel-overlay';
+        overlay.className = 'rule-panel-overlay';
+        overlay.innerHTML =
+            '<div class="rule-panel">' +
+                '<h3>' + escHtml(title) + '<button class="close-btn" id="lan-panel-close">\u00d7</button></h3>' +
+                '<div>' + fieldsHTML + '</div>' +
+                '<div class="form-actions">' +
+                    '<button id="lan-panel-save">Save</button>' +
+                    '<button class="btn-outline" id="lan-panel-cancel">Cancel</button>' +
+                '</div>' +
+            '</div>';
+        document.body.appendChild(overlay);
+
+        overlay.addEventListener('click', function(e) { if (e.target === overlay) _hidePanel(); });
+        document.getElementById('lan-panel-close').addEventListener('click', _hidePanel);
+        document.getElementById('lan-panel-cancel').addEventListener('click', _hidePanel);
+        document.getElementById('lan-panel-save').addEventListener('click', onSave);
+    }
+
+    function _hidePanel() {
+        var overlay = document.getElementById('rule-panel-overlay');
+        if (overlay) overlay.remove();
+    }
+
+    // --- Save main LAN settings (hostname, IP, subnet, DHCP on/off) ---
 
     function _saveLan() {
         var hostname = ($('#lan-hostname') || {}).value || '';
         if (hostname && !/^[a-zA-Z0-9][a-zA-Z0-9.-]*$/.test(hostname)) {
             alert('Invalid hostname'); return;
         }
-        var startIP = $('#lan-dhcp-start').value;
-        var poolSize = parseInt($('#lan-pool-size').value, 10) || 101;
-        var endIP = _endIPFromPool(startIP, poolSize);
-        var leaseSec = parseInt($('#lan-lease').value, 10) || 86400;
-        var leaseHours = Math.max(1, Math.round(leaseSec / 3600));
 
         var dhcpMode = '1';
         var radios = document.querySelectorAll('input[name="dhcp-mode"]');
@@ -188,30 +304,15 @@
             IPv4IPAddress: $('#lan-ip').value,
             SubnetMask: $('#lan-mask').value,
             DHCPServerStatus: dhcpMode,
-            StartIPAddress: startIP,
-            EndIPAddress: endIP,
-            DHCPLeaseTime: String(leaseHours),
         };
 
-        var dns1 = ($('#lan-dns1') || {}).value || '';
-        var dns2 = ($('#lan-dns2') || {}).value || '';
-
         API.webapi('SetLanSettings', params).then(function() {
-            // Save DNS if changed
-            if (dns1 || dns2) {
-                return API.webapi('setDNSInfo', {
-                    DNSMode: (dns1 || dns2) ? '1' : '0',
-                    PrimaryDNS: dns1,
-                    SecondaryDNS: dns2,
-                }).catch(function() {});
-            }
-        }).then(function() {
             alert('Settings saved. Device may restart networking.');
             setTimeout(_loadLan, 2000);
         }).catch(function(e) { alert('Error: ' + e.message); });
     }
 
     App.registerPage('lan', renderLan);
-    App._toggleDhcp = _toggleDhcp;
+    App._showDhcpPanel = _showDhcpPanel;
     App._saveLan = _saveLan;
 })();

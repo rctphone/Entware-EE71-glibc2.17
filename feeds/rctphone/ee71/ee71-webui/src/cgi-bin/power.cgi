@@ -51,7 +51,7 @@ GET)
 POST)
     csrf_check
     read -r BODY
-    ACTION=$(echo "$BODY" | sed -n 's/.*"action"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    ACTION=$(echo "$BODY" | jq -r '.action // empty')
     ;;
 esac
 
@@ -69,10 +69,10 @@ status)
     CONN_OFF_TIME=$(db_get "ConnectionOffTime")
     LED_OFF=$(db_get "LedOffWithNoClient")
 
-    printf '{"auto_off_enable":%s,"auto_off_time":%s,"wifi_off_enable":%s,"wifi_off_time":%s,"led_off_no_client":%s}' \
-        "${AUTO_OFF:-0}" "${AUTO_OFF_TIME:-1800}" \
-        "${CONN_OFF:-0}" "${CONN_OFF_TIME:-600}" \
-        "${LED_OFF:-0}"
+    jq -n --argjson aoe "${AUTO_OFF:-0}" --argjson aot "${AUTO_OFF_TIME:-1800}" \
+        --argjson woe "${CONN_OFF:-0}" --argjson wot "${CONN_OFF_TIME:-600}" \
+        --argjson led "${LED_OFF:-0}" \
+        '{"auto_off_enable":$aoe,"auto_off_time":$aot,"wifi_off_enable":$woe,"wifi_off_time":$wot,"led_off_no_client":$led}'
     ;;
 
 save)
@@ -82,11 +82,11 @@ save)
     fi
 
     # Extract values from JSON body
-    AUTO_OFF=$(echo "$BODY" | sed -n 's/.*"auto_off_enable"[[:space:]]*:[[:space:]]*\([01]\).*/\1/p')
-    AUTO_OFF_TIME=$(echo "$BODY" | sed -n 's/.*"auto_off_time"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p')
-    CONN_OFF=$(echo "$BODY" | sed -n 's/.*"wifi_off_enable"[[:space:]]*:[[:space:]]*\([01]\).*/\1/p')
-    CONN_OFF_TIME=$(echo "$BODY" | sed -n 's/.*"wifi_off_time"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p')
-    LED_OFF=$(echo "$BODY" | sed -n 's/.*"led_off_no_client"[[:space:]]*:[[:space:]]*\([01]\).*/\1/p')
+    AUTO_OFF=$(echo "$BODY" | jq -r '.auto_off_enable // empty')
+    AUTO_OFF_TIME=$(echo "$BODY" | jq -r '.auto_off_time // empty')
+    CONN_OFF=$(echo "$BODY" | jq -r '.wifi_off_enable // empty')
+    CONN_OFF_TIME=$(echo "$BODY" | jq -r '.wifi_off_time // empty')
+    LED_OFF=$(echo "$BODY" | jq -r '.led_off_no_client // empty')
 
     # Validate timeouts: 60-7200 seconds
     if [ -n "$AUTO_OFF_TIME" ]; then

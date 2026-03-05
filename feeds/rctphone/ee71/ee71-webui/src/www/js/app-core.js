@@ -58,6 +58,23 @@ var App = (function() {
         return { value: (bps / 1000000000).toFixed(2), unit: 'Gbps' };
     }
 
+    // Format DL/UL pair using the same unit (based on max of the two)
+    function formatSpeedPair(dlBytesPerSec, ulBytesPerSec) {
+        var dlBps = (Number(dlBytesPerSec) || 0) * 8;
+        var ulBps = (Number(ulBytesPerSec) || 0) * 8;
+        var maxBps = Math.max(dlBps, ulBps);
+        var unit, div, dec;
+        if (maxBps < 1000) { unit = 'bps'; div = 1; dec = 0; }
+        else if (maxBps < 1000000) { unit = 'Kbps'; div = 1000; dec = 1; }
+        else if (maxBps < 1000000000) { unit = 'Mbps'; div = 1000000; dec = 1; }
+        else { unit = 'Gbps'; div = 1000000000; dec = 2; }
+        return {
+            dl: { value: (dlBps / div).toFixed(dec), unit: unit },
+            ul: { value: (ulBps / div).toFixed(dec), unit: unit },
+            unit: unit
+        };
+    }
+
     function formatUptime(seconds) {
         if (!seconds) return '\u2014';
         seconds = Number(seconds);
@@ -67,6 +84,39 @@ var App = (function() {
         if (d > 0) return d + 'd ' + hh + 'h ' + mm + 'm';
         if (hh > 0) return hh + 'h ' + mm + 'm';
         return mm + 'm';
+    }
+
+    // NetworkType numeric → human label
+    var _techMap = {0:'',1:'GSM',2:'GPRS',3:'EDGE',4:'3G',5:'3G+',6:'3G+',7:'H+',8:'LTE',9:'LTE+'};
+    function techLabel(code) {
+        return _techMap[code] || '';
+    }
+
+    // Qualcomm NAS band enum → human label (from stock firmware)
+    var _bandMap = {
+        // GSM
+        40:'GSM 450',41:'GSM 480',42:'GSM 750',43:'GSM 850',
+        44:'GSM 900',45:'GSM 900',46:'GSM 900',47:'GSM 1800',48:'GSM 1900',
+        // WCDMA
+        80:'WCDMA 2100',81:'WCDMA 1900',82:'WCDMA 1800',83:'WCDMA 1700',
+        84:'WCDMA 850',85:'WCDMA 800',86:'WCDMA 2600',87:'WCDMA 900',
+        88:'WCDMA 1700',90:'WCDMA 1500',91:'WCDMA 850',
+        // LTE (code 120 + offset → LTE Band N)
+        120:'LTE B1',121:'LTE B2',122:'LTE B3',123:'LTE B4',124:'LTE B5',
+        125:'LTE B6',126:'LTE B7',127:'LTE B8',128:'LTE B9',129:'LTE B10',
+        130:'LTE B11',131:'LTE B12',132:'LTE B13',133:'LTE B14',134:'LTE B17',
+        135:'LTE B33',136:'LTE B34',137:'LTE B35',138:'LTE B36',139:'LTE B37',
+        140:'LTE B38',141:'LTE B39',142:'LTE B40',143:'LTE B18',144:'LTE B19',
+        145:'LTE B20',146:'LTE B21',147:'LTE B24',148:'LTE B25',149:'LTE B41',
+        150:'LTE B42',151:'LTE B43',152:'LTE B23',153:'LTE B26',154:'LTE B32',
+        155:'LTE B125',156:'LTE B126',157:'LTE B127',158:'LTE B28',
+        159:'LTE B29',160:'LTE B30'
+    };
+    function formatBand(band) {
+        if (band == null || band === '' || band === 0 || band === '0') return '';
+        var n = Number(band);
+        if (isNaN(n) || n <= 0) return '';
+        return _bandMap[n] || ('Band ' + n);
     }
 
     // Parse "DD-MM-YYYY HH:MM:SS" → Date object
@@ -144,7 +194,6 @@ var App = (function() {
         { id: 'connection',   icon: 'ic-mobile',     label: 'Connection' },
         { id: 'apn',          icon: 'ic-globe',      label: 'APN' },
         { id: 'at-terminal',  icon: 'ic-terminal',   label: 'AT Terminal' },
-        { id: 'ussd',         icon: 'ic-mobile',     label: 'USSD' },
         { id: 'mobile-settings', icon: 'ic-settings', label: 'Settings' },
         { id: 'sms',          icon: 'ic-sms',        label: 'SMS' },
         { id: 'wifi',         icon: 'ic-wifi',       label: 'WiFi' },
@@ -164,7 +213,7 @@ var App = (function() {
 
     var NAV_GROUPS = [
         { label: 'STATUS',   icon: 'ic-dashboard', items: ['dashboard', 'clients'] },
-        { label: 'MOBILE',   icon: 'ic-mobile',    items: ['connection', 'sms', 'ussd', 'mobile-settings'] },
+        { label: 'MOBILE',   icon: 'ic-mobile',    items: ['connection', 'sms', 'mobile-settings'] },
         { label: 'NETWORK',  icon: 'ic-wifi',      items: ['wifi', 'lan', 'firewall', 'upnp', 'ttl-fix', 'vpn'] },
         { label: 'SYSTEM',   icon: 'ic-settings',  items: ['diagnostics', 'speedtest', 'settings', 'ssh', 'backup', 'about'] },
     ];
@@ -226,10 +275,9 @@ var App = (function() {
         ]).then(function(data) {
             // Network type + signal
             var net = data.GetNetworkInfo || {};
-            var _techMap = {0:'',1:'GSM',2:'GPRS',3:'EDGE',4:'3G',5:'3G+',6:'3G+',7:'H+',8:'LTE',9:'LTE+'};
-            var techLabel = _techMap[net.NetworkType] || '';
+            var techLbl = techLabel(net.NetworkType);
             var opName = net.NetworkName || '';
-            var netType = (opName && techLabel) ? opName + ' ' + techLabel : opName || techLabel || '\u2014';
+            var netType = (opName && techLbl) ? opName + ' ' + techLbl : opName || techLbl || '\u2014';
             var rsrp = parseInt(net.RSRP, 10);
             var signalLevel = 0;
             // RSRP valid range: -140 to -44 dBm; values >= 0 or -1 mean no signal
@@ -246,6 +294,8 @@ var App = (function() {
 
             var elTech = $('#sb-tech');
             if (elTech) elTech.textContent = netType;
+            var elTechShort = $('#sb-tech-short');
+            if (elTechShort) elTechShort.textContent = netType;
 
             var bars = $$('#sb-signal .bar');
             bars.forEach(function(b, i) {
@@ -716,11 +766,15 @@ var App = (function() {
         icon: icon,
         formatBytes: formatBytes,
         formatSpeed: formatSpeed,
+        formatSpeedPair: formatSpeedPair,
         formatUptime: formatUptime,
         formatTimeAgo: formatTimeAgo,
+        techLabel: techLabel,
+        formatBand: formatBand,
         escHtml: escHtml,
         actionAttr: actionAttr,
         _getRoute: getRoute,
         _modalOk: _modalOk,
     };
 })();
+window.App = App;

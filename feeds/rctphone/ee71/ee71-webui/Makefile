@@ -1,8 +1,8 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=ee71-webui
-PKG_VERSION:=1.0.0
-PKG_RELEASE:=2
+PKG_VERSION:=1.1.0
+PKG_RELEASE:=1
 
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)
 
@@ -14,11 +14,12 @@ define Package/ee71-webui
   TITLE:=EE71 Custom Web UI
   DEPENDS:= \
 	+ee71-traffic-stats \
-	+ee71-sms-watchd \
+	+ee71-sms-forward \
 	+ee71-webs-csp \
 	+ee71-ttl-fix \
 	+ee71-ipv6 \
 	+ee71-qcmap-fix \
+	+ee71-qcmap-wifi-ctl \
 	+ee71-optimize \
 	+ee71-usb-adb \
 	+ee71-kmod-wireguard \
@@ -34,7 +35,8 @@ define Package/ee71-webui
 	+iperf3 \
 	+miniupnpd \
 	+sqlite3 \
-	+hostapd
+	+hostapd \
+	+jq
 endef
 
 define Package/ee71-webui/description
@@ -112,7 +114,7 @@ define Package/ee71-webui/install
 	fi
 	# CGI scripts
 	$(INSTALL_DIR) $(1)/jrd-resource/resource/webrc/www/cgi-bin
-	$(INSTALL_BIN) $(PKG_BUILD_DIR)/cgi-bin/* $(1)/jrd-resource/resource/webrc/www/cgi-bin/
+	find $(PKG_BUILD_DIR)/cgi-bin -maxdepth 1 -type f -exec $(INSTALL_BIN) {} $(1)/jrd-resource/resource/webrc/www/cgi-bin/ \;
 	# Init script
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./files/ee71_webui.init $(1)/etc/init.d/ee71_webui
@@ -125,12 +127,7 @@ define Package/ee71-webui/install
 	$(INSTALL_BIN) ./files/wireguard_init $(1)/etc/init.d/wireguard
 	$(INSTALL_DIR) $(1)/etc/rc5.d
 	ln -sf ../init.d/wireguard $(1)/etc/rc5.d/S80wireguard
-	# SMS notification
-	$(INSTALL_DIR) $(1)/usr/sbin
-	$(INSTALL_BIN) ./files/sms_notify $(1)/usr/sbin/sms_notify
-	# Default configs
-	$(INSTALL_DIR) $(1)/etc
-	$(INSTALL_DATA) ./files/sms_forward.conf $(1)/etc/sms_forward.conf
+	# sms_forward config provided by ee71-sms-forward package
 endef
 
 $(eval $(call BuildPackage,ee71-webui))

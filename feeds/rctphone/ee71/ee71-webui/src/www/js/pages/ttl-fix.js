@@ -20,9 +20,10 @@
             el.innerHTML = '<div class="card">' +
                 '<div class="flex-between mb-2">' +
                     '<h3>TTL / Hop Limit</h3>' +
-                    '<button class="toggle-btn ' + (active ? 'on' : '') + '" id="ttl-toggle">' +
-                        icon('ic-power') + ' ' + (active ? 'Active' : 'Inactive') +
-                    '</button>' +
+                    '<div style="display:flex;align-items:center;gap:8px">' +
+                        '<span class="text-small" id="ttl-status">' + (active ? 'Active' : 'Inactive') + '</span>' +
+                        '<label class="switch"><input type="checkbox" id="ttl-toggle"' + (active ? ' checked' : '') + '><span class="slider"></span></label>' +
+                    '</div>' +
                 '</div>' +
                 '<p class="text-small text-muted mb-2">Normalizes TTL/Hop Limit on outbound traffic to prevent carrier tethering detection.</p>' +
                 '<div class="form-row">' +
@@ -57,7 +58,7 @@
                 if (cw) cw.style.display = this.value === 'custom' ? '' : 'none';
             });
 
-            $('#ttl-toggle').addEventListener('click', function() {
+            $('#ttl-toggle').addEventListener('change', function() {
                 API.cgiPost('ttl.cgi', { action: active ? 'disable' : 'enable' }).then(function() {
                     setTimeout(_loadTtl, 1000);
                 }).catch(function(e) { alert('Error: ' + e.message); });

@@ -8,6 +8,7 @@
         var box = h('div', { class: 'login-box' });
 
         box.innerHTML =
+            '<div class="login-brand">' +
             '<div class="login-logo">' +
                 '<svg viewBox="0 0 76 120" width="57" height="90">' +
                     '<circle cx="38" cy="36" r="36" fill="var(--color-primary)"/>' +
@@ -27,6 +28,7 @@
                 '</svg>' +
             '</div>' +
             '<h2>EE71</h2>' +
+            '</div>' +
             '<div class="login-error" id="login-error"></div>' +
             '<div class="form-group">' +
                 '<div class="pass-field">' +

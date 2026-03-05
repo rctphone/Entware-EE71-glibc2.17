@@ -34,11 +34,6 @@ csrf_check() {
     fi
 }
 
-json_escape_str() {
-    printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/	/\\t/g' | tr '\n' '\n' | \
-        awk 'NR>1{printf "\\n"}{printf "%s",$0}'
-}
-
 # --- Parse action ---
 case "$REQUEST_METHOD" in
 GET)
@@ -48,7 +43,7 @@ GET)
 POST)
     csrf_check
     read -r BODY
-    ACTION=$(echo "$BODY" | sed -n 's/.*"action"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    ACTION=$(echo "$BODY" | jq -r '.action // empty')
     ;;
 esac
 
@@ -67,13 +62,14 @@ status)
         CONF_PID=$(grep 'usb_config_value=' "$USB_CONF" 2>/dev/null | head -1 | sed 's/.*=//')
     fi
 
-    printf '{"pid":"%s","enabled":%s,"functions":"%s","serial":"%s","config_pid":"%s"}' \
-        "$PID" "$ENABLED" "$(json_escape_str "$FUNCS")" "$(json_escape_str "$SERIAL")" "$CONF_PID"
+    jq -n --arg pid "$PID" --argjson enabled "$ENABLED" \
+        --arg funcs "$FUNCS" --arg serial "$SERIAL" --arg conf_pid "$CONF_PID" \
+        '{"pid":$pid,"enabled":$enabled,"functions":$funcs,"serial":$serial,"config_pid":$conf_pid}'
     ;;
 
 compositions)
-    # List available composition scripts
-    echo "["
+    # List available composition scripts — build array with jq
+    RESULT="["
     FIRST=1
     if [ -d "$COMP_DIR" ]; then
         for F in "$COMP_DIR"/*; do
@@ -92,13 +88,16 @@ compositions)
             if [ -z "$DESC" ] && [ -n "$CFUNCS" ]; then
                 DESC=$(echo "$CFUNCS" | sed 's/,/ + /g; s/_qc//g; s/ffs/ADB/g; s/diag/DIAG/g; s/serial/Serial/g; s/rndis/RNDIS/g; s/ecm/ECM/g; s/mass_storage/Mass Storage/g; s/rmnet/RMNET/g; s/ncm/NCM/g')
             fi
-            [ "$FIRST" = "0" ] && printf ","
+            ENTRY=$(jq -n --arg name "$NAME" --arg pid "$CPID" \
+                --arg funcs "$CFUNCS" --arg desc "$DESC" \
+                '{"name":$name,"pid":$pid,"functions":$funcs,"desc":$desc}')
+            [ "$FIRST" = "0" ] && RESULT="${RESULT},"
             FIRST=0
-            printf '{"name":"%s","pid":"%s","functions":"%s","desc":"%s"}' \
-                "$(json_escape_str "$NAME")" "$CPID" "$(json_escape_str "$CFUNCS")" "$(json_escape_str "$DESC")"
+            RESULT="${RESULT}${ENTRY}"
         done
     fi
-    echo "]"
+    RESULT="${RESULT}]"
+    printf '%s' "$RESULT"
     ;;
 
 kernel_table)
@@ -112,35 +111,38 @@ kernel_table)
     ENTRY_SIZE=36
     FUNC_NAMES='{"0":"ffs","2":"ecm_qc","7":"diag","9":"serial","15":"rndis_qc","16":"ecm","18":"mass_storage"}'
 
-    echo "{"
-    printf '"func_names":%s,' "$FUNC_NAMES"
-    printf '"entries":['
+    ENTRIES="["
     FIRST=1
     I=0
     while [ "$I" -lt 15 ]; do
-        [ "$FIRST" = "0" ] && printf ","
+        [ "$FIRST" = "0" ] && ENTRIES="${ENTRIES},"
         FIRST=0
         OFFSET=$((I * ENTRY_SIZE))
-        # Read 36 bytes: 4-byte PID + 8 × 4-byte func_id (join od lines)
+        # Read 36 bytes: 4-byte PID + 8 x 4-byte func_id (join od lines)
         RAW=$(dd if=/dev/kmem bs=1 skip=$((0xc0a4a890 + OFFSET)) count=36 2>/dev/null | od -A n -t u4 | tr '\n' ' ' | tr -s ' ')
         PID=$(echo "$RAW" | awk '{print $1}')
-        printf '{"index":%d,"pid":%d,"funcs":[' "$I" "${PID:-0}"
+        # Build funcs array
+        FUNCS_ARR="["
         J=0
         while [ "$J" -lt 8 ]; do
-            [ "$J" -gt 0 ] && printf ","
+            [ "$J" -gt 0 ] && FUNCS_ARR="${FUNCS_ARR},"
             FID=$(echo "$RAW" | awk -v n=$((J+2)) '{print $n}')
-            printf '%d' "${FID:-0}"
+            FUNCS_ARR="${FUNCS_ARR}${FID:-0}"
             J=$((J + 1))
         done
-        printf ']}'
+        FUNCS_ARR="${FUNCS_ARR}]"
+        ENTRIES="${ENTRIES}{\"index\":${I},\"pid\":${PID:-0},\"funcs\":${FUNCS_ARR}}"
         I=$((I + 1))
     done
-    echo "]}"
+    ENTRIES="${ENTRIES}]"
+
+    jq -n --argjson func_names "$FUNC_NAMES" --argjson entries "$ENTRIES" \
+        '{"func_names":$func_names,"entries":$entries}'
     ;;
 
 patch_entry)
-    IDX=$(echo "$BODY" | sed -n 's/.*"index"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p')
-    FUNCS_STR=$(echo "$BODY" | sed -n 's/.*"funcs"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    IDX=$(echo "$BODY" | jq -r '.index // empty')
+    FUNCS_STR=$(echo "$BODY" | jq -r '.funcs // empty')
 
     # Only allow patching known OS entries
     case "$IDX" in
@@ -193,30 +195,39 @@ CONFEOF
     # Apply via patch_usb_kernel (patches kernel memory from config)
     /etc/init.d/patch_usb_kernel start 2>/dev/null
 
-    printf '{"ok":true,"index":%d,"funcs":"%s"}' "$IDX" "$FUNCS_STR"
+    jq -n --argjson idx "$IDX" --arg funcs "$FUNCS_STR" \
+        '{"ok":true,"index":$idx,"funcs":$funcs}'
     ;;
 
 patch_config)
     # Read saved patch config (persistent across reboots)
     if [ -f "$PATCH_CONF" ]; then
-        printf '{'
+        RESULT="{"
         FIRST=1
         while IFS='=' read -r key val; do
             case "$key" in
                 \#*|"") continue ;;
             esac
-            [ "$FIRST" = "0" ] && printf ','
-            FIRST=0
-            printf '"%s":"%s"' "$key" "$val"
+            ENTRY=$(jq -n --arg k "$key" --arg v "$val" '{($k):$v}')
+            if [ "$FIRST" = "1" ]; then
+                # Extract inner content (strip outer braces)
+                INNER=$(echo "$ENTRY" | sed 's/^{//; s/}$//')
+                RESULT="${RESULT}${INNER}"
+                FIRST=0
+            else
+                INNER=$(echo "$ENTRY" | sed 's/^{//; s/}$//')
+                RESULT="${RESULT},${INNER}"
+            fi
         done < "$PATCH_CONF"
-        printf '}'
+        RESULT="${RESULT}}"
+        printf '%s' "$RESULT"
     else
         printf '{}'
     fi
     ;;
 
 set)
-    COMP=$(echo "$BODY" | sed -n 's/.*"composition"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    COMP=$(echo "$BODY" | jq -r '.composition // empty')
     if [ -z "$COMP" ]; then
         printf '{"error":"composition required"}'
         exit 0
@@ -235,7 +246,7 @@ set)
 
     # Apply composition
     /sbin/usb_composition "$COMP" 2>/dev/null
-    printf '{"ok":true,"composition":"%s"}' "$COMP"
+    jq -n --arg comp "$COMP" '{"ok":true,"composition":$comp}'
     ;;
 
 *)

@@ -44,10 +44,6 @@ csrf_check() {
 }
 
 # --- Helpers ---
-json_escape() {
-    printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/	/\\t/g'
-}
-
 is_ss_running() {
     if [ -f "$SS_REDIR_PID" ]; then
         PID=$(cat "$SS_REDIR_PID" 2>/dev/null)
@@ -73,13 +69,13 @@ vpn_write() {
 read_ss_conf() {
     SS_SERVER="" SS_PORT="" SS_PASSWORD="" SS_METHOD="" SS_LOCAL_PORT="1080" SS_NAME=""
     if [ -f "$SS_CONF" ]; then
-        SS_SERVER=$(sed -n 's/.*"server"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$SS_CONF")
-        SS_PORT=$(sed -n 's/.*"server_port"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' "$SS_CONF")
-        SS_PASSWORD=$(sed -n 's/.*"password"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$SS_CONF")
-        SS_METHOD=$(sed -n 's/.*"method"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$SS_CONF")
-        SS_LOCAL_PORT=$(sed -n 's/.*"local_port"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' "$SS_CONF")
+        SS_SERVER=$(jq -r '.server // empty' "$SS_CONF")
+        SS_PORT=$(jq -r '.server_port // empty' "$SS_CONF")
+        SS_PASSWORD=$(jq -r '.password // empty' "$SS_CONF")
+        SS_METHOD=$(jq -r '.method // empty' "$SS_CONF")
+        SS_LOCAL_PORT=$(jq -r '.local_port // empty' "$SS_CONF")
         SS_LOCAL_PORT="${SS_LOCAL_PORT:-1080}"
-        SS_NAME=$(sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$SS_CONF")
+        SS_NAME=$(jq -r '.name // empty' "$SS_CONF")
     fi
 }
 
@@ -92,7 +88,7 @@ GET)
 POST)
     csrf_check
     read -r BODY
-    ACTION=$(echo "$BODY" | sed -n 's/.*"action"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    ACTION=$(echo "$BODY" | jq -r '.action // empty')
     ;;
 esac
 
@@ -130,25 +126,29 @@ status)
         fi
     fi
 
-    printf '{"running":%d,"has_config":%d,"has_bin":%d,"auto_start":%d,"server":"%s","server_port":%s,"password":"%s","method":"%s","local_port":%s,"uptime":%s,"name":"%s"}' \
-        "$RUNNING" "$HAS_CONFIG" "$HAS_BIN" "$AUTO_START" \
-        "$(json_escape "$SS_SERVER")" \
-        "${SS_PORT:-0}" \
-        "$(json_escape "$MASKED_PW")" \
-        "$(json_escape "$SS_METHOD")" \
-        "${SS_LOCAL_PORT:-1080}" \
-        "${UPTIME:-0}" \
-        "$(json_escape "$SS_NAME")"
+    jq -n \
+        --argjson running "$RUNNING" \
+        --argjson has_config "$HAS_CONFIG" \
+        --argjson has_bin "$HAS_BIN" \
+        --argjson auto_start "$AUTO_START" \
+        --arg server "$SS_SERVER" \
+        --argjson server_port "${SS_PORT:-0}" \
+        --arg password "$MASKED_PW" \
+        --arg method "$SS_METHOD" \
+        --argjson local_port "${SS_LOCAL_PORT:-1080}" \
+        --argjson uptime "${UPTIME:-0}" \
+        --arg name "$SS_NAME" \
+        '{running:$running,has_config:$has_config,has_bin:$has_bin,auto_start:$auto_start,server:$server,server_port:$server_port,password:$password,method:$method,local_port:$local_port,uptime:$uptime,name:$name}'
     ;;
 
 save)
     # Extract fields from JSON body
-    SERVER=$(echo "$BODY" | sed -n 's/.*"server"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
-    PORT=$(echo "$BODY" | sed -n 's/.*"server_port"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p')
-    PASSWORD=$(echo "$BODY" | sed -n 's/.*"password"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
-    METHOD=$(echo "$BODY" | sed -n 's/.*"method"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
-    LOCAL_PORT=$(echo "$BODY" | sed -n 's/.*"local_port"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p')
-    NAME=$(echo "$BODY" | sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    SERVER=$(echo "$BODY" | jq -r '.server // empty')
+    PORT=$(echo "$BODY" | jq -r '.server_port // empty')
+    PASSWORD=$(echo "$BODY" | jq -r '.password // empty')
+    METHOD=$(echo "$BODY" | jq -r '.method // empty')
+    LOCAL_PORT=$(echo "$BODY" | jq -r '.local_port // empty')
+    NAME=$(echo "$BODY" | jq -r '.name // empty')
 
     if [ -z "$SERVER" ] || [ -z "$PORT" ] || [ -z "$PASSWORD" ]; then
         echo '{"error":"Server, port, and password required"}'
@@ -166,27 +166,24 @@ save)
 
     # If password is empty, keep existing
     if [ -z "$PASSWORD" ] && [ -f "$SS_CONF" ]; then
-        PASSWORD=$(sed -n 's/.*"password"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$SS_CONF")
+        PASSWORD=$(jq -r '.password // empty' "$SS_CONF")
     fi
 
     # Keep existing name if not provided
     if [ -z "$NAME" ] && [ -f "$SS_CONF" ]; then
-        NAME=$(sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$SS_CONF")
+        NAME=$(jq -r '.name // empty' "$SS_CONF")
     fi
 
     # Write config
-    cat > "$SS_CONF" <<EOF
-{
-    "server": "$SERVER",
-    "server_port": $PORT,
-    "password": "$PASSWORD",
-    "method": "$METHOD",
-    "local_address": "0.0.0.0",
-    "local_port": $LOCAL_PORT,
-    "timeout": 60,
-    "name": "$NAME"
-}
-EOF
+    jq -n \
+        --arg server "$SERVER" \
+        --argjson server_port "$PORT" \
+        --arg password "$PASSWORD" \
+        --arg method "$METHOD" \
+        --argjson local_port "$LOCAL_PORT" \
+        --arg name "$NAME" \
+        '{server:$server,server_port:$server_port,password:$password,method:$method,local_address:"0.0.0.0",local_port:$local_port,timeout:60,name:$name}' \
+        > "$SS_CONF"
     chmod 0600 "$SS_CONF"
 
     printf '{"ok":true}'
@@ -222,7 +219,7 @@ disable)
 
 parse_uri)
     # Parse ss:// URI → JSON config
-    URI=$(echo "$BODY" | sed -n 's/.*"uri"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    URI=$(echo "$BODY" | jq -r '.uri // empty')
 
     if [ -z "$URI" ]; then
         echo '{"error":"No URI provided"}'
@@ -271,21 +268,26 @@ parse_uri)
         exit 0
     fi
 
-    printf '{"ok":true,"server":"%s","server_port":%s,"method":"%s","password":"%s","name":"%s"}' \
-        "$(json_escape "$P_SERVER")" \
-        "$P_PORT" \
-        "$(json_escape "$P_METHOD")" \
-        "$(json_escape "$P_PASSWORD")" \
-        "$(json_escape "$P_NAME")"
+    jq -n \
+        --arg server "$P_SERVER" \
+        --argjson server_port "$P_PORT" \
+        --arg method "$P_METHOD" \
+        --arg password "$P_PASSWORD" \
+        --arg name "$P_NAME" \
+        '{ok:true,server:$server,server_port:$server_port,method:$method,password:$password,name:$name}'
     ;;
 
 config)
     # Full config for backup (unmasked password)
     read_ss_conf
-    printf '{"server":"%s","server_port":%s,"password":"%s","method":"%s","local_port":%s,"name":"%s"}' \
-        "$(json_escape "$SS_SERVER")" "${SS_PORT:-0}" \
-        "$(json_escape "$SS_PASSWORD")" "$(json_escape "$SS_METHOD")" "${SS_LOCAL_PORT:-1080}" \
-        "$(json_escape "$SS_NAME")"
+    jq -n \
+        --arg server "$SS_SERVER" \
+        --argjson server_port "${SS_PORT:-0}" \
+        --arg password "$SS_PASSWORD" \
+        --arg method "$SS_METHOD" \
+        --argjson local_port "${SS_LOCAL_PORT:-1080}" \
+        --arg name "$SS_NAME" \
+        '{server:$server,server_port:$server_port,password:$password,method:$method,local_port:$local_port,name:$name}'
     ;;
 
 *)

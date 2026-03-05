@@ -39,15 +39,16 @@
             el.innerHTML = '<div class="card">' +
                 '<div class="flex-between mb-2">' +
                     '<h3>UPnP / NAT-PMP</h3>' +
-                    '<button class="toggle-btn ' + (enabled ? 'on' : '') + '" id="upnp-toggle">' +
-                        icon('ic-power') + ' ' + (enabled ? 'Enabled' : 'Disabled') +
-                    '</button>' +
+                    '<div style="display:flex;align-items:center;gap:8px">' +
+                        '<span class="text-small" id="upnp-status">' + (enabled ? 'Enabled' : 'Disabled') + '</span>' +
+                        '<label class="switch"><input type="checkbox" id="upnp-toggle"' + (enabled ? ' checked' : '') + '><span class="slider"></span></label>' +
+                    '</div>' +
                 '</div>' +
                 '<p class="text-small text-muted">UPnP allows applications on your network to automatically set up port forwarding rules.</p>' +
                 mappingsHtml +
             '</div>';
 
-            $('#upnp-toggle').addEventListener('click', function() {
+            $('#upnp-toggle').addEventListener('change', function() {
                 API.webapi('SetUpnpSettings', { UpnpEnable: enabled ? '0' : '1' }).then(function() {
                     setTimeout(_loadUpnp, 1000);
                 }).catch(function(e) { alert('Error: ' + e.message); });

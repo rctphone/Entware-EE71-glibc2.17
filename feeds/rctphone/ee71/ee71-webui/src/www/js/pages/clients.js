@@ -11,7 +11,7 @@
         container.innerHTML =
             '<h2>Clients</h2>' +
             '<div class="card">' +
-                '<h3 class="mb-1">Connected Devices</h3>' +
+                '<h3 class="mb-1">Devices</h3>' +
                 '<div id="cl-list">' +
                     '<div class="page-loading"><div class="spinner"></div> Loading...</div>' +
                 '</div>' +
@@ -25,13 +25,12 @@
                 '<div class="chart-container mt-1" id="cl-detail-chart" style="min-height:180px"></div>' +
             '</div>';
 
-        // Check for ?ip= query parameter
         var hash = window.location.hash || '';
         var ipMatch = hash.match(/[?&]ip=([^&]+)/);
         if (ipMatch) _clientsDetail = decodeURIComponent(ipMatch[1]);
 
         _refreshClients();
-        _clientsTimer = setInterval(_refreshClients, 5000);
+        _clientsTimer = setInterval(_refreshClients, 3000);
 
         App.setCleanup(function() {
             if (_clientsTimer) { clearInterval(_clientsTimer); _clientsTimer = null; }
@@ -40,36 +39,126 @@
         });
     }
 
-    var SEC_MAP = {0:'Open',1:'WEP',2:'WPA',3:'WPA2',4:'WPA/WPA2'};
-    var WMODE_2G = {0:'11b',1:'11g',2:'11b/g',3:'11b/g/n',4:'11n'};
-    var WMODE_5G = {5:'11a',6:'11a/n/ac',7:'11a/n',8:'11n/ac',9:'11ac'};
-    var BW_2G = {0:'20/40 MHz',1:'20 MHz',2:'40 MHz'};
-    var BW_5G = {0:'20/40/80 MHz',1:'20 MHz',2:'40 MHz',3:'80 MHz',4:'20/40/80 MHz'};
-    var _wifiInfo = null;
+    // Channel -> band label
+    function _bandLabel(ch) {
+        if (!ch) return '';
+        return ch <= 14 ? '2.4GHz' : '5GHz';
+    }
+
+    // RSSI -> signal bars (0-4)
+    function _signalLevel(rssi) {
+        if (rssi == null) return -1;
+        if (rssi > -50) return 4;
+        if (rssi > -60) return 3;
+        if (rssi > -70) return 2;
+        if (rssi > -80) return 1;
+        return 0;
+    }
+
+    // Render signal bars HTML
+    function _signalBarsHtml(rssi) {
+        if (rssi == null) return '<span class="text-muted">\u2014</span>';
+        var level = _signalLevel(rssi);
+        var html = '<span class="signal-bars signal-' + level + '">';
+        for (var i = 0; i < 4; i++) {
+            html += '<span></span>';
+        }
+        html += '</span> ' + rssi + ' dBm';
+        return html;
+    }
+
+    // Sort: online first (wifi_2g, wifi_5g, usb), then offline
+    function _sortDevices(devices) {
+        var order = { wifi_2g: 0, wifi_5g: 1, usb: 2, offline: 3 };
+        devices.sort(function(a, b) {
+            var ao = a.online ? (order[a.connection] || 2) : 3;
+            var bo = b.online ? (order[b.connection] || 2) : 3;
+            if (ao !== bo) return ao - bo;
+            // secondary: by name/ip
+            var an = (a.name || a.ip || a.mac || '').toLowerCase();
+            var bn = (b.name || b.ip || b.mac || '').toLowerCase();
+            return an < bn ? -1 : an > bn ? 1 : 0;
+        });
+        return devices;
+    }
+
+    // Build row HTML for a device
+    function _buildRow(dev, trafficMap, isExpanded) {
+        var ip = dev.ip || '';
+        var mac = dev.mac || '\u2014';
+        var name = dev.name || ip || mac;
+        var traffic = trafficMap[ip];
+        var isWifi = dev.connection === 'wifi_2g' || dev.connection === 'wifi_5g';
+        var isOffline = dev.connection === 'offline' || !dev.online;
+
+        // Connection column
+        var connLine1 = '', connLine2 = '';
+        if (isOffline) {
+            connLine1 = 'Offline';
+        } else if (isWifi) {
+            var hasTraffic = traffic && (traffic.rx_speed > 0 || traffic.tx_speed > 0);
+            if (hasTraffic) {
+                var maxBps = Math.max(traffic.rx_speed, traffic.tx_speed) * 8;
+                var unit, div;
+                if (maxBps < 1000) { unit = 'bps'; div = 1; }
+                else if (maxBps < 1000000) { unit = 'Kbps'; div = 1000; }
+                else if (maxBps < 1000000000) { unit = 'Mbps'; div = 1000000; }
+                else { unit = 'Gbps'; div = 1000000000; }
+                var dlV = (traffic.rx_speed * 8 / div).toFixed(1);
+                var ulV = (traffic.tx_speed * 8 / div).toFixed(1);
+                connLine1 = '\u2193' + dlV + '\u2003\u2191' + ulV + ' ' + unit;
+                connLine2 = (dev.wifi_mode || '') + ' ' + _bandLabel(dev.channel) +
+                    (dev.channel ? ' Ch.' + dev.channel : '');
+            } else {
+                connLine1 = (dev.wifi_mode || '') + ' ' + _bandLabel(dev.channel) +
+                    (dev.channel ? ' \u00B7 Ch.' + dev.channel : '') +
+                    (dev.bandwidth ? ' \u00B7 ' + dev.bandwidth + 'MHz' : '');
+                connLine2 = dev.max_speed ? 'max ' + dev.max_speed + ' Mbps' : '';
+            }
+        } else {
+            connLine1 = 'USB';
+            connLine2 = dev.interface || 'ecm0';
+        }
+
+        // Signal column
+        var signalHtml = (isWifi && !isOffline) ? _signalBarsHtml(dev.rssi) : '<span class="text-muted">\u2014</span>';
+
+        // Row classes
+        var cls = [];
+        if (isExpanded) cls.push('cl-row-active');
+        if (isOffline) cls.push('cl-row-offline');
+        var clsAttr = cls.length ? ' class="' + cls.join(' ') + '"' : '';
+
+        // Status dot: green for online, none for offline
+        var dotHtml = isOffline ? '' : '<span class="status-dot green"></span>';
+
+        return '<tr data-mac="' + escHtml(mac) + '"' + clsAttr + '>' +
+            '<td>' +
+                dotHtml +
+                '<strong>' + escHtml(name) + '</strong>' +
+            '</td>' +
+            '<td>' +
+                '<a href="#" ' + actionAttr('showClientDetail', [ip]) + '>' + escHtml(ip) + '</a>' +
+                '<span class="cl-sub text-mono">' + escHtml(mac) + '</span>' +
+            '</td>' +
+            '<td>' + escHtml(connLine1) +
+                (connLine2 ? '<span class="cl-sub">' + escHtml(connLine2) + '</span>' : '') +
+            '</td>' +
+            '<td class="cl-cell-signal">' + signalHtml + '</td>' +
+            '</tr>';
+    }
 
     function _refreshClients() {
-        var fetches = [
-            API.webapi('GetConnectedDeviceList').catch(function() { return null; }),
+        Promise.all([
+            API.cgiGet('clients.cgi', { action: 'list' }).catch(function() { return null; }),
             API.cgiGet('traffic.cgi', { action: 'status' }).catch(function() { return null; }),
-        ];
-        if (!_wifiInfo) fetches.push(API.webapi('GetWlanSettings').catch(function() { return null; }));
-        Promise.all(fetches).then(function(results) {
-            var devList = results[0], trafficData = results[1];
-            if (results[2]) {
-                var s = results[2];
-                var ap2g = s.AP2G || {}, ap5g = s.AP5G || {};
-                _wifiInfo = {
-                    sec2g: SEC_MAP[ap2g.SecurityMode] || s.WlanAuthMode || '',
-                    sec5g: SEC_MAP[ap5g.SecurityMode] || '',
-                    mode2g: WMODE_2G[ap2g.WMode] || s.WlanMode || '',
-                    mode5g: WMODE_5G[ap5g.WMode] || s.WlanMode_5G || '',
-                    bw2g: BW_2G[ap2g.Bandwidth] || s.WlanBandwidth || '',
-                    bw5g: BW_5G[ap5g.Bandwidth] || s.WlanBandwidth_5G || '',
-                };
-            }
-            var devices = (devList && devList.ConnectedList) ? devList.ConnectedList : [];
-            var trafficHosts = (trafficData && trafficData.hosts) ? trafficData.hosts : [];
+        ]).then(function(results) {
+            var clientList = results[0], trafficData = results[1];
 
+            var devices = Array.isArray(clientList) ? clientList : [];
+            _sortDevices(devices);
+
+            var trafficHosts = (trafficData && trafficData.hosts) ? trafficData.hosts : [];
             var trafficMap = {};
             for (var i = 0; i < trafficHosts.length; i++) {
                 trafficMap[trafficHosts[i].ip] = trafficHosts[i];
@@ -79,73 +168,89 @@
             if (!el) return;
 
             if (devices.length === 0) {
-                el.innerHTML = '<p class="text-muted">No devices connected</p>';
+                el.innerHTML = '<p class="text-muted">No devices</p>';
                 return;
             }
 
-            var html = '<table class="data-table cl-table"><thead><tr>' +
-                '<th>Client</th><th>Address</th><th>Interface</th><th>Connection</th><th></th>' +
-                '</tr></thead><tbody>';
-
-            for (var j = 0; j < devices.length; j++) {
-                var dev = devices[j];
-                var ip = dev.IPAddress || dev.IpAddress || '';
-                var traffic = trafficMap[ip];
-                var name = dev.DeviceName || dev.HostName || '';
-                if (!name) name = ip || mac;
-                var mac = dev.MacAddress || '\u2014';
-                var cm = Number(dev.ConnectMode);
-
-                // Interface column
-                var ifaceLine1 = 'bridge0';
-                var ifaceLine2 = cm === 0 ? 'USB (ecm0)' : cm === 1 ? '2.4 GHz Wi-Fi' : cm === 2 ? '5 GHz Wi-Fi' : 'Unknown';
-
-                // Connection column
-                var connLine1 = '', connLine2 = '';
-                if (cm === 1 && _wifiInfo) {
-                    connLine1 = _wifiInfo.sec2g;
-                    connLine2 = _wifiInfo.mode2g + ' ' + _wifiInfo.bw2g;
-                } else if (cm === 2 && _wifiInfo) {
-                    connLine1 = _wifiInfo.sec5g;
-                    connLine2 = _wifiInfo.mode5g + ' ' + _wifiInfo.bw5g;
-                } else if (cm === 0) {
-                    connLine1 = 'USB';
-                    connLine2 = 'ecm0';
+            // Check if table already exists for animated updates
+            var tbody = el.querySelector('.cl-table tbody');
+            if (tbody) {
+                _updateRows(tbody, devices, trafficMap);
+            } else {
+                // First render — build full table
+                var html = '<table class="data-table cl-table"><thead><tr>' +
+                    '<th>Client</th><th>Address</th><th>Connection</th><th>Signal</th>' +
+                    '</tr></thead><tbody>';
+                for (var j = 0; j < devices.length; j++) {
+                    html += _buildRow(devices[j], trafficMap, _clientsDetail === devices[j].ip);
                 }
-
-                // Traffic speed for connection column
-                if (traffic && (traffic.rx_speed > 0 || traffic.tx_speed > 0)) {
-                    var dl = formatSpeed(traffic.rx_speed);
-                    var ul = formatSpeed(traffic.tx_speed);
-                    connLine1 = '\u2193' + dl.value + ' \u2191' + ul.value + ' ' + dl.unit;
-                    if (cm === 1 && _wifiInfo) connLine2 = _wifiInfo.sec2g + ' ' + _wifiInfo.mode2g;
-                    else if (cm === 2 && _wifiInfo) connLine2 = _wifiInfo.sec5g + ' ' + _wifiInfo.mode5g;
-                }
-
-                var isExpanded = _clientsDetail === ip;
-
-                html += '<tr' + (isExpanded ? ' class="cl-row-active"' : '') + '>' +
-                    '<td><span class="status-dot green"></span><strong>' + escHtml(name) + '</strong></td>' +
-                    '<td>' +
-                        '<a href="#" ' + actionAttr('showClientDetail', [ip]) + '>' + escHtml(ip) + '</a>' +
-                        '<span class="cl-sub text-mono">' + escHtml(mac) + '</span>' +
-                    '</td>' +
-                    '<td>' + escHtml(ifaceLine1) + '<span class="cl-sub">' + escHtml(ifaceLine2) + '</span></td>' +
-                    '<td>' + escHtml(connLine1) + '<span class="cl-sub">' + escHtml(connLine2) + '</span></td>' +
-                    '<td class="cl-cell-actions">' +
-                        '<button class="toggle-btn" ' + actionAttr('blockClient', [mac, name]) + ' title="Block device">' +
-                        icon('ic-firewall') +
-                        '</button>' +
-                    '</td></tr>';
+                html += '</tbody></table>';
+                el.innerHTML = html;
             }
-
-            html += '</tbody></table>';
-            el.innerHTML = html;
 
             if (_clientsDetail) {
                 _updateClientDetail(_clientsDetail, devices, trafficData);
             }
         }).catch(function() {});
+    }
+
+    // Animated row update: reorder existing rows, add new, remove stale
+    function _updateRows(tbody, devices, trafficMap) {
+        var existingRows = {};
+        var rows = tbody.querySelectorAll('tr[data-mac]');
+        for (var i = 0; i < rows.length; i++) {
+            existingRows[rows[i].getAttribute('data-mac')] = rows[i];
+        }
+
+        var newMacs = {};
+        var frag = document.createDocumentFragment();
+
+        for (var j = 0; j < devices.length; j++) {
+            var dev = devices[j];
+            var mac = dev.mac || '\u2014';
+            newMacs[mac] = true;
+            var isExpanded = _clientsDetail === dev.ip;
+
+            var existing = existingRows[mac];
+            if (existing) {
+                // Update content in place
+                var tmp = document.createElement('tbody');
+                tmp.innerHTML = _buildRow(dev, trafficMap, isExpanded);
+                var newRow = tmp.firstChild;
+                // Copy inner content and classes
+                existing.className = newRow.className;
+                existing.innerHTML = newRow.innerHTML;
+                frag.appendChild(existing);
+            } else {
+                // New device — create row with fade-in
+                var tmp2 = document.createElement('tbody');
+                tmp2.innerHTML = _buildRow(dev, trafficMap, isExpanded);
+                var addedRow = tmp2.firstChild;
+                addedRow.classList.add('cl-row-enter');
+                frag.appendChild(addedRow);
+                // Trigger animation
+                (function(r) {
+                    requestAnimationFrame(function() {
+                        requestAnimationFrame(function() { r.classList.remove('cl-row-enter'); });
+                    });
+                })(addedRow);
+            }
+        }
+
+        // Remove rows for devices no longer present (fade-out)
+        for (var oldMac in existingRows) {
+            if (!newMacs[oldMac]) {
+                var oldRow = existingRows[oldMac];
+                oldRow.classList.add('cl-row-exit');
+                // Remove after animation
+                (function(r) {
+                    setTimeout(function() { if (r.parentNode) r.parentNode.removeChild(r); }, 300);
+                })(oldRow);
+            }
+        }
+
+        // Reorder: append in correct order
+        tbody.appendChild(frag);
     }
 
     function _showClientDetail(ip) {
@@ -171,21 +276,33 @@
 
         card.classList.remove('hidden');
 
-        var dev = devices.find(function(d) { return (d.IPAddress || d.IpAddress) === ip; });
+        var dev = devices.find(function(d) { return d.ip === ip; });
         var traffic = trafficData && trafficData.hosts ? trafficData.hosts.find(function(h) { return h.ip === ip; }) : null;
 
-        var name = dev ? (dev.DeviceName || dev.HostName || ip) : ip;
+        var name = dev ? (dev.name || ip) : ip;
         if (title) title.textContent = name;
 
         var html = '<div class="cards-grid" style="grid-template-columns:repeat(auto-fill,minmax(200px,1fr))">';
 
         if (dev) {
+            var isWifi = dev.connection === 'wifi_2g' || dev.connection === 'wifi_5g';
             html += '<div>' +
-                '<div class="stat-row"><span class="label">IP</span><span class="value">' + escHtml(dev.IPAddress || dev.IpAddress || '') + '</span></div>' +
-                '<div class="stat-row"><span class="label">MAC</span><span class="value text-mono">' + escHtml(dev.MacAddress || '') + '</span></div>' +
-                '<div style="display:flex;gap:8px;margin-top:0.5rem">' +
-                    '<button class="toggle-btn" ' + actionAttr('renameClient', [dev.MacAddress || '', name]) + '>' + icon('ic-settings') + ' Rename</button>' +
-                    '<button class="toggle-btn" ' + actionAttr('blockClient', [dev.MacAddress || '', name]) + '>' + icon('ic-firewall') + ' Block</button>' +
+                '<div class="stat-row"><span class="label">IP</span><span class="value">' + escHtml(dev.ip || '') + '</span></div>' +
+                '<div class="stat-row"><span class="label">MAC</span><span class="value text-mono">' + escHtml(dev.mac || '') + '</span></div>';
+            if (isWifi) {
+                html += '<div class="stat-row"><span class="label">Signal</span><span class="value">' + _signalBarsHtml(dev.rssi) + '</span></div>';
+                if (dev.wifi_mode) html += '<div class="stat-row"><span class="label">WiFi</span><span class="value">' + escHtml(dev.wifi_mode + ' ' + _bandLabel(dev.channel)) + '</span></div>';
+                if (dev.channel) html += '<div class="stat-row"><span class="label">Channel</span><span class="value">' + dev.channel + '</span></div>';
+                if (dev.bandwidth) html += '<div class="stat-row"><span class="label">Bandwidth</span><span class="value">' + dev.bandwidth + ' MHz</span></div>';
+                if (dev.max_speed) html += '<div class="stat-row"><span class="label">Max Speed</span><span class="value">' + dev.max_speed + ' Mbps</span></div>';
+            }
+            if (dev.connected_time > 0) {
+                var ct = dev.connected_time;
+                var ctStr = ct < 60 ? ct + 's' : ct < 3600 ? Math.floor(ct / 60) + 'm' : Math.floor(ct / 3600) + 'h ' + Math.floor((ct % 3600) / 60) + 'm';
+                html += '<div class="stat-row"><span class="label">Connected</span><span class="value">' + ctStr + '</span></div>';
+            }
+            html += '<div style="display:flex;gap:8px;margin-top:0.5rem">' +
+                    '<button class="toggle-btn" ' + actionAttr('renameClient', [dev.mac || '', name]) + '>' + icon('ic-settings') + ' Rename</button>' +
                 '</div>' +
                 '</div>';
         }
@@ -245,15 +362,6 @@
         }).catch(function() {});
     }
 
-    function _blockClient(mac, name) {
-        if (!confirm('Block device "' + name + '" (' + mac + ')?')) return;
-        API.webapi('SetConnectedDeviceBlock', { DeviceName: name, MacAddress: mac }).then(function() {
-            _refreshClients();
-        }).catch(function(e) {
-            alert('Failed to block: ' + (e.message || e));
-        });
-    }
-
     function _renameClient(mac, currentName) {
         var newName = prompt('Enter new name for device:', currentName);
         if (!newName || newName === currentName) return;
@@ -264,20 +372,9 @@
         });
     }
 
-    function _unblockClient(mac, name) {
-        if (!confirm('Unblock device "' + name + '" (' + mac + ')?')) return;
-        API.webapi('SetDeviceUnblock', { DeviceName: name, MacAddress: mac }).then(function() {
-            _refreshClients();
-        }).catch(function(e) {
-            alert('Failed to unblock: ' + (e.message || e));
-        });
-    }
-
     App.registerPage('clients', renderClients);
     App._refreshClients = _refreshClients;
     App._showClientDetail = _showClientDetail;
     App._closeClientDetail = _closeClientDetail;
-    App._blockClient = _blockClient;
-    App._unblockClient = _unblockClient;
     App._renameClient = _renameClient;
 })();

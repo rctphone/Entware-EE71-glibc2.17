@@ -106,9 +106,10 @@
             var total = parseInt(storage.MaxCount || storage.TotalNum || 0, 10) || (used + left);
             var contactList = contacts.SMSContactList || [];
 
+            var pct = total ? Math.round(used / total * 100) : 0;
             var html = '<div class="sms-storage-row">' +
-                '<span>Storage ' + used + '/' + total + '</span>' +
-                '<progress value="' + used + '" max="' + (total || 1) + '"></progress>' +
+                '<span class="sms-storage-label">Storage ' + used + '/' + total + '</span>' +
+                '<div class="sms-storage-track"><div class="sms-storage-fill" style="width:' + pct + '%"></div></div>' +
                 '<button class="sms-compose-btn" ' + actionAttr('smsTab', ['compose']) + ' title="New message">' +
                     icon('ic-edit') +
                 '</button>' +
@@ -126,21 +127,25 @@
                     var totalCount = parseInt(c.TotalNum || c.TSMSCount || 0, 10);
                     var letter = _avatarLetters(phoneStr);
 
-                    html += '<div class="chat-item" ' + actionAttr('openSmsThread', [phoneStr, c.ContactId]) + '>' +
-                        '<div class="chat-avatar">' + escHtml(letter) + '</div>' +
-                        '<div class="chat-item-body">' +
-                            '<div class="chat-item-top">' +
-                                '<span class="chat-item-name">' + escHtml(phoneStr) + '</span>' +
-                                '<span class="chat-item-time">' + escHtml(_timeAgoShort(c.LatestTime || c.SMSTime || '')) + '</span>' +
-                            '</div>' +
-                            '<div class="chat-item-bottom">' +
-                                '<span class="chat-item-preview">' + escHtml(preview) + '</span>' +
-                                (unreadCount > 0
-                                    ? '<span class="badge-unread">' + unreadCount + '</span>'
-                                    : (totalCount > 0 ? '<span class="badge-unread muted">' + totalCount + '</span>' : '')) +
+                    html += '<div class="chat-item">' +
+                        '<div class="chat-item-fg" ' + actionAttr('openSmsThread', [phoneStr, c.ContactId]) + '>' +
+                            '<div class="chat-avatar">' + escHtml(letter) + '</div>' +
+                            '<div class="chat-item-body">' +
+                                '<div class="chat-item-top">' +
+                                    '<span class="chat-item-name">' + escHtml(phoneStr) + '</span>' +
+                                    '<span class="chat-item-time">' + escHtml(_timeAgoShort(c.LatestTime || c.SMSTime || '')) + '</span>' +
+                                '</div>' +
+                                '<div class="chat-item-bottom">' +
+                                    '<span class="chat-item-preview">' + escHtml(preview) + '</span>' +
+                                    (unreadCount > 0
+                                        ? '<span class="badge-unread">' + unreadCount + '</span>'
+                                        : (totalCount > 0 ? '<span class="badge-unread muted">' + totalCount + '</span>' : '')) +
+                                '</div>' +
                             '</div>' +
                         '</div>' +
-                        '<button class="chat-item-del" data-stop ' + actionAttr('deleteSmsThread', [c.ContactId || '']) + '>&times;</button>' +
+                        '<button class="chat-item-action-bg" data-stop ' + actionAttr('deleteSmsThread', [c.ContactId || '']) + '>' +
+                            icon('ic-delete') + 'Delete' +
+                        '</button>' +
                     '</div>';
                 });
                 html += '</div>';
@@ -151,6 +156,7 @@
             el.innerHTML = '<div class="card"><p class="text-danger">Error: ' + escHtml(e.message) + '</p></div>';
         });
     }
+
 
     function _openSmsThread(phone, contactId) {
         var el = document.getElementById('sms-inbox');

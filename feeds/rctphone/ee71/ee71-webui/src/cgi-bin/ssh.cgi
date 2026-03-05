@@ -33,11 +33,6 @@ csrf_check() {
     fi
 }
 
-json_escape_str() {
-    printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/	/\\t/g' | tr '\n' '\n' | \
-        awk 'NR>1{printf "\\n"}{printf "%s",$0}'
-}
-
 # --- Parse action ---
 case "$REQUEST_METHOD" in
 GET)
@@ -47,7 +42,7 @@ GET)
 POST)
     csrf_check
     read -r BODY
-    ACTION=$(echo "$BODY" | sed -n 's/.*"action"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    ACTION=$(echo "$BODY" | jq -r '.action // empty')
     ;;
 esac
 
@@ -66,7 +61,7 @@ status)
         [ -z "$PORT" ] && PORT=22
     fi
 
-    # Key fingerprints
+    # Key fingerprints — build array with jq
     KEYS_JSON="["
     FIRST=1
     for KTYPE in ed25519 rsa; do
@@ -74,59 +69,62 @@ status)
         if [ -f "$KFILE" ]; then
             FP=$(dropbearkey -y -f "$KFILE" 2>/dev/null | grep 'Fingerprint:' | sed 's/.*: //')
             if [ -n "$FP" ]; then
+                ENTRY=$(jq -n --arg type "$KTYPE" --arg fp "$FP" \
+                    '{"type":$type,"fingerprint":$fp}')
                 [ "$FIRST" = "0" ] && KEYS_JSON="${KEYS_JSON},"
                 FIRST=0
-                KEYS_JSON="${KEYS_JSON}{\"type\":\"${KTYPE}\",\"fingerprint\":\"${FP}\"}"
+                KEYS_JSON="${KEYS_JSON}${ENTRY}"
             fi
         fi
     done
     KEYS_JSON="${KEYS_JSON}]"
 
-    printf '{"running":%d,"pid":"%s","port":%d,"host_keys":%s}' \
-        "$RUNNING" "$PID" "$PORT" "$KEYS_JSON"
+    jq -n --argjson running "$RUNNING" --arg pid "$PID" \
+        --argjson port "$PORT" --argjson host_keys "$KEYS_JSON" \
+        '{"running":$running,"pid":$pid,"port":$port,"host_keys":$host_keys}'
     ;;
 
 keys)
-    # List authorized_keys
-    echo "["
+    # List authorized_keys — build array with jq
+    RESULT="["
     FIRST=1
     if [ -f "$AUTH_KEYS" ]; then
         IDX=0
         while IFS= read -r LINE; do
             # Skip empty lines and comments
             case "$LINE" in ""|\#*) continue ;; esac
-            [ "$FIRST" = "0" ] && printf ","
-            FIRST=0
             TYPE=$(echo "$LINE" | awk '{print $1}')
             COMMENT=$(echo "$LINE" | awk '{for(i=3;i<=NF;i++) printf "%s ", $i}' | sed 's/ *$//')
-            # Truncate key for display
             KEYPART=$(echo "$LINE" | awk '{print substr($2,1,20)}')
-            printf '{"index":%d,"type":"%s","key_prefix":"%s...","comment":"%s"}' \
-                "$IDX" "$TYPE" "$KEYPART" "$(json_escape_str "$COMMENT")"
+            ENTRY=$(jq -n --argjson idx "$IDX" --arg type "$TYPE" \
+                --arg kp "${KEYPART}..." --arg comment "$COMMENT" \
+                '{"index":$idx,"type":$type,"key_prefix":$kp,"comment":$comment}')
+            [ "$FIRST" = "0" ] && RESULT="${RESULT},"
+            FIRST=0
+            RESULT="${RESULT}${ENTRY}"
             IDX=$((IDX + 1))
         done < "$AUTH_KEYS"
     fi
-    echo "]"
+    RESULT="${RESULT}]"
+    printf '%s' "$RESULT"
     ;;
 
 sessions)
-    # Active SSH sessions from who/ps
-    echo "["
-    FIRST=1
+    # Active SSH sessions from ps
     ps 2>/dev/null | grep 'dropbear' | grep -v grep | while IFS= read -r LINE; do
         PID=$(echo "$LINE" | awk '{print $1}')
         CMD=$(echo "$LINE" | awk '{for(i=5;i<=NF;i++) printf "%s ", $i}' | sed 's/ *$//')
         case "$CMD" in *"dropbear"*) ;; *) continue ;; esac
-        [ "$FIRST" = "0" ] && printf ","
-        FIRST=0
-        printf '{"pid":%d,"cmd":"%s"}' "$PID" "$(json_escape_str "$CMD")"
-    done
-    echo "]"
+        jq -n --argjson pid "$PID" --arg cmd "$CMD" \
+            '{"pid":$pid,"cmd":$cmd}'
+    done > /tmp/cgi_sessions.$$
+    jq -s '.' /tmp/cgi_sessions.$$ 2>/dev/null || echo "[]"
+    rm -f /tmp/cgi_sessions.$$
     ;;
 
 save)
-    PORT=$(echo "$BODY" | sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p')
-    LISTEN=$(echo "$BODY" | sed -n 's/.*"listen"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    PORT=$(echo "$BODY" | jq -r '.port // empty')
+    LISTEN=$(echo "$BODY" | jq -r '.listen // empty')
     if [ -z "$PORT" ] || [ "$PORT" -lt 1 ] 2>/dev/null || [ "$PORT" -gt 65535 ] 2>/dev/null; then
         printf '{"error":"port must be 1-65535"}'
         exit 0
@@ -149,11 +147,12 @@ save)
 
     # Restart dropbear on new port (safe: start new first, then stop old)
     dropbear -p "$LISTEN_ARG" 2>/dev/null
-    printf '{"ok":true,"port":%d,"listen":"%s"}' "$PORT" "$LISTEN"
+    jq -n --argjson port "$PORT" --arg listen "$LISTEN" \
+        '{"ok":true,"port":$port,"listen":$listen}'
     ;;
 
 add_key)
-    KEY=$(echo "$BODY" | sed -n 's/.*"key"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    KEY=$(echo "$BODY" | jq -r '.key // empty')
     if [ -z "$KEY" ]; then
         printf '{"error":"key required"}'
         exit 0
@@ -173,7 +172,7 @@ add_key)
     ;;
 
 remove_key)
-    INDEX=$(echo "$BODY" | sed -n 's/.*"index"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p')
+    INDEX=$(echo "$BODY" | jq -r '.index // empty')
     if [ -z "$INDEX" ]; then
         printf '{"error":"index required"}'
         exit 0

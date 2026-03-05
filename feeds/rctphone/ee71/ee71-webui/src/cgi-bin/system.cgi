@@ -10,45 +10,37 @@ ACTION="${ACTION#action=}"
 case "$ACTION" in
 
 interfaces)
-    echo "["
-    FIRST=1
-    ip addr show 2>/dev/null | while IFS= read -r LINE; do
-        case "$LINE" in
-            [0-9]*:\ *)
-                if [ "$FIRST" = "0" ]; then printf ']},'; fi
-                FIRST=0
-                IFACE=$(echo "$LINE" | sed 's/^[0-9]*: *\([^:]*\).*/\1/')
-                STATE="down"
-                case "$LINE" in *UP*) STATE="up" ;; esac
-                printf '{"name":"%s","state":"%s","addrs":[' "$IFACE" "$STATE"
-                FIRST_ADDR=1
-                ;;
-            *inet\ *)
-                ADDR=$(echo "$LINE" | sed 's/.*inet \([^ ]*\).*/\1/')
-                if [ "$FIRST_ADDR" = "0" ]; then printf ","; fi
-                FIRST_ADDR=0
-                printf '"%s"' "$ADDR"
-                ;;
-            *inet6\ *)
-                ADDR=$(echo "$LINE" | sed 's/.*inet6 \([^ ]*\).*/\1/')
-                if [ "$FIRST_ADDR" = "0" ]; then printf ","; fi
-                FIRST_ADDR=0
-                printf '"%s"' "$ADDR"
-                ;;
-        esac
-    done
-    # Close last interface
-    echo "]}"
-    echo "]"
+    ip addr show 2>/dev/null | awk '
+    /^[0-9]+:/ {
+        if (iface != "") print iface_line
+        orig = $0
+        gsub(/^[0-9]+: */, ""); gsub(/:.*/, "")
+        name = $0
+        state = (orig ~ /UP/) ? "up" : "down"
+        iface = name
+        iface_line = name "\t" state
+    }
+    /^ *inet6? / {
+        match($0, /inet6? [^ ]+/)
+        split(substr($0, RSTART, RLENGTH), a, " ")
+        iface_line = iface_line "\t" a[2]
+    }
+    END {
+        if (iface != "") print iface_line
+    }' | {
+        while IFS='	' read -r NAME STATE ADDRS_REST; do
+            ADDR_JSON="[]"
+            if [ -n "$ADDRS_REST" ]; then
+                ADDR_JSON=$(printf '%s' "$ADDRS_REST" | tr '	' '\n' | jq -R '.' | jq -s '.')
+            fi
+            jq -n --arg name "$NAME" --arg state "$STATE" --argjson addrs "$ADDR_JSON" \
+                '{"name":$name,"state":$state,"addrs":$addrs}'
+        done
+    } | jq -s '.'
     ;;
 
 routes)
-    echo "["
-    FIRST=1
     ip route show 2>/dev/null | while IFS= read -r LINE; do
-        if [ "$FIRST" = "0" ]; then printf ","; fi
-        FIRST=0
-        # Extract dest, gateway, dev
         DEST=$(echo "$LINE" | awk '{print $1}')
         GW=""
         DEV=""
@@ -60,42 +52,38 @@ routes)
             esac
             shift
         done
-        printf '{"dest":"%s","via":"%s","dev":"%s"}' "$DEST" "$GW" "$DEV"
-    done
-    echo "]"
+        jq -n --arg dest "$DEST" --arg via "$GW" --arg dev "$DEV" \
+            '{"dest":$dest,"via":$via,"dev":$dev}'
+    done | jq -s '.'
     ;;
 
 iptables)
     # Parse iptables -L -n -v into structured JSON
-    # Use temp file to avoid subshell variable scoping issues with pipe
-    echo "{"
-    FIRST_TABLE=1
+    RESULT="{}"
     for TABLE in filter nat mangle; do
-        if [ "$FIRST_TABLE" = "0" ]; then printf ","; fi
-        FIRST_TABLE=0
-        printf '"%s":{' "$TABLE"
-        CHAIN=""
-        FIRST_RULE=1
         TMPF="/tmp/ipt_$$_$TABLE"
         iptables -t "$TABLE" -L -n -v --line-numbers 2>/dev/null > "$TMPF"
+        CHAIN=""
+        TABLE_JSON="{}"
+        RULES_JSON="[]"
+        POLICY=""
         while IFS= read -r LINE; do
             case "$LINE" in
                 Chain\ *)
                     if [ -n "$CHAIN" ]; then
-                        printf ']}'
-                        printf ","
+                        CHAIN_OBJ=$(jq -n --arg policy "$POLICY" --argjson rules "$RULES_JSON" \
+                            '{"policy":$policy,"rules":$rules}')
+                        TABLE_JSON=$(echo "$TABLE_JSON" | jq --arg ch "$CHAIN" --argjson obj "$CHAIN_OBJ" \
+                            '. + {($ch): $obj}')
                     fi
                     CHAIN=$(echo "$LINE" | awk '{print $2}')
                     POLICY=$(echo "$LINE" | sed -n 's/.*policy \([A-Z]*\).*/\1/p')
-                    printf '"%s":{"policy":"%s","rules":[' "$CHAIN" "$POLICY"
-                    FIRST_RULE=1
+                    RULES_JSON="[]"
                     ;;
                 num*)
                     # header line, skip
                     ;;
                 [0-9]*)
-                    if [ "$FIRST_RULE" = "0" ]; then printf ","; fi
-                    FIRST_RULE=0
                     NUM=$(echo "$LINE" | awk '{print $1}')
                     PKTS=$(echo "$LINE" | awk '{print $2}')
                     BYTES=$(echo "$LINE" | awk '{print $3}')
@@ -105,68 +93,69 @@ iptables)
                     OUT=$(echo "$LINE" | awk '{print $8}')
                     SRC=$(echo "$LINE" | awk '{print $9}')
                     DST=$(echo "$LINE" | awk '{print $10}')
-                    EXTRA=$(echo "$LINE" | awk '{for(i=11;i<=NF;i++) printf "%s ", $i}' | sed 's/"/\\"/g; s/ *$//')
-                    printf '{"num":%s,"pkts":"%s","bytes":"%s","target":"%s","proto":"%s","in":"%s","out":"%s","src":"%s","dst":"%s","extra":"%s"}' \
-                        "$NUM" "$PKTS" "$BYTES" "$TARGET" "$PROTO" "$IN" "$OUT" "$SRC" "$DST" "$EXTRA"
+                    EXTRA=$(echo "$LINE" | awk '{for(i=11;i<=NF;i++) printf "%s ", $i; printf "\n"}' | sed 's/ *$//')
+                    RULE_OBJ=$(jq -n --argjson num "$NUM" \
+                        --arg pkts "$PKTS" --arg bytes "$BYTES" \
+                        --arg target "$TARGET" --arg proto "$PROTO" \
+                        --arg in "$IN" --arg out "$OUT" \
+                        --arg src "$SRC" --arg dst "$DST" \
+                        --arg extra "$EXTRA" \
+                        '{"num":$num,"pkts":$pkts,"bytes":$bytes,"target":$target,"proto":$proto,"in":$in,"out":$out,"src":$src,"dst":$dst,"extra":$extra}')
+                    RULES_JSON=$(echo "$RULES_JSON" | jq --argjson rule "$RULE_OBJ" '. + [$rule]')
                     ;;
             esac
         done < "$TMPF"
         rm -f "$TMPF"
         if [ -n "$CHAIN" ]; then
-            printf ']}'
+            CHAIN_OBJ=$(jq -n --arg policy "$POLICY" --argjson rules "$RULES_JSON" \
+                '{"policy":$policy,"rules":$rules}')
+            TABLE_JSON=$(echo "$TABLE_JSON" | jq --arg ch "$CHAIN" --argjson obj "$CHAIN_OBJ" \
+                '. + {($ch): $obj}')
         fi
-        echo "}"
+        RESULT=$(echo "$RESULT" | jq --arg tbl "$TABLE" --argjson val "$TABLE_JSON" \
+            '. + {($tbl): $val}')
     done
-    echo "}"
+    echo "$RESULT"
     ;;
 
 open_ports)
-    echo "["
-    FIRST=1
     netstat -tlnp 2>/dev/null | tail -n +3 | while IFS= read -r LINE; do
-        if [ "$FIRST" = "0" ]; then printf ","; fi
-        FIRST=0
         PROTO=$(echo "$LINE" | awk '{print $1}')
         LOCAL=$(echo "$LINE" | awk '{print $4}')
         PID_PROG=$(echo "$LINE" | awk '{print $7}')
         PID=$(echo "$PID_PROG" | cut -d/ -f1)
         PROG=$(echo "$PID_PROG" | cut -d/ -f2-)
-        printf '{"proto":"%s","local":"%s","pid":"%s","program":"%s"}' \
-            "$PROTO" "$LOCAL" "$PID" "$PROG"
-    done
-    echo "]"
+        jq -n --arg proto "$PROTO" --arg local "$LOCAL" \
+            --arg pid "$PID" --arg program "$PROG" \
+            '{"proto":$proto,"local":$local,"pid":$pid,"program":$program}'
+    done | jq -s '.'
     ;;
 
 conntrack_stats)
     COUNT=$(cat /proc/sys/net/netfilter/nf_conntrack_count 2>/dev/null || echo 0)
     MAX=$(cat /proc/sys/net/netfilter/nf_conntrack_max 2>/dev/null || echo 0)
-    printf '{"count":%s,"max":%s}' "$COUNT" "$MAX"
+    jq -n --argjson count "$COUNT" --argjson max "$MAX" \
+        '{"count":$count,"max":$max}'
     ;;
 
 memory)
-    echo "{"
-    FIRST=1
-    while IFS= read -r LINE; do
-        KEY=$(echo "$LINE" | awk -F: '{gsub(/[() ]/, "", $1); print $1}')
-        VAL=$(echo "$LINE" | awk '{print $2}')
-        if [ "$FIRST" = "0" ]; then printf ","; fi
-        FIRST=0
-        printf '"%s":%s' "$KEY" "$VAL"
-    done < /proc/meminfo
-    echo "}"
+    awk -F: '{gsub(/[() ]/, "", $1); print $1, $2+0}' /proc/meminfo | \
+        jq -nR '[inputs | split(" ") | {(.[0]): (.[1] | tonumber)}] | add'
     ;;
 
 cpu)
     # Read /proc/stat first line (cpu totals) + loadavg
     read -r _ USER NICE SYSTEM IDLE IOWAIT IRQ SOFTIRQ STEAL _ < /proc/stat
     read -r LOAD1 LOAD5 LOAD15 _ < /proc/loadavg
-    printf '{"user":%s,"nice":%s,"system":%s,"idle":%s,"iowait":%s,"irq":%s,"softirq":%s,"steal":%s,"load1":"%s","load5":"%s","load15":"%s"}' \
-        "$USER" "$NICE" "$SYSTEM" "$IDLE" "$IOWAIT" "$IRQ" "$SOFTIRQ" "$STEAL" "$LOAD1" "$LOAD5" "$LOAD15"
+    jq -n --argjson user "$USER" --argjson nice "$NICE" \
+        --argjson system "$SYSTEM" --argjson idle "$IDLE" \
+        --argjson iowait "$IOWAIT" --argjson irq "$IRQ" \
+        --argjson softirq "$SOFTIRQ" --argjson steal "$STEAL" \
+        --arg load1 "$LOAD1" --arg load5 "$LOAD5" --arg load15 "$LOAD15" \
+        '{"user":$user,"nice":$nice,"system":$system,"idle":$idle,"iowait":$iowait,"irq":$irq,"softirq":$softirq,"steal":$steal,"load1":$load1,"load5":$load5,"load15":$load15}'
     ;;
 
 storage)
-    echo "["
-    FIRST=1
     df 2>/dev/null | tail -n +2 | while IFS= read -r LINE; do
         FS=$(echo "$LINE" | awk '{print $1}')
         SIZE=$(echo "$LINE" | awk '{print $2}')
@@ -174,12 +163,11 @@ storage)
         AVAIL=$(echo "$LINE" | awk '{print $4}')
         PCT=$(echo "$LINE" | awk '{print $5}' | tr -d '%')
         MOUNT=$(echo "$LINE" | awk '{print $6}')
-        if [ "$FIRST" = "0" ]; then printf ","; fi
-        FIRST=0
-        printf '{"fs":"%s","size":%s,"used":%s,"avail":%s,"pct":%s,"mount":"%s"}' \
-            "$FS" "$SIZE" "$USED" "$AVAIL" "${PCT:-0}" "$MOUNT"
-    done
-    echo "]"
+        jq -n --arg fs "$FS" --argjson size "$SIZE" \
+            --argjson used "$USED" --argjson avail "$AVAIL" \
+            --argjson pct "${PCT:-0}" --arg mount "$MOUNT" \
+            '{"fs":$fs,"size":$size,"used":$used,"avail":$avail,"pct":$pct,"mount":$mount}'
+    done | jq -s '.'
     ;;
 
 hostname)
@@ -188,36 +176,35 @@ hostname)
     if [ -f /etc/hosts ]; then
         HOSTS_ENTRY=$(grep -v '^\s*#' /etc/hosts | grep -v '127.0.0.1' | head -1 | awk '{print $2}')
     fi
-    printf '{"system":"%s","dns":"%s"}' "$SYS_HOSTNAME" "$HOSTS_ENTRY"
+    jq -n --arg system "$SYS_HOSTNAME" --arg dns "$HOSTS_ENTRY" \
+        '{"system":$system,"dns":$dns}'
     ;;
 
 dhcp_leases)
-    echo "["
-    FIRST=1
-    if [ -f /tmp/dnsmasq.leases ]; then
+    LEASE_FILE="/var/lib/misc/dnsmasq.leases"
+    [ ! -f "$LEASE_FILE" ] && LEASE_FILE="/tmp/dnsmasq.leases"
+    if [ -f "$LEASE_FILE" ]; then
         while IFS= read -r LINE; do
             [ -z "$LINE" ] && continue
             TS=$(echo "$LINE" | awk '{print $1}')
             MAC=$(echo "$LINE" | awk '{print $2}')
             IP=$(echo "$LINE" | awk '{print $3}')
             NAME=$(echo "$LINE" | awk '{print $4}')
-            if [ "$FIRST" = "0" ]; then printf ","; fi
-            FIRST=0
-            printf '{"expires":%s,"mac":"%s","ip":"%s","hostname":"%s"}' \
-                "$TS" "$MAC" "$IP" "$NAME"
-        done < /tmp/dnsmasq.leases
-    fi
-    echo "]"
+            jq -n --argjson expires "$TS" --arg mac "$MAC" \
+                --arg ip "$IP" --arg hostname "$NAME" \
+                '{"expires":$expires,"mac":$mac,"ip":$ip,"hostname":$hostname}'
+        done < "$LEASE_FILE"
+    fi | jq -s '.'
     ;;
 
 uptime)
     read -r UP IDLE < /proc/uptime
-    printf '{"seconds":%d}' "${UP%%.*}"
+    jq -n --argjson seconds "${UP%%.*}" '{"seconds":$seconds}'
     ;;
 
 kernel)
     KERNEL=$(uname -r 2>/dev/null || echo "")
-    printf '{"version":"%s"}' "$KERNEL"
+    jq -n --arg version "$KERNEL" '{"version":$version}'
     ;;
 
 wifi_power)
@@ -226,7 +213,8 @@ wifi_power)
     DB="/jrd-resource/resource/sqlite3/user_info.db3"
     P2G=$(sqlite3 "$DB" "SELECT value FROM wifi_info WHERE items='2GPowerLevel';" 2>/dev/null)
     P5G=$(sqlite3 "$DB" "SELECT value FROM wifi_info WHERE items='5GPowerLevel';" 2>/dev/null)
-    printf '{"2GPowerLevel":%s,"5GPowerLevel":%s}' "${P2G:-0}" "${P5G:-0}"
+    jq -n --argjson p2g "${P2G:-0}" --argjson p5g "${P5G:-0}" \
+        '{"2GPowerLevel":$p2g,"5GPowerLevel":$p5g}'
     ;;
 
 *)

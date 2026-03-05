@@ -5,7 +5,7 @@
 # Required-Stop:     $remote_fs $syslog
 # Default-Start:     2 3 4 5
 # Default-Stop:      1
-# Short-Description: EE71 custom web UI daemons (traffic_stats + sms_watchd + speedtest httpd)
+# Short-Description: EE71 custom web UI daemons (traffic_stats + speedtest httpd)
 ### END INIT INFO
 
 PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
@@ -14,10 +14,6 @@ DESC="EE71 Web UI daemons"
 
 TRAFFIC_BIN=/usr/sbin/traffic_stats
 TRAFFIC_PID=/var/run/traffic_stats.pid
-
-SMS_BIN=/usr/sbin/sms_watchd
-SMS_PID=/var/run/sms_watchd.pid
-SMS_CONF=/etc/sms_forward.conf
 
 SPEEDTEST_ROOT=/jrd-resource/speedtest
 SPEEDTEST_PID=/var/run/speedtest_httpd.pid
@@ -51,34 +47,6 @@ stop_traffic() {
         echo "traffic_stats stopped"
     else
         echo "traffic_stats not running"
-    fi
-}
-
-start_sms() {
-    if is_running "$SMS_PID"; then
-        echo "sms_watchd already running"
-        return 0
-    fi
-    if [ ! -x "$SMS_BIN" ]; then
-        return 0  # sms_watchd is optional
-    fi
-    if [ ! -f "$SMS_CONF" ]; then
-        return 0  # no config = not enabled
-    fi
-    # Check if Telegram forwarding is enabled
-    ENABLED=$(grep -c '^TELEGRAM_ENABLED=1' "$SMS_CONF" 2>/dev/null || echo 0)
-    if [ "$ENABLED" = "0" ]; then
-        return 0
-    fi
-    "$SMS_BIN"
-    echo "sms_watchd started"
-}
-
-stop_sms() {
-    if is_running "$SMS_PID"; then
-        kill "$(cat "$SMS_PID")" 2>/dev/null
-        rm -f "$SMS_PID"
-        echo "sms_watchd stopped"
     fi
 }
 
@@ -132,13 +100,11 @@ case "$1" in
     start)
         echo "Starting $DESC..."
         start_traffic
-        start_sms
         start_speedtest
         ;;
     stop)
         echo "Stopping $DESC..."
         stop_traffic
-        stop_sms
         stop_speedtest
         ;;
     restart)
@@ -151,11 +117,6 @@ case "$1" in
             echo "traffic_stats: running (pid $(cat "$TRAFFIC_PID"))"
         else
             echo "traffic_stats: stopped"
-        fi
-        if is_running "$SMS_PID"; then
-            echo "sms_watchd: running (pid $(cat "$SMS_PID"))"
-        else
-            echo "sms_watchd: stopped"
         fi
         if is_running "$SPEEDTEST_PID"; then
             echo "speedtest_httpd: running (pid $(cat "$SPEEDTEST_PID")) on port $SPEEDTEST_PORT"
