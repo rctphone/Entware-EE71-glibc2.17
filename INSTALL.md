@@ -92,12 +92,14 @@ curl -sLO https://raw.githubusercontent.com/rctphone/Entware-EE71-glibc2.17/ee71
 ## What it does
 
 1. Downloads `opkg` binary, package metadata, and USB patch from GitHub (on host)
-2. Pushes all files to device via `adb push`
-3. Installs opkg to `/usr/bin/` (normal) or `/system/usr/bin/` (recovery)
-4. Configures the package feed (`/etc/opkg.conf`)
-5. Pre-registers 30 system libraries so opkg won't break them
-6. Installs USB kernel patch for ADB access in normal mode
-7. Runs `opkg update` to verify (normal mode only)
+2. Downloads `curl` + `libcurl` + `ca-bundle` packages (HTTPS support)
+3. Pushes all files to device via `adb push`
+4. Installs opkg to `/usr/bin/` (normal) or `/system/usr/bin/` (recovery)
+5. Configures the package feed (`/etc/opkg.conf`)
+6. Pre-registers 30 system libraries so opkg won't break them
+7. Installs USB kernel patch for ADB access in normal mode
+8. Installs curl and a `/usr/bin/wget` wrapper so opkg can download over HTTPS
+9. Runs `opkg update` to verify (normal mode only)
 
 ## Normal mode vs Recovery mode
 
@@ -156,10 +158,13 @@ https://raw.githubusercontent.com/rctphone/ee71-opkg/main
 - Try `adb kill-server && adb devices`
 - On Mac, install drivers: device appears as modem, switch to ADB first
 
-**"opkg update failed"**
+**"opkg update failed — wget returned 255"**
+- The stock BusyBox wget has no HTTPS support. The installer bundles curl
+  and a wget wrapper to fix this. If you installed manually, see the
+  manual install section below for how to set up the wget wrapper.
 - Device needs internet (mobile data or WiFi backhaul)
 - Check: `adb shell ping -c1 8.8.8.8`
-- Some carriers block ICMP — try: `adb shell wget -q -O /dev/null http://google.com && echo OK`
+- Check curl works: `adb shell curl -sI https://github.com && echo OK`
 
 **"No space left on device"**
 - `/usr` is 32 MB, check: `adb shell df /usr`
@@ -212,7 +217,32 @@ for pkg in $(sed -n 's/^Package: //p' /usr/lib/opkg/status); do
     touch "/usr/lib/opkg/info/${pkg}.list"
 done
 
-# 6. Test
+# 6. Install curl (HTTPS for opkg)
+# Download on host:
+curl -sL https://raw.githubusercontent.com/rctphone/ee71-opkg/main/Packages | grep "Filename: curl_\|Filename: libcurl_\|Filename: ca-bundle_"
+# Download each file, push to device, then on device:
+for ipk in /tmp/ca-bundle_*.ipk /tmp/libcurl_*.ipk /tmp/curl_*.ipk; do
+    cd /tmp && mkdir -p _x && cd _x
+    tar xzf "$ipk" ./data.tar.gz && tar xzf data.tar.gz -C /
+    cd /tmp && rm -rf _x
+done
+# Create wget wrapper for opkg:
+cat > /usr/bin/wget << 'WRAPPER'
+#!/bin/sh
+OUT="" URL="" INSECURE="" TIMEOUT=""
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -q) shift ;; -O) OUT="$2"; shift 2 ;;
+        --no-check-certificate) INSECURE="-k"; shift ;;
+        --timeout) TIMEOUT="--max-time $2"; shift 2 ;;
+        -Y) shift 2 ;; -*) shift ;; *) URL="$1"; shift ;;
+    esac
+done
+exec curl -sfL $INSECURE $TIMEOUT -o "$OUT" "$URL"
+WRAPPER
+chmod 755 /usr/bin/wget
+
+# 7. Test
 opkg update
 opkg list-installed
 ```

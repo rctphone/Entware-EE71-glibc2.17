@@ -107,9 +107,49 @@ if [ -f /tmp/patch_usb_kernel ]; then
     fi
 fi
 
+# --- Install curl + wget wrapper (HTTPS support for opkg) ---
+CURL_IPKS=$(ls /tmp/curl_*.ipk /tmp/libcurl_*.ipk /tmp/ca-bundle_*.ipk 2>/dev/null)
+if [ -n "$CURL_IPKS" ]; then
+    echo "[*] Installing curl (HTTPS support for opkg)..."
+    # Extract and install each ipk manually (opkg not yet functional for deps)
+    for ipk in /tmp/ca-bundle_*.ipk /tmp/libcurl_*.ipk /tmp/curl_*.ipk; do
+        [ -f "$ipk" ] || continue
+        cd /tmp
+        rm -rf _ipk_tmp && mkdir _ipk_tmp && cd _ipk_tmp
+        tar xzf "$ipk" ./data.tar.gz 2>/dev/null
+        tar xzf data.tar.gz -C "$PREFIX/" 2>/dev/null
+        cd /tmp && rm -rf _ipk_tmp
+        pkg=$(basename "$ipk" | sed 's/_.*//');
+        echo "  $pkg extracted"
+    done
+
+    # Create wget wrapper so opkg uses curl for HTTPS downloads
+    cat > "$PREFIX/usr/bin/wget" << 'WRAPPER'
+#!/bin/sh
+# wget wrapper — translates wget args to curl for HTTPS support
+# opkg calls: wget -q [--no-check-certificate] [--timeout N] [-Y on] -O <file> <url>
+OUT="" URL="" INSECURE="" TIMEOUT=""
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -q) shift ;;
+        -O) OUT="$2"; shift 2 ;;
+        --no-check-certificate) INSECURE="-k"; shift ;;
+        --timeout) TIMEOUT="--max-time $2"; shift 2 ;;
+        -Y) shift 2 ;;
+        -*) shift ;;
+        *) URL="$1"; shift ;;
+    esac
+done
+exec curl -sfL $INSECURE $TIMEOUT -o "$OUT" "$URL"
+WRAPPER
+    chmod 755 "$PREFIX/usr/bin/wget"
+    echo "  /usr/bin/wget wrapper installed (curl-based HTTPS)"
+fi
+
 # --- Clean up ---
 rm -f /tmp/Packages /tmp/opkg-status /tmp/opkg_*.ipk /tmp/data.tar.gz
 rm -f /tmp/patch_usb_kernel
+rm -f /tmp/curl_*.ipk /tmp/libcurl_*.ipk /tmp/ca-bundle_*.ipk
 rm -rf /tmp/usr
 
 # --- Test (normal mode only — recovery has no network) ---
@@ -130,5 +170,5 @@ else
     echo ""
     echo "=== Setup complete (recovery mode) ==="
     echo "Reboot to normal mode: adb reboot"
-    echo "Then: opkg update && opkg install dropbear curl"
+    echo "Then: opkg update && opkg install dropbear"
 fi

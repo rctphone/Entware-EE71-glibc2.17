@@ -68,6 +68,17 @@ if "%OPKG_FILE%"=="" (
 echo [*] Downloading %OPKG_FILE%...
 curl -sL "%OPKG_REPO%/%OPKG_FILE%" -o "%TMP%\%OPKG_FILE%"
 
+REM Download curl packages (HTTPS support for opkg)
+for /f "tokens=2" %%a in ('findstr /B "Filename: curl_" "%TMP%\Packages"') do (
+    curl -sL "%OPKG_REPO%/%%a" -o "%TMP%\%%a"
+)
+for /f "tokens=2" %%a in ('findstr /B "Filename: libcurl_" "%TMP%\Packages"') do (
+    curl -sL "%OPKG_REPO%/%%a" -o "%TMP%\%%a"
+)
+for /f "tokens=2" %%a in ('findstr /B "Filename: ca-bundle_" "%TMP%\Packages"') do (
+    curl -sL "%OPKG_REPO%/%%a" -o "%TMP%\%%a"
+)
+
 REM Push everything to device
 echo [*] Pushing to device...
 adb push "%TMP%\setup.sh" /tmp/setup.sh
@@ -75,6 +86,9 @@ adb push "%TMP%\Packages" /tmp/Packages
 adb push "%TMP%\%OPKG_FILE%" /tmp/%OPKG_FILE%
 adb push "%TMP%\opkg-status" /tmp/opkg-status
 adb push "%TMP%\patch_usb_kernel" /tmp/patch_usb_kernel
+for /f "tokens=2" %%a in ('findstr /B "Filename: curl_" "%TMP%\Packages"') do adb push "%TMP%\%%a" /tmp/%%a
+for /f "tokens=2" %%a in ('findstr /B "Filename: libcurl_" "%TMP%\Packages"') do adb push "%TMP%\%%a" /tmp/%%a
+for /f "tokens=2" %%a in ('findstr /B "Filename: ca-bundle_" "%TMP%\Packages"') do adb push "%TMP%\%%a" /tmp/%%a
 
 REM Run setup on device
 echo [*] Running setup on device...

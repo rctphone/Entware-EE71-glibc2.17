@@ -60,7 +60,15 @@ curl -sL "$OPKG_REPO/$OPKG_FILE" -o "$TMP/$OPKG_FILE"
 curl -sL "$OPKG_REPO/opkg-status" -o "$TMP/opkg-status"
 curl -sL "$REPO/install/patch_usb_kernel" -o "$TMP/patch_usb_kernel"
 
-echo "[*] Downloaded: setup.sh, $OPKG_FILE, opkg-status, patch_usb_kernel"
+# Download curl packages (HTTPS support for opkg — device wget has no SSL)
+for pkg in curl libcurl ca-bundle; do
+    file=$(grep "^Filename: ${pkg}_" "$TMP/Packages" | head -1 | awk '{print $2}')
+    if [ -n "$file" ]; then
+        curl -sL "$OPKG_REPO/$file" -o "$TMP/$file"
+    fi
+done
+
+echo "[*] Downloaded: setup.sh, $OPKG_FILE, opkg-status, patch_usb_kernel, curl packages"
 
 # Push everything to device
 echo "[*] Pushing to device..."
@@ -69,6 +77,9 @@ adb push "$TMP/Packages" /tmp/Packages
 adb push "$TMP/$OPKG_FILE" "/tmp/$OPKG_FILE"
 adb push "$TMP/opkg-status" /tmp/opkg-status
 adb push "$TMP/patch_usb_kernel" /tmp/patch_usb_kernel
+for ipk in "$TMP"/curl_*.ipk "$TMP"/libcurl_*.ipk "$TMP"/ca-bundle_*.ipk; do
+    [ -f "$ipk" ] && adb push "$ipk" "/tmp/$(basename "$ipk")"
+done
 
 # Run setup on device
 echo "[*] Running setup on device..."
