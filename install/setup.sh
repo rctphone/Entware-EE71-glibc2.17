@@ -123,6 +123,14 @@ if [ -n "$CURL_IPKS" ]; then
         echo "  $pkg extracted"
     done
 
+    # Compat: current curl.ipk was built with --with-ca-bundle=/usr/etc/ssl/...
+    # Symlink ensures it finds certs at the standard /etc/ssl/ location.
+    # Safe to remove after curl is rebuilt with --with-ca-bundle=/etc/ssl/...
+    if [ ! -e "$PREFIX/usr/etc/ssl" ]; then
+        mkdir -p "$PREFIX/usr/etc"
+        ln -sf /etc/ssl "$PREFIX/usr/etc/ssl"
+    fi
+
     # Create wget wrapper so opkg uses curl for HTTPS downloads
     cat > "$PREFIX/usr/bin/wget" << 'WRAPPER'
 #!/bin/sh
