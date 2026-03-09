@@ -123,6 +123,11 @@ if [ -n "$CURL_IPKS" ]; then
         echo "  $pkg extracted"
     done
 
+    # Symlink /usr/etc/ssl -> /etc/ssl (curl built with --with-ca-bundle=/usr/etc/ssl/...)
+    mkdir -p "$PREFIX/usr/etc"
+    ln -sf /etc/ssl "$PREFIX/usr/etc/ssl"
+    echo "  /usr/etc/ssl -> /etc/ssl symlinked"
+
     # Create wget wrapper so opkg uses curl for HTTPS downloads
     cat > "$PREFIX/usr/bin/wget" << 'WRAPPER'
 #!/bin/sh
