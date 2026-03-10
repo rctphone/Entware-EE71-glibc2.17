@@ -1,0 +1,75 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          sms_forward
+# Required-Start:    $remote_fs core_app
+# Required-Stop:     $remote_fs
+# Default-Start:     2 3 4 5
+# Default-Stop:      1
+# Short-Description: SMS to Telegram forwarding daemon
+### END INIT INFO
+
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+NAME=sms_forward
+DESC="SMS forwarding daemon"
+BIN=/usr/sbin/sms_forward
+PID_FILE=/var/run/sms_forward.pid
+CONF=/etc/sms_forward.conf
+
+is_running() {
+    [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE" 2>/dev/null)" 2>/dev/null
+}
+
+case "$1" in
+    start)
+        if is_running; then
+            echo "$NAME already running (pid $(cat "$PID_FILE"))"
+            exit 0
+        fi
+        if [ ! -x "$BIN" ]; then
+            echo "$NAME binary not found"
+            exit 1
+        fi
+        if [ ! -f "$CONF" ]; then
+            exit 0
+        fi
+        . "$CONF" 2>/dev/null
+        if [ "$TELEGRAM_ENABLED" != "1" ] || [ -z "$TELEGRAM_BOT_TOKEN" ]; then
+            exit 0
+        fi
+        "$BIN"
+        echo "$NAME started"
+        ;;
+    stop)
+        if is_running; then
+            kill "$(cat "$PID_FILE")" 2>/dev/null
+            rm -f "$PID_FILE"
+            echo "$NAME stopped"
+        fi
+        ;;
+    restart)
+        $0 stop
+        sleep 1
+        $0 start
+        ;;
+    reload)
+        if is_running; then
+            kill -HUP "$(cat "$PID_FILE")" 2>/dev/null
+            echo "$NAME config reloaded"
+        else
+            $0 start
+        fi
+        ;;
+    status)
+        if is_running; then
+            echo "$NAME: running (pid $(cat "$PID_FILE"))"
+        else
+            echo "$NAME: stopped"
+        fi
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart|reload|status}"
+        exit 1
+        ;;
+esac
+
+exit 0

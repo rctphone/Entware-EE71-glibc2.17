@@ -67,17 +67,20 @@
         return html;
     }
 
-    // Sort: online first (wifi_2g, wifi_5g, usb), then offline
+    // Convert IP to numeric for sorting (e.g. 192.168.88.100 -> 3232257124)
+    function _ipNum(ip) {
+        if (!ip) return 0;
+        var p = ip.split('.');
+        return ((p[0] << 24) | (p[1] << 16) | (p[2] << 8) | p[3]) >>> 0;
+    }
+
+    // Sort: online first, then by IP address
     function _sortDevices(devices) {
-        var order = { wifi_2g: 0, wifi_5g: 1, usb: 2, offline: 3 };
         devices.sort(function(a, b) {
-            var ao = a.online ? (order[a.connection] || 2) : 3;
-            var bo = b.online ? (order[b.connection] || 2) : 3;
+            var ao = a.online ? 0 : 1;
+            var bo = b.online ? 0 : 1;
             if (ao !== bo) return ao - bo;
-            // secondary: by name/ip
-            var an = (a.name || a.ip || a.mac || '').toLowerCase();
-            var bn = (b.name || b.ip || b.mac || '').toLowerCase();
-            return an < bn ? -1 : an > bn ? 1 : 0;
+            return _ipNum(a.ip) - _ipNum(b.ip);
         });
         return devices;
     }
@@ -96,25 +99,13 @@
         if (isOffline) {
             connLine1 = 'Offline';
         } else if (isWifi) {
-            var hasTraffic = traffic && (traffic.rx_speed > 0 || traffic.tx_speed > 0);
-            if (hasTraffic) {
-                var maxBps = Math.max(traffic.rx_speed, traffic.tx_speed) * 8;
-                var unit, div;
-                if (maxBps < 1000) { unit = 'bps'; div = 1; }
-                else if (maxBps < 1000000) { unit = 'Kbps'; div = 1000; }
-                else if (maxBps < 1000000000) { unit = 'Mbps'; div = 1000000; }
-                else { unit = 'Gbps'; div = 1000000000; }
-                var dlV = (traffic.rx_speed * 8 / div).toFixed(1);
-                var ulV = (traffic.tx_speed * 8 / div).toFixed(1);
-                connLine1 = '\u2193' + dlV + '\u2003\u2191' + ulV + ' ' + unit;
-                connLine2 = (dev.wifi_mode || '') + ' ' + _bandLabel(dev.channel) +
-                    (dev.channel ? ' Ch.' + dev.channel : '');
-            } else {
-                connLine1 = (dev.wifi_mode || '') + ' ' + _bandLabel(dev.channel) +
-                    (dev.channel ? ' \u00B7 Ch.' + dev.channel : '') +
-                    (dev.bandwidth ? ' \u00B7 ' + dev.bandwidth + 'MHz' : '');
-                connLine2 = dev.max_speed ? 'max ' + dev.max_speed + ' Mbps' : '';
-            }
+            connLine1 = 'WiFi ' + _bandLabel(dev.channel) +
+                (dev.max_speed ? ' \u00B7 ' + dev.max_speed + ' Mbps' : '');
+            var details = [];
+            if (dev.wifi_mode) details.push(dev.wifi_mode);
+            if (dev.bandwidth) details.push(dev.bandwidth + 'MHz');
+            details.push('2\u00d72');
+            connLine2 = details.join(' \u00B7 ');
         } else {
             connLine1 = 'USB';
             connLine2 = dev.interface || 'ecm0';

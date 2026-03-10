@@ -295,7 +295,7 @@ var App = (function() {
             var elTech = $('#sb-tech');
             if (elTech) elTech.textContent = netType;
             var elTechShort = $('#sb-tech-short');
-            if (elTechShort) elTechShort.textContent = netType;
+            if (elTechShort) elTechShort.textContent = (techLbl && opName) ? techLbl + ' ' + opName : netType;
 
             var bars = $$('#sb-signal .bar');
             bars.forEach(function(b, i) {

@@ -1,0 +1,57 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          traffic_stats
+# Required-Start:    $remote_fs $networking
+# Required-Stop:     $remote_fs
+# Default-Start:     2 3 4 5
+# Default-Stop:      1
+# Short-Description: Per-host traffic monitoring daemon
+### END INIT INFO
+
+BIN=/usr/sbin/traffic_stats
+PID_FILE=/var/run/traffic_stats.pid
+
+is_running() {
+    [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE" 2>/dev/null)" 2>/dev/null
+}
+
+case "$1" in
+    start)
+        if is_running; then
+            echo "traffic_stats already running (pid $(cat "$PID_FILE"))"
+            exit 0
+        fi
+        if [ ! -x "$BIN" ]; then
+            echo "traffic_stats binary not found"
+            exit 1
+        fi
+        echo 1 > /proc/sys/net/netfilter/nf_conntrack_acct 2>/dev/null
+        "$BIN"
+        echo "traffic_stats started"
+        ;;
+    stop)
+        if is_running; then
+            kill "$(cat "$PID_FILE")" 2>/dev/null
+            rm -f "$PID_FILE"
+            echo "traffic_stats stopped"
+        fi
+        ;;
+    restart)
+        $0 stop
+        sleep 1
+        $0 start
+        ;;
+    status)
+        if is_running; then
+            echo "traffic_stats: running (pid $(cat "$PID_FILE"))"
+        else
+            echo "traffic_stats: stopped"
+        fi
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart|status}"
+        exit 1
+        ;;
+esac
+
+exit 0

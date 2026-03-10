@@ -1,13 +1,15 @@
 /*
- * traffic_stats - Per-host traffic monitoring daemon for EE71
+ * traffic_stats - Per-host traffic + LTE signal monitoring daemon for EE71
  *
  * Reads /proc/net/nf_conntrack every POLL_INTERVAL seconds,
  * aggregates per-LAN-host byte counters, computes speeds,
  * stores in 4-level ring buffers, writes JSON to /tmp/traffic_stats.json.
  *
- * No external libraries needed — pure libc.
+ * Also polls GetNetworkInfo via IPC (libsock_client.so.0) every 5 ticks
+ * and writes /tmp/signal_current.txt + /tmp/signal_history.json.
  *
- * Build: arm-oe-linux-gnueabi-gcc -Os ... -o traffic_stats traffic_stats.c
+ * Build: arm-oe-linux-gnueabi-gcc -Os ... -o traffic_stats \
+ *        traffic_stats.c cJSON.o -ldl
  */
 
 #include <stdio.h>
@@ -19,11 +21,15 @@
 #include <time.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <dlfcn.h>
+#include <syslog.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <arpa/inet.h>
 #include <net/if.h>
 #include <sys/ioctl.h>
+
+#include "cJSON.h"
 
 /* Configuration */
 #define MAX_HOSTS       32
@@ -39,6 +45,18 @@
 #define SIGNAL_PATH     "/tmp/signal_history.json"
 #define SIGNAL_TMP      "/tmp/signal_history.json.tmp"
 #define SIGNAL_RING_SZ  64
+#define SIGNAL_CURRENT  "/tmp/signal_current.txt"
+#define SIGNAL_CUR_TMP  "/tmp/signal_current.txt.tmp"
+
+/* IPC constants */
+#define IPC_HDR_SIZE    24
+#define IPC_TIMEOUT_MS  5000
+#define IPC_RESP_SIZE   4096
+#define IPC_SOCKET_PATH "/dev/socket/qmux_webs/server_webs"
+
+/* IPC function pointers */
+typedef int (*init_fn_t)(const char *);
+typedef int (*send_fn_t)(void *, int, void *, int *, int);
 
 /* Ring buffer level step sizes (in number of POLL_INTERVAL ticks) */
 static const int level_step[NUM_LEVELS] = {
@@ -106,6 +124,10 @@ static struct {
 static volatile sig_atomic_t running = 1;
 static int foreground = 0;
 
+/* IPC state */
+static send_fn_t ipc_send_fn = NULL;
+static void *ipc_lib = NULL;
+
 /* LAN detection — populated at startup from bridge0 */
 static uint32_t lan_prefix;   /* first 24 bits of LAN IP (host order >> 8) */
 static uint32_t lan_router;   /* router IP in network byte order */
@@ -140,6 +162,14 @@ static void handle_signal(int sig)
 {
     (void)sig;
     running = 0;
+}
+
+static volatile sig_atomic_t ipc_timeout = 0;
+
+static void handle_alarm_ipc(int sig)
+{
+    (void)sig;
+    ipc_timeout = 1;
 }
 
 /* Get system uptime in seconds */
@@ -525,29 +555,156 @@ static void write_json(void)
     rename(JSON_TMP, JSON_PATH);
 }
 
-/* Read signal info via stock webapi helper script */
+/* IPC call to core_app */
+static int ipc_call(const char *method, const char *params,
+                    char *resp_json, int resp_size)
+{
+    if (!ipc_send_fn)
+        return -1;
+
+    char jsonrpc[1024];
+    int json_len = snprintf(jsonrpc, sizeof(jsonrpc),
+        "{\"jsonrpc\":\"2.0\",\"method\":\"%s\",\"params\":%s,\"id\":\"1\"}",
+        method, params);
+
+    int total = IPC_HDR_SIZE + json_len;
+    char *buf = (char *)calloc(1, total + 1);
+    if (!buf) return -1;
+    memcpy(buf + IPC_HDR_SIZE, jsonrpc, json_len + 1);
+
+    char *resp = (char *)calloc(1, IPC_RESP_SIZE);
+    if (!resp) { free(buf); return -1; }
+    int resp_status = 0;
+
+    int ret = ipc_send_fn(buf, total, resp, &resp_status, IPC_TIMEOUT_MS);
+    free(buf);
+
+    if (ret != 0) {
+        free(resp);
+        return -1;
+    }
+
+    const char *rj = resp + IPC_HDR_SIZE;
+    if (rj[0] && resp_json) {
+        int rlen = strlen(rj);
+        if (rlen >= resp_size) rlen = resp_size - 1;
+        memcpy(resp_json, rj, rlen);
+        resp_json[rlen] = '\0';
+    }
+
+    free(resp);
+    return 0;
+}
+
+/* Helper: get string value from cJSON object */
+static const char *json_str(cJSON *obj, const char *key)
+{
+    cJSON *item = cJSON_GetObjectItem(obj, key);
+    if (item && cJSON_IsString(item))
+        return cJSON_GetStringValue(item);
+    return NULL;
+}
+
+/* Write /tmp/signal_current.txt from GetNetworkInfo result */
+static void write_signal_current(cJSON *result)
+{
+    FILE *f = fopen(SIGNAL_CUR_TMP, "w");
+    if (!f) return;
+
+    const char *v;
+
+    v = json_str(result, "RSRP");
+    if (v) fprintf(f, "RSRP=%s\n", v);
+
+    v = json_str(result, "RSRQ");
+    if (v) fprintf(f, "RSRQ=%s\n", v);
+
+    v = json_str(result, "SINR");
+    if (v) fprintf(f, "SINR=%s\n", v);
+
+    v = json_str(result, "RSSI");
+    if (v) fprintf(f, "RSSI=%s\n", v);
+
+    v = json_str(result, "Band");
+    if (v) fprintf(f, "Band=%s\n", v);
+
+    v = json_str(result, "DL_channel");
+    if (v)
+        fprintf(f, "EARFCN=%s\n", v);
+    else {
+        v = json_str(result, "CenterFreq");
+        if (v) fprintf(f, "EARFCN=%s\n", v);
+    }
+
+    v = json_str(result, "CellId");
+    if (v) fprintf(f, "CellId=%s\n", v);
+
+    v = json_str(result, "eNBID");
+    if (v) fprintf(f, "eNBID=%s\n", v);
+
+    v = json_str(result, "LAC");
+    if (v) fprintf(f, "TAC=%s\n", v);
+
+    v = json_str(result, "TxPWR");
+    if (v) fprintf(f, "TxPWR=%s\n", v);
+
+    cJSON *nt = cJSON_GetObjectItem(result, "NetworkType");
+    if (nt && cJSON_IsNumber(nt))
+        fprintf(f, "NetworkType=%d\n", (int)cJSON_GetNumberValue(nt));
+
+    v = json_str(result, "NetworkName");
+    if (v) fprintf(f, "NetworkName=%s\n", v);
+
+    v = json_str(result, "PLMN");
+    if (v) fprintf(f, "PLMN=%s\n", v);
+
+    cJSON *roam = cJSON_GetObjectItem(result, "Roaming");
+    if (roam && cJSON_IsNumber(roam))
+        fprintf(f, "Roaming=%d\n", (int)cJSON_GetNumberValue(roam));
+
+    fclose(f);
+    rename(SIGNAL_CUR_TMP, SIGNAL_CURRENT);
+}
+
+/* Poll signal via IPC and update ring buffer + files */
 static void poll_signal(void)
 {
-    /* Signal polling runs every 5 ticks (15s) to reduce load.
-     * CGI reads from a simple shell helper that calls webapi. */
+    /* Signal polling runs every 5 ticks (15s) to reduce load */
     if ((G.tick % 5) != 0)
         return;
 
-    /* Read signal from a helper file written by signal_poll.sh
-     * (a tiny shell loop that calls webapi GetNetworkInfo) */
-    FILE *f = fopen("/tmp/signal_current.txt", "r");
-    if (!f)
+    if (!ipc_send_fn)
         return;
 
-    int rsrp = 0, sinr = 0;
-    char line[128];
-    while (fgets(line, sizeof(line), f)) {
-        if (strncmp(line, "RSRP=", 5) == 0)
-            rsrp = atoi(line + 5);
-        else if (strncmp(line, "SINR=", 5) == 0)
-            sinr = atoi(line + 5);
+    char resp[IPC_RESP_SIZE];
+    memset(resp, 0, sizeof(resp));
+
+    if (ipc_call("GetNetworkInfo", "{}", resp, sizeof(resp)) != 0)
+        return;
+
+    cJSON *root = cJSON_Parse(resp);
+    if (!root)
+        return;
+
+    cJSON *result = cJSON_GetObjectItem(root, "result");
+    if (!result) {
+        cJSON_Delete(root);
+        return;
     }
-    fclose(f);
+
+    /* Write signal_current.txt for signal.cgi */
+    write_signal_current(result);
+
+    /* Extract RSRP/SINR for history ring buffer */
+    int rsrp = 0, sinr = 0;
+    const char *v;
+
+    v = json_str(result, "RSRP");
+    if (v) rsrp = atoi(v);
+    v = json_str(result, "SINR");
+    if (v) sinr = atoi(v);
+
+    cJSON_Delete(root);
 
     if (rsrp == 0 && sinr == 0)
         return;
@@ -560,7 +717,7 @@ static void poll_signal(void)
         G.signal_count++;
 
     /* Write signal history JSON */
-    f = fopen(SIGNAL_TMP, "w");
+    FILE *f = fopen(SIGNAL_TMP, "w");
     if (!f)
         return;
 
@@ -681,6 +838,37 @@ int main(int argc, char *argv[])
 
     enable_conntrack_acct();
 
+    /* Initialize IPC for signal polling (optional — continues without it) */
+    ipc_lib = dlopen("libsock_client.so.0", RTLD_NOW);
+    if (ipc_lib) {
+        init_fn_t init_fn = (init_fn_t)dlsym(ipc_lib, "jrd_init_app_client");
+        ipc_send_fn = (send_fn_t)dlsym(ipc_lib, "client_send_sync_msg");
+        if (init_fn && ipc_send_fn) {
+            /* jrd_init_app_client retries forever — use alarm guard */
+            signal(SIGALRM, handle_alarm_ipc);
+            ipc_timeout = 0;
+            alarm(10);
+            int ipc_ret = init_fn(IPC_SOCKET_PATH);
+            alarm(0);
+            signal(SIGALRM, SIG_DFL);
+            if (ipc_ret != 0 || ipc_timeout) {
+                if (foreground)
+                    fprintf(stderr, "traffic_stats: IPC init failed, signal polling disabled\n");
+                ipc_send_fn = NULL;
+            } else {
+                if (foreground)
+                    fprintf(stderr, "traffic_stats: IPC connected, signal polling enabled\n");
+            }
+        } else {
+            if (foreground)
+                fprintf(stderr, "traffic_stats: IPC symbols not found, signal polling disabled\n");
+            ipc_send_fn = NULL;
+        }
+    } else {
+        if (foreground)
+            fprintf(stderr, "traffic_stats: libsock_client.so.0 not found, signal polling disabled\n");
+    }
+
     if (foreground)
         fprintf(stderr, "traffic_stats: started (pid %d, poll every %ds)\n",
                 getpid(), POLL_INTERVAL);
@@ -706,6 +894,9 @@ int main(int argc, char *argv[])
     /* Cleanup */
     unlink(JSON_PATH);
     unlink(JSON_TMP);
+    unlink(SIGNAL_CURRENT);
+    if (ipc_lib)
+        dlclose(ipc_lib);
     remove_pidfile();
 
     return 0;

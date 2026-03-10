@@ -21,7 +21,7 @@ define Package/iperf3
   SECTION:=net
   CATEGORY:=Network
   TITLE:=Network bandwidth measurement tool
-  DEPENDS:=+libc +openssl +libatomic
+  DEPENDS:=+libc +libopenssl +libatomic
   PROVIDES:=iperf3-ssl
   URL:=https://software.es.net/iperf/
 endef

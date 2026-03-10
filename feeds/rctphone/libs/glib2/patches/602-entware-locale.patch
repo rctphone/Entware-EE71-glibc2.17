@@ -1,0 +1,11 @@
+--- a/glib/gstrfuncs.c
++++ b/glib/gstrfuncs.c
+@@ -283,7 +283,7 @@ const guint16 * const g_ascii_table = as
+ 
+ #if defined(HAVE_NEWLOCALE) && \
+     defined(HAVE_USELOCALE)
+-#define USE_XLOCALE 1
++#undef USE_XLOCALE
+ #endif
+ 
+ #ifdef USE_XLOCALE

@@ -134,12 +134,36 @@ list)
     done
     USB_IFACE="${USB_IFACE:-usb0}"
 
+    # === 6c. Bridge MAC table: mac -> interface (reliable for all bridge members) ===
+    # Build port_no -> iface mapping from sysfs
+    _PORT_MAP=""
+    for _brif in /sys/class/net/bridge0/brif/*; do
+        _name="${_brif##*/}"
+        _pno=$(cat "$_brif/port_no" 2>/dev/null)
+        [ -n "$_pno" ] && _PORT_MAP="${_PORT_MAP}${_pno} ${_name}
+"
+    done
+    # Parse brctl showmacs -> mac<TAB>iface
+    BRIDGE_MACS=$(brctl showmacs bridge0 2>/dev/null | awk -v pmap="$_PORT_MAP" '
+    BEGIN {
+        n = split(pmap, lines, "\n")
+        for (i = 1; i <= n; i++) {
+            split(lines[i], f, " ")
+            if (f[1] != "") port_iface[f[1]+0] = f[2]
+        }
+    }
+    NR > 1 && $3 == "no" {
+        iface = port_iface[$1+0]
+        if (iface != "") print tolower($2) "\t" iface
+    }')
+
     # === 7. Build JSON ===
     NOW=$(date +%s)
 
     {
         [ -f "$LEASES" ] && cat "$LEASES" || true
     } | awk -v hapd="$HAPD_DATA" -v arp="$ARP_DATA" -v rssi_data="$RSSI_DATA" \
+         -v bridge_macs="$BRIDGE_MACS" \
          -v w0_mode="$WLAN0_MODE" -v w0_bw="$WLAN0_BW" -v w0_ch="$WLAN0_CH" -v w0_speed="$WLAN0_SPEED" \
          -v w1_mode="$WLAN1_MODE" -v w1_bw="$WLAN1_BW" -v w1_ch="$WLAN1_CH" -v w1_speed="$WLAN1_SPEED" \
          -v usb_iface="$USB_IFACE" -v now="$NOW" '
@@ -165,6 +189,12 @@ list)
             split(lines[i], f, "\t")
             if (f[1] != "") mac_rssi[f[1]] = f[2]
         }
+        # Parse bridge MAC table: mac -> iface (from brctl showmacs)
+        n = split(bridge_macs, lines, "\n")
+        for (i = 1; i <= n; i++) {
+            split(lines[i], f, "\t")
+            if (f[1] != "") br_iface[f[1]] = f[2]
+        }
     }
     function emit(mac, ip, name, iface, conn, ctime, online) {
         # WiFi fields
@@ -187,12 +217,14 @@ list)
         if (name == "*") name = ""
 
         iface = h_iface[mac]
+        # Fallback: bridge MAC table (reliable even when hostapd misses the client)
+        if (iface == "" && mac in br_iface) iface = br_iface[mac]
 
         if (iface == "wlan0") { conn = "wifi_2g" }
         else if (iface == "wlan1") { conn = "wifi_5g" }
         else if (mac in arp_ip) { conn = "usb"; iface = usb_iface }
         else {
-            # Not in hostapd or ARP — show only if lease not expired
+            # Not in hostapd, bridge, or ARP — show only if lease not expired
             expiry = $1 + 0
             if (expiry > 0 && expiry < now + 0) next
             conn = "offline"; iface = ""
@@ -210,6 +242,7 @@ list)
             if (!(mac in seen)) {
                 ip = arp_ip[mac]
                 iface = h_iface[mac]
+                if (iface == "" && mac in br_iface) iface = br_iface[mac]
                 if (iface == "wlan0") conn = "wifi_2g"
                 else if (iface == "wlan1") conn = "wifi_5g"
                 else { conn = "usb"; iface = usb_iface }
@@ -238,7 +271,7 @@ list)
             if .[10] != "" then { bandwidth: (.[10] | tonumber? // null) } else {} end
         ) + (
             if .[11] != "" and .[11] != "0" then { max_speed: (.[11] | tonumber? // null) } else {} end
-        )] | sort_by(.online | not) | sort_by(.connection)'
+        )]'
     ;;
 
 *)

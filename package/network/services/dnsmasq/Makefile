@@ -153,7 +153,7 @@ ifeq ($(BUILD_VARIANT),full)
 		$(if $(CONFIG_PACKAGE_dnsmasq_$(BUILD_VARIANT)_tftp),,-DNO_TFTP)
 	COPTS += $(if $(CONFIG_LIBNETTLE_MINI),-DNO_GMP,)
 else
-	COPTS += -DNO_AUTH -DNO_IPSET -DNO_ID
+	COPTS += -DNO_ID
 endif
 
 MAKE_FLAGS := \
