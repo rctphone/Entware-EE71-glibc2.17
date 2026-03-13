@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=ee71-radish
-PKG_VERSION:=1.2.1
+PKG_VERSION:=1.3.0
 PKG_RELEASE:=1
 
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)
@@ -11,7 +11,7 @@ include $(INCLUDE_DIR)/package.mk
 define Package/ee71-radish
   SECTION:=ee71
   CATEGORY:=EE71
-  TITLE:=Full IPv6 support (radish + firewall + AAAA filter)
+  TITLE:=Full IPv6 support (radish + firewall)
   DEPENDS:=+libpthread +librt
 endef
 
@@ -27,7 +27,6 @@ define Package/ee71-radish/description
 
   IPv6 infrastructure:
   - ip6tables INPUT DROP firewall (S38, before QCMAP)
-  - Conditional dnsmasq AAAA filter (S95, after core_app)
 
   Binary at /usr/libexec/radish, wrapper at /usr/sbin/radish.
   Links against stock device libs.
@@ -106,14 +105,11 @@ define Package/ee71-radish/install
 	$(INSTALL_DIR) $(1)/usr/libexec
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/radish $(1)/usr/libexec/radish
 	$(INSTALL_BIN) ./files/radish $(1)/usr/sbin/radish
-	# IPv6 init scripts (formerly ee71-ipv6)
+	# IPv6 firewall init script
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./files/ip6tables_firewall $(1)/etc/init.d/
-	$(INSTALL_BIN) ./files/dnsmasq_ipv6_filter $(1)/etc/init.d/
 	$(INSTALL_DIR) $(1)/etc/rcS.d
 	$(LN) ../init.d/ip6tables_firewall $(1)/etc/rcS.d/S38ip6tables_firewall
-	$(INSTALL_DIR) $(1)/etc/rc5.d
-	$(LN) ../init.d/dnsmasq_ipv6_filter $(1)/etc/rc5.d/S95dnsmasq_ipv6_filter
 endef
 
 $(eval $(call BuildPackage,ee71-radish))
