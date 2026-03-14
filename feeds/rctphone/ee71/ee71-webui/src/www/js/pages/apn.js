@@ -78,9 +78,9 @@
         $('#apn-name').value = p.ProfileName || '';
         $('#apn-apn').value = p.APN || '';
         $('#apn-auth').value = String(p.AuthType || 0);
-        $('#apn-user').value = p.Username || '';
+        $('#apn-user').value = p.UserName || '';
         $('#apn-pass').value = p.Password || '';
-        $('#apn-pdp').value = String(p.PdpType || 0);
+        $('#apn-pdp').value = String(p.IpType || 0);
         _editingAPN = i;
         var btn = $('#apn-submit');
         if (btn) btn.textContent = 'Update Profile';
@@ -101,13 +101,16 @@
             ProfileName: ($('#apn-name') || {}).value,
             APN: ($('#apn-apn') || {}).value,
             AuthType: ($('#apn-auth') || {}).value || '0',
-            Username: ($('#apn-user') || {}).value || '',
+            UserName: ($('#apn-user') || {}).value || '',
             Password: ($('#apn-pass') || {}).value || '',
-            PdpType: ($('#apn-pdp') || {}).value || '0',
+            DnsMode: '0',
+            DNS1: '',
+            DNS2: '',
+            IpType: ($('#apn-pdp') || {}).value || '0',
         };
         if (!params.ProfileName || !params.APN) { alert('Name and APN required'); return; }
         var method = _editingAPN !== null ? 'EditProfile' : 'AddNewProfile';
-        if (_editingAPN !== null) params.ProfileIndex = String(_editingAPN);
+        if (_editingAPN !== null) params.ProfileID = String(_apnList[_editingAPN].ProfileID);
         API.webapi(method, params).then(function() {
             _loadAPN();
         }).catch(function(e) { alert('Error: ' + e.message); });
@@ -115,13 +118,13 @@
 
     function _apnDelete(i) {
         if (!confirm('Delete APN profile?')) return;
-        API.webapi('DeleteProfile', { ProfileIndex: String(i) }).then(function() {
+        API.webapi('DeleteProfile', { ProfileID: String(_apnList[i].ProfileID) }).then(function() {
             _loadAPN();
         }).catch(function(e) { alert('Error: ' + e.message); });
     }
 
     function _apnDefault(i) {
-        API.webapi('SetDefaultProfile', { ProfileIndex: String(i) }).then(function() {
+        API.webapi('SetDefaultProfile', { ProfileID: String(_apnList[i].ProfileID) }).then(function() {
             _loadAPN();
         }).catch(function(e) { alert('Error: ' + e.message); });
     }
