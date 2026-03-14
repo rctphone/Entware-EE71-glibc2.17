@@ -262,6 +262,7 @@
     // --- Network tab ---
 
     var _netSearchTimer = null;
+    var _connPdpType = '3'; // cached from GetConnectionSettings
 
     function _loadNetwork() {
         var tab = $('#conn-tab-network');
@@ -282,6 +283,7 @@
             var connMode = cs.ConnectMode || '0';
             var roaming = cs.RoamingConnect || '0';
             var idleTime = cs.IdleTime || '0';
+            _connPdpType = cs.PdpType || '3';
             var connected = connSt && (connSt.ConnectionStatus === 2 || connSt.ConnectionStatus === '2');
 
             tab.innerHTML =
@@ -459,7 +461,8 @@
         var params = {
             ConnectMode: $('#m-connmode').value,
             IdleTime: $('#m-idle').value || '0',
-            RoamingConnect: $('#m-roaming').checked ? '1' : '0'
+            RoamingConnect: $('#m-roaming').checked ? '1' : '0',
+            PdpType: _connPdpType
         };
         API.webapi('SetConnectionSettings', params).then(function() {
             alert('Connection settings saved.');

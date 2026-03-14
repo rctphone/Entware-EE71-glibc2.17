@@ -57,6 +57,8 @@
         });
     }
 
+    var _msPdpType = '3'; // cached from GetConnectionSettings
+
     // --- Network tab (from connection.js _loadNetwork) ---
 
     var _msNetSearchTimer = null;
@@ -81,6 +83,7 @@
             var connMode = cs.ConnectMode || '0';
             var roaming = cs.RoamingConnect || '0';
             var idleTime = cs.IdleTime || '0';
+            _msPdpType = cs.PdpType || '3';
             var connected = connSt && (connSt.ConnectionStatus === 2 || connSt.ConnectionStatus === '2');
 
             tab.innerHTML =
@@ -256,7 +259,8 @@
         API.webapi('SetConnectionSettings', {
             ConnectMode: $('#ms-connmode').value,
             IdleTime: $('#ms-idle').value || '0',
-            RoamingConnect: $('#ms-roaming').checked ? '1' : '0'
+            RoamingConnect: $('#ms-roaming').checked ? '1' : '0',
+            PdpType: _msPdpType
         }).then(function() { alert('Saved.'); }).catch(function(e) { alert('Error: ' + e.message); });
     }
 
