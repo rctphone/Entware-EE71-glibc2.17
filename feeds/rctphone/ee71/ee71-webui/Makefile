@@ -17,7 +17,7 @@ define Package/ee71-webui
 	+ee71-sms-forward \
 	+ee71-webs-csp \
 	+ee71-ttl-fix \
-	+ee71-radish \
+	+ee71-ipv6 \
 	+ee71-qcmap-fix \
 	+ee71-qcmap-wifi-ctl \
 	+ee71-optimize \

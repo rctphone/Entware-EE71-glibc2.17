@@ -1,23 +1,23 @@
 include $(TOPDIR)/rules.mk
 
-PKG_NAME:=ee71-radish
-PKG_VERSION:=1.3.0
+PKG_NAME:=ee71-ipv6
+PKG_VERSION:=2.0.0
 PKG_RELEASE:=1
 
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)
 
 include $(INCLUDE_DIR)/package.mk
 
-define Package/ee71-radish
+define Package/ee71-ipv6
   SECTION:=ee71
   CATEGORY:=EE71
   TITLE:=Full IPv6 support (radish + firewall)
   DEPENDS:=+libpthread +librt
-  CONFLICTS:=ee71-ipv6
+  PROVIDES:=ee71-radish
 endef
 
-define Package/ee71-radish/description
-  Complete IPv6 stack for EE71. Replaces ee71-ipv6 package.
+define Package/ee71-ipv6/description
+  Complete IPv6 stack for EE71 (formerly ee71-radish).
 
   Radish (Qualcomm v1.1 + EE71 enhancements):
   - RDNSS: wrapper adds -d flag for DNS server in RA
@@ -101,7 +101,7 @@ endef
 define CheckDependencies
 endef
 
-define Package/ee71-radish/install
+define Package/ee71-ipv6/install
 	$(INSTALL_DIR) $(1)/usr/sbin
 	$(INSTALL_DIR) $(1)/usr/libexec
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/radish $(1)/usr/libexec/radish
@@ -113,4 +113,4 @@ define Package/ee71-radish/install
 	$(LN) ../init.d/ip6tables_firewall $(1)/etc/rcS.d/S38ip6tables_firewall
 endef
 
-$(eval $(call BuildPackage,ee71-radish))
+$(eval $(call BuildPackage,ee71-ipv6))
