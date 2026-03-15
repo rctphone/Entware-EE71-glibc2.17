@@ -13,6 +13,7 @@ define Package/ee71-radish
   CATEGORY:=EE71
   TITLE:=Full IPv6 support (radish + firewall)
   DEPENDS:=+libpthread +librt
+  CONFLICTS:=ee71-ipv6
 endef
 
 define Package/ee71-radish/description

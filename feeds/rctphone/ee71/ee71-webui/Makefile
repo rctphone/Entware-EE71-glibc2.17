@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=ee71-webui
-PKG_VERSION:=1.1.0
+PKG_VERSION:=1.2.0
 PKG_RELEASE:=1
 
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)
@@ -17,7 +17,7 @@ define Package/ee71-webui
 	+ee71-sms-forward \
 	+ee71-webs-csp \
 	+ee71-ttl-fix \
-	+ee71-ipv6 \
+	+ee71-radish \
 	+ee71-qcmap-fix \
 	+ee71-qcmap-wifi-ctl \
 	+ee71-optimize \
