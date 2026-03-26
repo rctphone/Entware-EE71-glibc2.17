@@ -107,12 +107,12 @@
             if (netInfo) {
                 if (el('m-operator')) el('m-operator').textContent = netInfo.NetworkName || netInfo.Domestic || '\u2014';
                 if (el('m-tech')) el('m-tech').textContent = App.techLabel(netInfo.NetworkType) || '\u2014';
-                // Band + EARFCN — use CA data if available
+                // Band + EARFCN — prefer CA data, fallback to GetNetworkInfo
+                var fallbackBand = App.formatBand(netInfo.Band) || App.formatBand(sigData && sigData.band) || '\u2014';
                 API.cgiGet('signal.cgi', { action: 'ca' }).then(function(ca) {
                     if (!el('m-band')) return;
                     if (ca && ca.ca && ca.bands && ca.bands.length > 1) {
                         el('m-band').textContent = ca.bands.map(function(b) { return 'B' + b; }).join('+');
-                        // Show PCC EARFCN from CA data
                         if (el('m-earfcn') && ca.cells && ca.cells.length) {
                             var pcc = ca.cells[0];
                             el('m-earfcn').textContent = pcc.earfcn || earfcn || '\u2014';
@@ -120,10 +120,10 @@
                     } else if (ca && ca.bands && ca.bands.length === 1) {
                         el('m-band').textContent = 'LTE B' + ca.bands[0];
                     } else {
-                        el('m-band').textContent = App.formatBand(netInfo.Band) || App.formatBand(sigData && sigData.band) || '\u2014';
+                        el('m-band').textContent = fallbackBand;
                     }
                 }).catch(function() {
-                    if (el('m-band')) el('m-band').textContent = App.formatBand(netInfo.Band) || '\u2014';
+                    if (el('m-band')) el('m-band').textContent = fallbackBand;
                 });
             }
 

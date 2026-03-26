@@ -105,7 +105,7 @@
             API.webapi('GetNetworkInfo').catch(function() { return null; }),
             API.webapi('GetConnectionState').catch(function() { return null; }),
             API.webapi('GetBatteryState').catch(function() { return null; }),
-            API.webapi('GetConnectedDeviceList').catch(function() { return null; }),
+            API.cgiGet('clients.cgi', { action: 'list' }).catch(function() { return null; }),
             API.webapi('GetUsageRecord').catch(function() { return null; }),
             API.cgiGet('traffic.cgi', { action: 'status' }).catch(function() { return null; }),
             API.cgiGet('system.cgi', { action: 'cpu' }).catch(function() { return null; }),
@@ -177,9 +177,9 @@
                 if (el('d-ul-unit')) el('d-ul-unit').textContent = sp.unit;
             }
 
-            // Devices
+            // Devices (from clients.cgi)
             if (devList) {
-                var devices = devList.ConnectedList || [];
+                var devices = Array.isArray(devList) ? devList : (devList.ConnectedList || []);
                 if (el('d-devcount')) el('d-devcount').textContent = devices.length;
 
                 var elList = el('d-devlist');
@@ -188,15 +188,16 @@
                         elList.textContent = 'No devices connected';
                     } else {
                         elList.innerHTML = devices.slice(0, 8).map(function(d) {
-                            var name = (d.DeviceName || d.HostName || '').toLowerCase();
-                            var isPhone = /iphone|ipad|android|galaxy|pixel|xiaomi|redmi|huawei|oneplus|oppo|vivo|samsung|poco|realme/.test(name);
+                            var name = (d.name || d.DeviceName || d.HostName || '').toLowerCase();
+                            var isPhone = /iphone|ipad|android|galaxy|pixel|xiaomi|redmi|huawei|oneplus|oppo|vivo|samsung|poco|realme|watch/.test(name);
                             var devIcon = isPhone ? 'ic-mobile' : 'ic-computer';
-                            var cm = Number(d.ConnectMode);
-                            var connIcon = cm === 0 ? 'ic-usb' : 'ic-wifi';
+                            var conn = d.connection || '';
+                            var connIcon = conn === 'usb' ? 'ic-usb' : 'ic-wifi';
+                            var signal = d.rssi != null ? ' ' + d.rssi + ' dBm' : '';
                             return '<div class="device-row">' +
                                 icon(devIcon) +
-                                '<span class="device-name">' + escHtml(d.DeviceName || d.HostName || d.IPAddress || d.IpAddress || d.MacAddress || '?') + '</span>' +
-                                '<span class="device-ip">' + escHtml(d.IpAddress || '') + '</span>' +
+                                '<span class="device-name">' + escHtml(d.name || d.DeviceName || d.HostName || d.ip || d.mac || '?') + '</span>' +
+                                '<span class="device-ip">' + escHtml(d.ip || d.IpAddress || '') + signal + '</span>' +
                                 '<span class="device-signal">' + icon(connIcon) + '</span>' +
                                 '</div>';
                         }).join('');
