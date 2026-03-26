@@ -282,7 +282,7 @@
             var netSelMode = cs.NetselectionMode || '0';
             var connMode = cs.ConnectMode || '0';
             var roaming = cs.RoamingConnect || '0';
-            var idleTime = cs.IdleTime || '0';
+            var idleTime = cs.ConnOffTime || '0';
             _connPdpType = cs.PdpType || '3';
             var connected = connSt && (connSt.ConnectionStatus === 2 || connSt.ConnectionStatus === '2');
 
@@ -460,7 +460,7 @@
     function _connSaveConn() {
         var params = {
             ConnectMode: $('#m-connmode').value,
-            IdleTime: $('#m-idle').value || '0',
+            ConnOffTime: $('#m-idle').value || '0',
             RoamingConnect: $('#m-roaming').checked ? '1' : '0',
             PdpType: _connPdpType
         };

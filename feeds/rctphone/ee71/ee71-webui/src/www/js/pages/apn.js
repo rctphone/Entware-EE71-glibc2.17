@@ -80,7 +80,7 @@
         $('#apn-auth').value = String(p.AuthType || 0);
         $('#apn-user').value = p.UserName || '';
         $('#apn-pass').value = p.Password || '';
-        $('#apn-pdp').value = String(p.IpType || 0);
+        $('#apn-pdp').value = String(p.PdpType || 0);
         _editingAPN = i;
         var btn = $('#apn-submit');
         if (btn) btn.textContent = 'Update Profile';
@@ -103,10 +103,7 @@
             AuthType: ($('#apn-auth') || {}).value || '0',
             UserName: ($('#apn-user') || {}).value || '',
             Password: ($('#apn-pass') || {}).value || '',
-            DnsMode: '0',
-            DNS1: '',
-            DNS2: '',
-            IpType: ($('#apn-pdp') || {}).value || '0',
+            PdpType: ($('#apn-pdp') || {}).value || '0',
         };
         if (!params.ProfileName || !params.APN) { alert('Name and APN required'); return; }
         var method = _editingAPN !== null ? 'EditProfile' : 'AddNewProfile';

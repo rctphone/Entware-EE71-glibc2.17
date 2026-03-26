@@ -82,7 +82,7 @@
             var netSelMode = cs.NetselectionMode || '0';
             var connMode = cs.ConnectMode || '0';
             var roaming = cs.RoamingConnect || '0';
-            var idleTime = cs.IdleTime || '0';
+            var idleTime = cs.ConnOffTime || '0';
             _msPdpType = cs.PdpType || '3';
             var connected = connSt && (connSt.ConnectionStatus === 2 || connSt.ConnectionStatus === '2');
 
@@ -258,7 +258,7 @@
     function _msetSaveConn() {
         API.webapi('SetConnectionSettings', {
             ConnectMode: $('#ms-connmode').value,
-            IdleTime: $('#ms-idle').value || '0',
+            ConnOffTime: $('#ms-idle').value || '0',
             RoamingConnect: $('#ms-roaming').checked ? '1' : '0',
             PdpType: _msPdpType
         }).then(function() { alert('Saved.'); }).catch(function(e) { alert('Error: ' + e.message); });
@@ -373,7 +373,7 @@
         $('#ms-apn-auth').value = String(p.AuthType || 0);
         $('#ms-apn-user').value = p.UserName || '';
         $('#ms-apn-pass').value = p.Password || '';
-        $('#ms-apn-pdp').value = String(p.IpType || 0);
+        $('#ms-apn-pdp').value = String(p.PdpType || 0);
         _editingAPN = i;
         var btn = $('#ms-apn-submit');
         if (btn) btn.textContent = 'Update Profile';
@@ -396,10 +396,7 @@
             AuthType: ($('#ms-apn-auth') || {}).value || '0',
             UserName: ($('#ms-apn-user') || {}).value || '',
             Password: ($('#ms-apn-pass') || {}).value || '',
-            DnsMode: '0',
-            DNS1: '',
-            DNS2: '',
-            IpType: ($('#ms-apn-pdp') || {}).value || '0',
+            PdpType: ($('#ms-apn-pdp') || {}).value || '0',
         };
         if (!params.ProfileName || !params.APN) { alert('Name and APN required'); return; }
         var method = _editingAPN !== null ? 'EditProfile' : 'AddNewProfile';
