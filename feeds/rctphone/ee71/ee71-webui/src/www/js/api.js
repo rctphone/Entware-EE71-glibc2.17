@@ -518,7 +518,11 @@ const API = (() => {
                 return new Promise(function() {});
             }
 
-            return resp.json();
+            const result = await resp.json();
+            if (result && result.error) {
+                throw new ApiError('', result.error, path);
+            }
+            return result;
         });
     }
 
