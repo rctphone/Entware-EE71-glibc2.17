@@ -283,7 +283,8 @@
             var connMode = cs.ConnectMode || '0';
             var roaming = cs.RoamingConnect || '0';
             var idleTime = cs.ConnOffTime || '0';
-            _connPdpType = cs.PdpType || '3';
+            var pdpType = String(cs.PdpType != null ? cs.PdpType : '3');
+            _connPdpType = pdpType;
             var connected = connSt && (connSt.ConnectionStatus === 2 || connSt.ConnectionStatus === '2');
 
             tab.innerHTML =
@@ -330,6 +331,14 @@
                     '<div class="form-group">' +
                         '<label>Idle Timeout (min)</label>' +
                         '<input type="number" id="m-idle" value="' + (parseInt(idleTime, 10) || 0) + '" min="0" max="120">' +
+                    '</div>' +
+                    '<div class="form-group">' +
+                        '<label>IP Type</label>' +
+                        '<select id="m-pdptype">' +
+                            '<option value="3"' + (pdpType === '3' || pdpType === 3 ? ' selected' : '') + '>IPv4v6</option>' +
+                            '<option value="0"' + (pdpType === '0' || pdpType === 0 ? ' selected' : '') + '>IPv4</option>' +
+                            '<option value="2"' + (pdpType === '2' || pdpType === 2 ? ' selected' : '') + '>IPv6</option>' +
+                        '</select>' +
                     '</div>' +
                     '<div class="form-group">' +
                         '<label><input type="checkbox" id="m-roaming"' + (roaming === '1' || roaming === 1 ? ' checked' : '') + '> Connect while roaming</label>' +
@@ -459,10 +468,10 @@
     // Feature 5: Connection settings
     function _connSaveConn() {
         var params = {
-            ConnectMode: $('#m-connmode').value,
-            ConnOffTime: $('#m-idle').value || '0',
-            RoamingConnect: $('#m-roaming').checked ? '1' : '0',
-            PdpType: _connPdpType
+            ConnectMode: parseInt($('#m-connmode').value, 10) || 0,
+            ConnOffTime: parseInt($('#m-idle').value, 10) || 0,
+            RoamingConnect: $('#m-roaming').checked ? 1 : 0,
+            PdpType: parseInt($('#m-pdptype').value, 10) || 3
         };
         API.webapi('SetConnectionSettings', params).then(function() {
             alert('Connection settings saved.');

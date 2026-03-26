@@ -54,11 +54,6 @@
                     '<div class="form-group"><label>Username</label><input type="text" id="apn-user" placeholder=""></div>' +
                     '<div class="form-group"><label>Password</label><input type="text" id="apn-pass" placeholder=""></div>' +
                 '</div>' +
-                '<div class="form-row">' +
-                    '<div class="form-group"><label>PDP Type</label>' +
-                        '<select id="apn-pdp"><option value="0">IPv4</option><option value="2">IPv4v6</option><option value="1">IPv6</option></select>' +
-                    '</div>' +
-                '</div>' +
                 '<div class="form-actions">' +
                     '<button id="apn-submit" ' + actionAttr('apnSave') + '>Add Profile</button>' +
                     '<button class="btn-small" id="apn-cancel" style="display:none" ' + actionAttr('apnCancelEdit') + '>Cancel</button>' +
@@ -80,7 +75,6 @@
         $('#apn-auth').value = String(p.AuthType || 0);
         $('#apn-user').value = p.UserName || '';
         $('#apn-pass').value = p.Password || '';
-        $('#apn-pdp').value = String(p.PdpType || 0);
         _editingAPN = i;
         var btn = $('#apn-submit');
         if (btn) btn.textContent = 'Update Profile';
@@ -103,7 +97,6 @@
             AuthType: ($('#apn-auth') || {}).value || '0',
             UserName: ($('#apn-user') || {}).value || '',
             Password: ($('#apn-pass') || {}).value || '',
-            PdpType: ($('#apn-pdp') || {}).value || '0',
         };
         if (!params.ProfileName || !params.APN) { alert('Name and APN required'); return; }
         var method = _editingAPN !== null ? 'EditProfile' : 'AddNewProfile';

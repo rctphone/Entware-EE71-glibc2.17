@@ -83,7 +83,8 @@
             var connMode = cs.ConnectMode || '0';
             var roaming = cs.RoamingConnect || '0';
             var idleTime = cs.ConnOffTime || '0';
-            _msPdpType = cs.PdpType || '3';
+            var pdpType = String(cs.PdpType != null ? cs.PdpType : '3');
+            _msPdpType = pdpType;
             var connected = connSt && (connSt.ConnectionStatus === 2 || connSt.ConnectionStatus === '2');
 
             tab.innerHTML =
@@ -130,6 +131,14 @@
                     '<div class="form-group">' +
                         '<label>Idle Timeout (min)</label>' +
                         '<input type="number" id="ms-idle" value="' + (parseInt(idleTime, 10) || 0) + '" min="0" max="120">' +
+                    '</div>' +
+                    '<div class="form-group">' +
+                        '<label>IP Type</label>' +
+                        '<select id="ms-pdptype">' +
+                            '<option value="3"' + (pdpType === '3' || pdpType === 3 ? ' selected' : '') + '>IPv4v6</option>' +
+                            '<option value="0"' + (pdpType === '0' || pdpType === 0 ? ' selected' : '') + '>IPv4</option>' +
+                            '<option value="2"' + (pdpType === '2' || pdpType === 2 ? ' selected' : '') + '>IPv6</option>' +
+                        '</select>' +
                     '</div>' +
                     '<div class="form-group">' +
                         '<label><input type="checkbox" id="ms-roaming"' + (roaming === '1' || roaming === 1 ? ' checked' : '') + '> Connect while roaming</label>' +
@@ -257,10 +266,10 @@
     // Connection settings
     function _msetSaveConn() {
         API.webapi('SetConnectionSettings', {
-            ConnectMode: $('#ms-connmode').value,
-            ConnOffTime: $('#ms-idle').value || '0',
-            RoamingConnect: $('#ms-roaming').checked ? '1' : '0',
-            PdpType: _msPdpType
+            ConnectMode: parseInt($('#ms-connmode').value, 10) || 0,
+            ConnOffTime: parseInt($('#ms-idle').value, 10) || 0,
+            RoamingConnect: $('#ms-roaming').checked ? 1 : 0,
+            PdpType: parseInt($('#ms-pdptype').value, 10) || 3
         }).then(function() { alert('Saved.'); }).catch(function(e) { alert('Error: ' + e.message); });
     }
 
@@ -347,11 +356,6 @@
                     '<div class="form-group"><label>Username</label><input type="text" id="ms-apn-user" placeholder=""></div>' +
                     '<div class="form-group"><label>Password</label><input type="text" id="ms-apn-pass" placeholder=""></div>' +
                 '</div>' +
-                '<div class="form-row">' +
-                    '<div class="form-group"><label>PDP Type</label>' +
-                        '<select id="ms-apn-pdp"><option value="0">IPv4</option><option value="2">IPv4v6</option><option value="1">IPv6</option></select>' +
-                    '</div>' +
-                '</div>' +
                 '<div class="form-actions">' +
                     '<button id="ms-apn-submit" ' + actionAttr('msetApnSave') + '>Add Profile</button>' +
                     '<button class="btn-small" id="ms-apn-cancel" style="display:none" ' + actionAttr('msetApnCancel') + '>Cancel</button>' +
@@ -373,7 +377,6 @@
         $('#ms-apn-auth').value = String(p.AuthType || 0);
         $('#ms-apn-user').value = p.UserName || '';
         $('#ms-apn-pass').value = p.Password || '';
-        $('#ms-apn-pdp').value = String(p.PdpType || 0);
         _editingAPN = i;
         var btn = $('#ms-apn-submit');
         if (btn) btn.textContent = 'Update Profile';
@@ -396,7 +399,6 @@
             AuthType: ($('#ms-apn-auth') || {}).value || '0',
             UserName: ($('#ms-apn-user') || {}).value || '',
             Password: ($('#ms-apn-pass') || {}).value || '',
-            PdpType: ($('#ms-apn-pdp') || {}).value || '0',
         };
         if (!params.ProfileName || !params.APN) { alert('Name and APN required'); return; }
         var method = _editingAPN !== null ? 'EditProfile' : 'AddNewProfile';
