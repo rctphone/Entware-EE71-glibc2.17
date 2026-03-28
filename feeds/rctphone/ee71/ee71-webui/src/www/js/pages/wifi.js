@@ -61,8 +61,9 @@
         var st5g = (s.Wlan5gState === 1 || s.Wlan5gState === '1') ? 1 : 0;
         var sec2g = _safeSecMode(SEC_REV[s.WlanAuthMode] != null ? SEC_REV[s.WlanAuthMode] : 3);
         var sec5g = _safeSecMode(SEC_REV[s.WlanAuthMode_5G] != null ? SEC_REV[s.WlanAuthMode_5G] : 3);
-        var ap2g = { ApStatus: st2g, Ssid: s.WlanSSID || '', WpaKey: s.WlanAPPwd || '', SecurityMode: sec2g, WpaType: 1 };
-        var ap5g = { ApStatus: st5g, Ssid: s.WlanSSID_5G || '', WpaKey: s.WlanAPPwd_5G || '', SecurityMode: sec5g, WpaType: 1 };
+        var maxSta = 15; // factory default — core_app resets to 0 if omitted
+        var ap2g = { ApStatus: st2g, Ssid: s.WlanSSID || '', WpaKey: s.WlanAPPwd || '', SecurityMode: sec2g, WpaType: 1, max_numsta: maxSta };
+        var ap5g = { ApStatus: st5g, Ssid: s.WlanSSID_5G || '', WpaKey: s.WlanAPPwd_5G || '', SecurityMode: sec5g, WpaType: 1, max_numsta: maxSta };
         if (overrides2g) Object.keys(overrides2g).forEach(function(k) { ap2g[k] = overrides2g[k]; });
         if (overrides5g) Object.keys(overrides5g).forEach(function(k) { ap5g[k] = overrides5g[k]; });
         // AP2G_guest mirrors 5GHz settings — in AP-AP mode, wlan1 is the "guest AP"
@@ -75,7 +76,8 @@
             Ssid: guestSsid,
             WpaKey: guestKey,
             SecurityMode: ap5g.SecurityMode,
-            WpaType: ap5g.WpaType
+            WpaType: ap5g.WpaType,
+            max_numsta: maxSta
         };
         // Both AP2G_guest and AP5G_guest map to the same Guest5G* DB fields.
         // core_app expects both in SetWlanSettings (WlanAPID 2 and 3).
