@@ -34,20 +34,31 @@
 
     // Last fetched settings, kept for advanced panel access
     var _wifiSettings = null;
+    var _currentMode = '2g'; // '2g', '5g', or 'dual'
+
+    // Detect WiFi mode from settings
+    function _detectMode(s) {
+        var on2g = s.Wlan2gState === 1 || s.Wlan2gState === '1';
+        var on5g = s.Wlan5gState === 1 || s.Wlan5gState === '1';
+        if (on2g && on5g) return 'dual';
+        if (on5g) return '5g';
+        return '2g';
+    }
+
+    // Compute mode from desired toggle states
+    function _modeFromToggles(want2g, want5g) {
+        if (want2g && want5g) return 'dual';
+        if (want5g) return '5g';
+        return '2g';
+    }
 
     // Build full WiFi params — firmware resets omitted fields to empty.
-    // Three sections needed:
-    //   AP2G       — 2.4GHz primary (wlan0)
-    //   AP5G       — 5GHz settings (band-switch mode, kept in sync)
-    //   AP2G_guest — Guest AP = wlan1 in AP-AP mode (the actual 5GHz interface)
     // SecurityMode 4 (WPA/WPA2) and 2 (WPA) generate broken hostapd config — clamp to safe values
     function _safeSecMode(mode) { return (mode === 0) ? 0 : 3; }
 
     // Apply WiFi settings via wifi.cgi → qcmap_wifi_ctl.
-    // This generates hostapd-wlan1.conf BEFORE triggering core_app,
-    // so QCMAP finds both configs when it restarts WiFi.
     function _applyWifi(params) {
-        var data = { action: 'apply' };
+        var data = { action: 'apply', mode: _currentMode };
         if (params.AP2G) data.AP2G = params.AP2G;
         if (params.AP5G) data.AP5G = params.AP5G;
         if (params.AP2G_guest) data.AP2G_guest = params.AP2G_guest;
@@ -57,30 +68,41 @@
 
     function _fullParams(overrides2g, overrides5g) {
         var s = _wifiSettings || {};
-        var st2g = (s.Wlan2gState === 1 || s.Wlan2gState === '1') ? 1 : 0;
-        var st5g = (s.Wlan5gState === 1 || s.Wlan5gState === '1') ? 1 : 0;
         var sec2g = _safeSecMode(SEC_REV[s.WlanAuthMode] != null ? SEC_REV[s.WlanAuthMode] : 3);
         var sec5g = _safeSecMode(SEC_REV[s.WlanAuthMode_5G] != null ? SEC_REV[s.WlanAuthMode_5G] : 3);
         var maxSta = 15; // factory default — core_app resets to 0 if omitted
-        var ap2g = { ApStatus: st2g, Ssid: s.WlanSSID || '', WpaKey: s.WlanAPPwd || '', SecurityMode: sec2g, WpaType: 1, max_numsta: maxSta };
-        var ap5g = { ApStatus: st5g, Ssid: s.WlanSSID_5G || '', WpaKey: s.WlanAPPwd_5G || '', SecurityMode: sec5g, WpaType: 1, max_numsta: maxSta };
+        var ap2g = { ApStatus: 1, Ssid: s.WlanSSID || '', WpaKey: s.WlanAPPwd || '', SecurityMode: sec2g, WpaType: 1, max_numsta: maxSta };
+        var ap5g = { ApStatus: 0, Ssid: s.WlanSSID_5G || '', WpaKey: s.WlanAPPwd_5G || '', SecurityMode: sec5g, WpaType: 1, max_numsta: maxSta };
         if (overrides2g) Object.keys(overrides2g).forEach(function(k) { ap2g[k] = overrides2g[k]; });
         if (overrides5g) Object.keys(overrides5g).forEach(function(k) { ap5g[k] = overrides5g[k]; });
+
+        // Set ApStatus based on mode
+        // In dual mode: AP2G.ApStatus=1 (2.4G on wlan0), AP5G.ApStatus=0 (not band-switch),
+        //               guest.ApStatus=1 (5G on wlan1 via AP2G_guest/AP5G_guest)
+        // In 5g mode:   AP2G.ApStatus=0, AP5G.ApStatus=1 (core_app configures wlan0 as 5G)
+        // In 2g mode:   AP2G.ApStatus=1, AP5G.ApStatus=0
+        if (_currentMode === 'dual') {
+            ap2g.ApStatus = 1;
+            ap5g.ApStatus = 0;
+        } else if (_currentMode === '5g') {
+            ap2g.ApStatus = 0;
+            ap5g.ApStatus = 1;
+        } else {
+            ap2g.ApStatus = 1;
+            ap5g.ApStatus = 0;
+        }
+
         // AP2G_guest mirrors 5GHz settings — in AP-AP mode, wlan1 is the "guest AP"
-        // and core_app reads Guest5G* DB fields (mapped from AP2G_guest) for wlan1 config.
-        // Cascade: 5G value → 2G value + "_5G" suffix → default "EE71_5G" / "12345678"
         var guestSsid = ap5g.Ssid || (ap2g.Ssid ? ap2g.Ssid + '_5G' : 'EE71_5G');
         var guestKey = ap5g.WpaKey || ap2g.WpaKey || '12345678';
         var guest = {
-            ApStatus: ap5g.ApStatus,
+            ApStatus: _currentMode === 'dual' ? 1 : 0,
             Ssid: guestSsid,
             WpaKey: guestKey,
             SecurityMode: ap5g.SecurityMode,
             WpaType: ap5g.WpaType,
             max_numsta: maxSta
         };
-        // Both AP2G_guest and AP5G_guest map to the same Guest5G* DB fields.
-        // core_app expects both in SetWlanSettings (WlanAPID 2 and 3).
         return { AP2G: ap2g, AP5G: ap5g, AP2G_guest: guest, AP5G_guest: guest };
     }
 
@@ -136,6 +158,7 @@
             }
 
             _wifiSettings = settings;
+            if (settings) _currentMode = _detectMode(settings);
 
             // --- 2.4 GHz ---
             _render2g(settings, state);
@@ -178,10 +201,19 @@
         '</div>';
 
         $('#wifi-2g-sw').addEventListener('change', function() {
-            var params = _fullParams({ ApStatus: wifiOn ? 0 : 1 }, null);
+            var want2g = !wifiOn;
+            var s = _wifiSettings || {};
+            var cur5g = s.Wlan5gState === 1 || s.Wlan5gState === '1';
+            if (!want2g && !cur5g) {
+                _toast('Cannot disable both bands', true);
+                this.checked = true;
+                return;
+            }
+            _currentMode = _modeFromToggles(want2g, cur5g);
+            var params = _fullParams(null, null);
             _applyWifi(params).then(function() {
-                _toast(wifiOn ? '2.4 GHz off' : '2.4 GHz on');
-                setTimeout(_loadWifiSettings, 3000);
+                _toast(want2g ? '2.4 GHz on' : '2.4 GHz off');
+                setTimeout(_loadWifiSettings, 8000);
             }).catch(function(e) { _toast('Error: ' + e.message, true); });
         });
     }
@@ -218,10 +250,19 @@
         '</div>';
 
         $('#wifi-5g-sw').addEventListener('change', function() {
-            var params = _fullParams(null, { ApStatus: ap5on ? 0 : 1 });
+            var want5g = !ap5on;
+            var s = _wifiSettings || {};
+            var cur2g = s.Wlan2gState === 1 || s.Wlan2gState === '1';
+            if (!want5g && !cur2g) {
+                _toast('Cannot disable both bands', true);
+                this.checked = true;
+                return;
+            }
+            _currentMode = _modeFromToggles(cur2g, want5g);
+            var params = _fullParams(null, null);
             _applyWifi(params).then(function() {
-                _toast(ap5on ? '5 GHz off' : '5 GHz on');
-                setTimeout(_loadWifiSettings, 3000);
+                _toast(want5g ? '5 GHz on' : '5 GHz off');
+                setTimeout(_loadWifiSettings, 8000);
             }).catch(function(e) { _toast('Error: ' + e.message, true); });
         });
     }
@@ -347,7 +388,7 @@
         var params = _fullParams({ Ssid: $('#w-ssid').value, WpaKey: pw, SecurityMode: SEC_REV[security] != null ? SEC_REV[security] : 3 }, null);
         _applyWifi(params).then(function() {
             _toast('Saved');
-            setTimeout(_loadWifiSettings, 3000);
+            setTimeout(_loadWifiSettings, 8000);
         }).catch(function(e) { _toast('Error: ' + e.message, true); });
     }
 
@@ -360,7 +401,7 @@
         var params = _fullParams(null, { Ssid: $('#w5-ssid').value, WpaKey: pw, SecurityMode: SEC_REV[security] != null ? SEC_REV[security] : 3 });
         _applyWifi(params).then(function() {
             _toast('Saved');
-            setTimeout(_loadWifiSettings, 3000);
+            setTimeout(_loadWifiSettings, 8000);
         }).catch(function(e) { _toast('Error: ' + e.message, true); });
     }
 
@@ -381,7 +422,7 @@
         );
         _applyWifi(params).then(function() {
             _toast('Saved');
-            setTimeout(_loadWifiSettings, 3000);
+            setTimeout(_loadWifiSettings, 8000);
         }).catch(function(e) { _toast('Error: ' + e.message, true); });
     }
 

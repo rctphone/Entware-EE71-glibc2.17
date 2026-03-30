@@ -1,0 +1,4 @@
+protocol:1
+name:MegaFon LTE
+apn:internet
+dial:*99#

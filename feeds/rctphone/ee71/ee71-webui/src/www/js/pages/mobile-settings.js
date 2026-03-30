@@ -80,7 +80,7 @@
 
             var currentMode = cs.NetselectionMode || cs.NetworkMode || 'auto';
             var netSelMode = cs.NetselectionMode || '0';
-            var connMode = cs.ConnectMode || '0';
+            var connMode = cs.ConnectMode != null ? String(cs.ConnectMode) : '1';
             var roaming = cs.RoamingConnect || '0';
             var idleTime = cs.ConnOffTime || '0';
             var pdpType = String(cs.PdpType != null ? cs.PdpType : '3');
@@ -124,8 +124,8 @@
                     '<div class="form-group">' +
                         '<label>Connect Mode</label>' +
                         '<select id="ms-connmode">' +
-                            '<option value="0"' + (connMode === '0' || connMode === 0 ? ' selected' : '') + '>Auto</option>' +
-                            '<option value="1"' + (connMode === '1' || connMode === 1 ? ' selected' : '') + '>Manual</option>' +
+                            '<option value="1"' + (connMode === '1' || connMode === 1 ? ' selected' : '') + '>Auto</option>' +
+                            '<option value="0"' + (connMode === '0' || connMode === 0 ? ' selected' : '') + '>Manual</option>' +
                         '</select>' +
                     '</div>' +
                     '<div class="form-group">' +
@@ -265,11 +265,12 @@
 
     // Connection settings
     function _msetSaveConn() {
+        var pdp = parseInt($('#ms-pdptype').value, 10);
         API.webapi('SetConnectionSettings', {
-            ConnectMode: parseInt($('#ms-connmode').value, 10) || 0,
+            ConnectMode: parseInt($('#ms-connmode').value, 10),
             ConnOffTime: parseInt($('#ms-idle').value, 10) || 0,
             RoamingConnect: $('#ms-roaming').checked ? 1 : 0,
-            PdpType: parseInt($('#ms-pdptype').value, 10) || 3
+            PdpType: isNaN(pdp) ? 3 : pdp
         }).then(function() { alert('Saved.'); }).catch(function(e) { alert('Error: ' + e.message); });
     }
 

@@ -8,9 +8,11 @@
             '<div class="tabs" id="diag-tabs">' +
                 '<button class="active" data-tab="sysinfo">System Info</button>' +
                 '<button data-tab="ports">Open Ports</button>' +
+                '<button data-tab="snapshot">LTE Snapshot</button>' +
             '</div>' +
             '<div class="tab-content active" id="diag-tab-sysinfo"></div>' +
-            '<div class="tab-content" id="diag-tab-ports"></div>';
+            '<div class="tab-content" id="diag-tab-ports"></div>' +
+            '<div class="tab-content" id="diag-tab-snapshot"></div>';
 
         $$('#diag-tabs button').forEach(function(btn) {
             btn.addEventListener('click', function() {
@@ -24,6 +26,7 @@
 
         _renderSysInfo();
         _renderOpenPorts();
+        _renderSnapshot();
     }
 
     // --- System Info tab ---
@@ -348,6 +351,128 @@
         _diagLoadPorts();
     }
 
+    // --- LTE Snapshot tab ---
+
+    function _renderSnapshot() {
+        var tab = $('#diag-tab-snapshot');
+        if (!tab) return;
+        tab.innerHTML = '<div class="card">' +
+            '<h3>LTE Connection Snapshot</h3>' +
+            '<p class="text-muted text-small">Captures LTE state, thermal, WiFi, dmesg and syslog in one shot.</p>' +
+            '<div class="form-actions mb-1"><button ' + actionAttr('diagSnapshot') + '>Take Snapshot</button></div>' +
+            '<div id="snap-result"></div>' +
+        '</div>';
+    }
+
+    var _lastSnapshot = '';
+
+    function _snapText(s) {
+        var lte = s.lte || {};
+        var bat = s.battery || {};
+        var wifi = s.wifi || {};
+        var sys = s.system || {};
+        var lines = [
+            '=== EE71 LTE Snapshot ' + new Date().toISOString() + ' ===',
+            'Status:    ' + (lte.ping_ok ? 'ONLINE' : 'OFFLINE'),
+            'Uptime:    ' + (s.uptime || '') + 's',
+            'LTE:       state=' + (lte.state || 'N/A') + ' ip=' + (lte.ip || 'none'),
+            'Signal:    ' + (lte.signal || 'N/A'),
+            'RSRP:      ' + (lte.rsrp || 'N/A') + ' dBm',
+            'LTE RX/TX: ' + (lte.rx_bytes || '0') + ' / ' + (lte.tx_bytes || '0'),
+            'DNS:       ' + (s.dns || 'none'),
+            'Route:     ' + (sys.def_route || 'none'),
+            'Battery:   ' + (bat.capacity || '?') + '% ' + (bat.status || ''),
+            'Thermal:   ' + (s.thermal || ''),
+            'Load:      ' + (sys.load || ''),
+            'Conntrack: ' + (sys.conntrack || 0),
+            'WiFi:      ' + (wifi.hostapd || '') + ' ' + (wifi.channel || '') + ' 2G:' + (wifi.clients_2g || 0) + ' 5G:' + (wifi.clients_5g || 0),
+            '',
+            '--- dmesg (modem/wlan) ---',
+            s.dmesg || '(empty)',
+            '',
+            '--- syslog (last 30) ---',
+            s.syslog || '(empty)',
+        ];
+        if (s.monitor_log) {
+            lines.push('', '--- LTE Monitor Log ---', s.monitor_log);
+        }
+        return lines.join('\n');
+    }
+
+    function _diagSnapshot() {
+        var el = document.getElementById('snap-result');
+        if (!el) return;
+        el.innerHTML = '<div class="page-loading"><div class="spinner"></div> Collecting...</div>';
+
+        API.cgiGet('diag.cgi', { action: 'snapshot' }).then(function(s) {
+            var lte = s.lte || {};
+            var bat = s.battery || {};
+            var wifi = s.wifi || {};
+            var sys = s.system || {};
+            var stateClass = lte.ping_ok ? 'text-success' : 'text-danger';
+            var stateText = lte.ping_ok ? 'ONLINE' : 'OFFLINE';
+
+            _lastSnapshot = _snapText(s);
+
+            var html = '<div class="form-actions mb-1"><button ' + actionAttr('diagSnapCopy') + '>Copy to clipboard</button></div>' +
+                '<div class="stat-row"><span class="label">Status</span><span class="value ' + stateClass + '">' + stateText + '</span></div>' +
+                '<div class="stat-row"><span class="label">Uptime</span><span class="value">' + escHtml(s.uptime || '') + 's</span></div>' +
+                '<div class="stat-row"><span class="label">LTE State</span><span class="value">' + escHtml(lte.state || 'N/A') + '</span></div>' +
+                '<div class="stat-row"><span class="label">LTE IP</span><span class="value text-mono">' + escHtml(lte.ip || 'none') + '</span></div>' +
+                '<div class="stat-row"><span class="label">Signal</span><span class="value text-small">' + escHtml(lte.signal || 'N/A') + '</span></div>' +
+                '<div class="stat-row"><span class="label">LTE RX/TX</span><span class="value text-mono">' + escHtml(lte.rx_bytes || '0') + ' / ' + escHtml(lte.tx_bytes || '0') + '</span></div>' +
+                '<div class="stat-row"><span class="label">DNS</span><span class="value text-mono">' + escHtml(s.dns || 'none') + '</span></div>' +
+                '<div class="stat-row"><span class="label">Default Route</span><span class="value text-mono text-small">' + escHtml(sys.def_route || 'none') + '</span></div>' +
+                '<div class="stat-row"><span class="label">Battery</span><span class="value">' + escHtml(bat.capacity || '?') + '% ' + escHtml(bat.status || '') + '</span></div>' +
+                '<div class="stat-row"><span class="label">Thermal</span><span class="value text-small">' + escHtml(s.thermal || '') + '</span></div>' +
+                '<div class="stat-row"><span class="label">Load</span><span class="value">' + escHtml(sys.load || '') + '</span></div>' +
+                '<div class="stat-row"><span class="label">Conntrack</span><span class="value">' + (sys.conntrack || 0) + '</span></div>' +
+                '<div class="stat-row"><span class="label">WiFi</span><span class="value">' + escHtml(wifi.hostapd || '') + ', 2G:' + (wifi.clients_2g || 0) + ' 5G:' + (wifi.clients_5g || 0) + ' clients</span></div>';
+
+            if (s.dmesg) {
+                html += '<h4 class="mt-1">dmesg (modem/wlan)</h4>' +
+                    '<pre class="log-output" style="max-height:300px;overflow:auto;font-size:0.7rem">' + escHtml(s.dmesg) + '</pre>';
+            }
+            if (s.syslog) {
+                html += '<h4 class="mt-1">syslog (last 30)</h4>' +
+                    '<pre class="log-output" style="max-height:300px;overflow:auto;font-size:0.7rem">' + escHtml(s.syslog) + '</pre>';
+            }
+            if (s.monitor_log) {
+                html += '<h4 class="mt-1">LTE Monitor Log</h4>' +
+                    '<pre class="log-output" style="max-height:300px;overflow:auto;font-size:0.7rem">' + escHtml(s.monitor_log) + '</pre>';
+            }
+
+            el.innerHTML = html;
+        }).catch(function(e) {
+            el.innerHTML = '<p class="text-danger">Error: ' + escHtml(e.message) + '</p>';
+        });
+    }
+
+    function _diagSnapCopy() {
+        if (!_lastSnapshot) return;
+        if (navigator.clipboard) {
+            navigator.clipboard.writeText(_lastSnapshot).then(function() {
+                _snapToast('Copied to clipboard');
+            }).catch(function() { _snapFallbackCopy(); });
+        } else {
+            _snapFallbackCopy();
+        }
+    }
+    function _snapFallbackCopy() {
+        var ta = document.createElement('textarea');
+        ta.value = _lastSnapshot;
+        ta.style.cssText = 'position:fixed;left:-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        ta.remove();
+        _snapToast('Copied to clipboard');
+    }
+    function _snapToast(msg) {
+        var btn = document.querySelector('[data-action="diagSnapCopy"]');
+        if (btn) { var orig = btn.textContent; btn.textContent = msg; setTimeout(function() { btn.textContent = orig; }, 2000); }
+    }
+
     App.registerPage('diagnostics', renderDiagnostics);
     App._diagRun = _diagRun;
     App._diagUtilChange = _diagUtilChange;
@@ -358,4 +483,6 @@
     App._diagSyslog = _diagSyslog;
     App._diagDmesg = _diagDmesg;
     App._diagRefreshPorts = _diagRefreshPorts;
+    App._diagSnapshot = _diagSnapshot;
+    App._diagSnapCopy = _diagSnapCopy;
 })();

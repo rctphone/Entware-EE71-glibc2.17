@@ -28,15 +28,21 @@ csrf_check() {
         LAN_IP=$(ifconfig bridge0 2>/dev/null | sed -n 's/.*inet addr:\([^ ]*\).*/\1/p')
         LAN_IP="${LAN_IP:-192.168.1.1}"
         HOSTNAME=$(cat /etc/hostname 2>/dev/null)
-        ALLOWED="http://${LAN_IP}"
-        case "$HTTP_ORIGIN" in
-            "$ALLOWED"|"http://${HOSTNAME}") ;;
-            "") case "$HTTP_REFERER" in
-                    ${ALLOWED}/*|http://${HOSTNAME}/*) ;;
-                    *) echo '{"error":"Invalid origin"}'; exit 0 ;;
-                esac ;;
-            *) echo '{"error":"Invalid origin"}'; exit 0 ;;
-        esac
+        REQ_HOST=$(echo "$HTTP_HOST" | sed 's/:.*//')
+        _origin_ok() {
+            case "$1" in
+                "http://${LAN_IP}"*|"http://${HOSTNAME}"*) return 0 ;;
+            esac
+            [ -n "$REQ_HOST" ] && case "$1" in
+                "http://${REQ_HOST}"*) return 0 ;;
+            esac
+            return 1
+        }
+        if [ -n "$HTTP_ORIGIN" ]; then
+            _origin_ok "$HTTP_ORIGIN" || { echo '{"error":"Invalid origin"}'; exit 0; }
+        elif [ -n "$HTTP_REFERER" ]; then
+            _origin_ok "$HTTP_REFERER" || { echo '{"error":"Invalid origin"}'; exit 0; }
+        fi
     fi
 }
 

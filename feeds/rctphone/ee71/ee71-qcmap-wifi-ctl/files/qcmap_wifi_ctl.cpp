@@ -37,6 +37,8 @@ static const char *HOSTAPD_PID_2G     = "/etc/hostapd_ssid1.pid";
 static const char *HOSTAPD_PID_5G     = "/etc/hostapd_ssid2.pid";
 static const char *ENTROPY_FILE       = "/etc/entropy_file1";
 static const char *BRIDGE             = "bridge0";
+static const char *MOBILEAP_CFG      = "/etc/mobileap_cfg.xml";
+static const char *MOBILEAP_FACTORY  = "/etc/factory_mobileap_cfg.xml";
 
 /* ─── Simple JSON value extractor ────────────────────────────────── */
 /* Extract a string value for a given key from JSON.
@@ -119,6 +121,131 @@ static bool file_exists(const char *path)
 {
     struct stat st;
     return stat(path, &st) == 0;
+}
+
+/* ─── WlanMode management (mobileap_cfg.xml) ────────────────────── */
+/* Read current WlanMode from /etc/mobileap_cfg.xml.
+ * Returns true if found, writes value to out (e.g. "AP" or "AP-AP"). */
+static bool get_wlan_mode(char *out, int out_sz)
+{
+    out[0] = '\0';
+    FILE *f = fopen(MOBILEAP_CFG, "r");
+    if (!f) return false;
+    char line[512];
+    while (fgets(line, sizeof(line), f)) {
+        const char *p = strstr(line, "<WlanMode>");
+        if (!p) continue;
+        p += 10; /* strlen("<WlanMode>") */
+        const char *e = strstr(p, "</WlanMode>");
+        if (!e) continue;
+        int len = (int)(e - p);
+        if (len >= out_sz) len = out_sz - 1;
+        memcpy(out, p, len);
+        out[len] = '\0';
+        fclose(f);
+        return true;
+    }
+    fclose(f);
+    return false;
+}
+
+/* Replace <WlanMode>X</WlanMode> in mobileap_cfg.xml.
+ * Atomic: write to .tmp, rename. Returns 0 on success. */
+static int set_wlan_mode(const char *mode)
+{
+    FILE *f = fopen(MOBILEAP_CFG, "r");
+    if (!f) {
+        fprintf(stderr, "[ERR] Cannot read %s\n", MOBILEAP_CFG);
+        return 1;
+    }
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (sz <= 0 || sz > 65536) { fclose(f); return 1; }
+
+    char *buf = (char *)malloc(sz + 256);
+    if (!buf) { fclose(f); return 1; }
+    size_t rd = fread(buf, 1, sz, f);
+    fclose(f);
+    buf[rd] = '\0';
+
+    /* Find <WlanMode>...</WlanMode> */
+    char *start = strstr(buf, "<WlanMode>");
+    if (!start) { free(buf); fprintf(stderr, "[ERR] <WlanMode> not found in XML\n"); return 1; }
+    char *val_start = start + 10;
+    char *val_end = strstr(val_start, "</WlanMode>");
+    if (!val_end) { free(buf); return 1; }
+
+    /* Build new file content */
+    char tmp_path[256];
+    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", MOBILEAP_CFG);
+    FILE *out = fopen(tmp_path, "w");
+    if (!out) { free(buf); return 1; }
+
+    fwrite(buf, 1, val_start - buf, out);
+    fputs(mode, out);
+    fputs(val_end, out); /* includes </WlanMode> and rest of file */
+    fclose(out);
+    free(buf);
+
+    if (rename(tmp_path, MOBILEAP_CFG) != 0) {
+        unlink(tmp_path);
+        fprintf(stderr, "[ERR] rename %s failed\n", tmp_path);
+        return 1;
+    }
+    printf("[OK] WlanMode set to %s in %s\n", mode, MOBILEAP_CFG);
+
+    /* Also patch factory template so it persists across reboots.
+     * QCMAP regenerates runtime XML from factory at boot. */
+    if (file_exists(MOBILEAP_FACTORY)) {
+        FILE *ff = fopen(MOBILEAP_FACTORY, "r");
+        if (ff) {
+            fseek(ff, 0, SEEK_END);
+            long fsz = ftell(ff);
+            fseek(ff, 0, SEEK_SET);
+            if (fsz > 0 && fsz <= 65536) {
+                char *fbuf = (char *)malloc(fsz + 256);
+                if (fbuf) {
+                    size_t frd = fread(fbuf, 1, fsz, ff);
+                    fbuf[frd] = '\0';
+                    char *fs = strstr(fbuf, "<WlanMode>");
+                    if (fs) {
+                        char *fvs = fs + 10;
+                        char *fve = strstr(fvs, "</WlanMode>");
+                        if (fve) {
+                            char ftmp[256];
+                            snprintf(ftmp, sizeof(ftmp), "%s.tmp", MOBILEAP_FACTORY);
+                            FILE *fo = fopen(ftmp, "w");
+                            if (fo) {
+                                fwrite(fbuf, 1, fvs - fbuf, fo);
+                                fputs(mode, fo);
+                                fputs(fve, fo);
+                                fclose(fo);
+                                rename(ftmp, MOBILEAP_FACTORY);
+                                printf("[OK] WlanMode set to %s in %s\n", mode, MOBILEAP_FACTORY);
+                            }
+                        }
+                    }
+                    free(fbuf);
+                }
+            }
+            fclose(ff);
+        }
+    }
+    return 0;
+}
+
+/* Kill wlan1 hostapd and delete the interface.
+ * Used when transitioning from AP-AP to AP (single-band). */
+static void cleanup_wlan1()
+{
+    run("kill $(ps w | grep 'hostapd_cli.*wlan1' | grep -v grep | awk '{print $1}') 2>/dev/null");
+    run("kill $(ps w | grep 'hostapd.*hostapd-wlan1' | grep -v grep | awk '{print $1}') 2>/dev/null");
+    usleep(500000);
+    unlink(HOSTAPD_PID_5G);
+    unlink("/var/run/hostapd/wlan1");
+    run("iw dev wlan1 del 2>/dev/null");
+    printf("[OK] wlan1 cleaned up\n");
 }
 
 /* ─── hostapd-wlan1.conf generation ──────────────────────────────── */
@@ -465,16 +592,20 @@ static int cmd_status()
     bool wlan1_up = process_running("hostapd.*hostapd-wlan1");
     bool wlan0_cli = process_running("hostapd_cli.*wlan0");
     bool wlan1_cli = process_running("hostapd_cli.*wlan1");
+    char wlan_mode[32] = "unknown";
+    get_wlan_mode(wlan_mode, sizeof(wlan_mode));
 
     printf("{\"wlan0\":%s,\"wlan1\":%s,"
            "\"wlan0_cli\":%s,\"wlan1_cli\":%s,"
-           "\"conf_2g\":%s,\"conf_5g\":%s}\n",
+           "\"conf_2g\":%s,\"conf_5g\":%s,"
+           "\"wlan_mode\":\"%s\"}\n",
            wlan0_up ? "true" : "false",
            wlan1_up ? "true" : "false",
            wlan0_cli ? "true" : "false",
            wlan1_cli ? "true" : "false",
            file_exists(HOSTAPD_CONF_2G) ? "true" : "false",
-           file_exists(HOSTAPD_CONF_5G) ? "true" : "false");
+           file_exists(HOSTAPD_CONF_5G) ? "true" : "false",
+           wlan_mode);
     return 0;
 }
 
@@ -482,6 +613,30 @@ static int cmd_status()
 static int cmd_apply(const char *json)
 {
     int len;
+
+    /* Extract optional "mode" field: "2g", "5g", or "dual" */
+    char mode[16] = {};
+    json_get_string(json, "mode", mode, sizeof(mode));
+    bool has_mode = mode[0] != '\0';
+    bool want_dual = has_mode && strcmp(mode, "dual") == 0;
+    bool want_5g   = has_mode && strcmp(mode, "5g") == 0;
+    bool want_2g   = has_mode && strcmp(mode, "2g") == 0;
+
+    /* Handle WlanMode transition if mode is specified */
+    if (has_mode) {
+        char cur_mode[32] = {};
+        get_wlan_mode(cur_mode, sizeof(cur_mode));
+        bool is_apap = strcmp(cur_mode, "AP-AP") == 0;
+
+        if (want_dual && !is_apap) {
+            printf("[*] Switching WlanMode AP → AP-AP\n");
+            if (set_wlan_mode("AP-AP") != 0) return 1;
+        } else if (!want_dual && is_apap) {
+            printf("[*] Switching WlanMode AP-AP → AP\n");
+            cleanup_wlan1();
+            if (set_wlan_mode("AP") != 0) return 1;
+        }
+    }
 
     /* Extract AP2G_guest (WlanAPID 2, maps to Guest5G* DB fields) */
     const char *guest = json_get_object(json, "AP2G_guest", &len);
@@ -515,72 +670,67 @@ static int cmd_apply(const char *json)
         memcpy(ap5g_buf, ap5g, len);
     }
 
-    /* Step 1: Generate /etc/hostapd-wlan1.conf BEFORE any restart.
-     * Use AP2G_guest/AP5G_guest params (Guest5G* DB fields = wlan1). */
-    if (eff_guest[0]) {
+    /* Step 1: Generate /etc/hostapd-wlan1.conf for dual-band mode.
+     * Skip for single-band (no wlan1 needed). */
+    bool need_wlan1 = want_dual || (!has_mode && eff_guest[0]);
+    if (need_wlan1 && eff_guest[0]) {
         int ret = generate_hostapd_wlan1(eff_guest);
         if (ret != 0) return ret;
     }
 
-    /* Step 2: Spawn wlan1 watchdog BEFORE IPC.
+    /* Step 2: Spawn wlan1 watchdog for dual-band mode only.
      * IPC triggers EnableWLAN → rmmod wlan → our process gets killed.
      * The watchdog is a detached child (setsid) that waits for WiFi
      * to come back, then starts wlan1 hostapd if needed. */
-    pid_t pid = fork();
-    if (pid == 0) {
-        /* Child: detach from parent session */
-        setsid();
-        /* Close inherited fds */
-        for (int fd = 3; fd < 64; fd++) close(fd);
-        /* Redirect stdio to /dev/null */
-        freopen("/dev/null", "r", stdin);
-        freopen("/tmp/qcmap_watchdog.log", "a", stdout);
-        freopen("/tmp/qcmap_watchdog.log", "a", stderr);
+    if (need_wlan1) {
+        pid_t pid = fork();
+        if (pid == 0) {
+            setsid();
+            for (int fd = 3; fd < 64; fd++) close(fd);
+            freopen("/dev/null", "r", stdin);
+            freopen("/tmp/qcmap_watchdog.log", "a", stdout);
+            freopen("/tmp/qcmap_watchdog.log", "a", stderr);
 
-        printf("[watchdog] Waiting for WiFi teardown...\n");
-        fflush(stdout);
-
-        /* Phase 1: Wait for teardown to START.
-         * IPC is synchronous — EnableWLAN happens after IPC returns.
-         * Wait until wlan0 hostapd dies (= teardown started).
-         * If it doesn't die in 15s, it might not be a full teardown. */
-        for (int i = 0; i < 15; i++) {
-            sleep(1);
-            if (!process_running("hostapd.*hostapd\\.conf")) {
-                printf("[watchdog] WiFi teardown detected\n");
-                fflush(stdout);
-                break;
-            }
-        }
-
-        /* Phase 2: Wait for wlan0 to come BACK (max 30s).
-         * QCMAP insmod wlan → start hostapd for wlan0. */
-        printf("[watchdog] Waiting for wlan0 recovery...\n");
-        fflush(stdout);
-        for (int i = 0; i < 30; i++) {
-            sleep(1);
-            if (process_running("hostapd.*hostapd\\.conf")) {
-                printf("[watchdog] wlan0 hostapd is back\n");
-                fflush(stdout);
-                break;
-            }
-        }
-        /* Extra settle time for QCMAP to finish */
-        sleep(5);
-
-        /* Phase 3: Start wlan1 hostapd if not running */
-        if (!process_running("hostapd.*hostapd-wlan1")) {
-            printf("[watchdog] wlan1 hostapd not running, starting...\n");
+            printf("[watchdog] Waiting for WiFi teardown...\n");
             fflush(stdout);
-            restart_hostapd_wlan1();
-        } else {
-            printf("[watchdog] wlan1 hostapd already running\n");
+
+            /* Phase 1: Wait for teardown (max 15s) */
+            for (int i = 0; i < 15; i++) {
+                sleep(1);
+                if (!process_running("hostapd.*hostapd\\.conf")) {
+                    printf("[watchdog] WiFi teardown detected\n");
+                    fflush(stdout);
+                    break;
+                }
+            }
+
+            /* Phase 2: Wait for wlan0 recovery (max 30s) */
+            printf("[watchdog] Waiting for wlan0 recovery...\n");
+            fflush(stdout);
+            for (int i = 0; i < 30; i++) {
+                sleep(1);
+                if (process_running("hostapd.*hostapd\\.conf")) {
+                    printf("[watchdog] wlan0 hostapd is back\n");
+                    fflush(stdout);
+                    break;
+                }
+            }
+            sleep(5);
+
+            /* Phase 3: Start wlan1 hostapd if not running */
+            if (!process_running("hostapd.*hostapd-wlan1")) {
+                printf("[watchdog] Starting wlan1 hostapd...\n");
+                fflush(stdout);
+                restart_hostapd_wlan1();
+            } else {
+                printf("[watchdog] wlan1 hostapd already running\n");
+            }
+            fflush(stdout);
+            _exit(0);
         }
-        fflush(stdout);
-        _exit(0);
+        if (pid > 0)
+            printf("[OK] Watchdog spawned (PID %d)\n", pid);
     }
-    if (pid > 0)
-        printf("[OK] Watchdog spawned (PID %d)\n", pid);
 
     /* Step 3: IPC to core_app (SetWlanSettings via JSON-RPC 2.0).
      * This makes core_app write DB + generate hostapd.conf (wlan0)

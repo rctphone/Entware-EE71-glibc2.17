@@ -18,15 +18,21 @@ csrf_check() {
         LAN_IP=$(ifconfig bridge0 2>/dev/null | sed -n 's/.*inet addr:\([^ ]*\).*/\1/p')
         LAN_IP="${LAN_IP:-192.168.1.1}"
         HOSTNAME=$(cat /etc/hostname 2>/dev/null)
-        ALLOWED="http://${LAN_IP}"
-        case "$HTTP_ORIGIN" in
-            "$ALLOWED"|"http://${HOSTNAME}") ;;
-            "") case "$HTTP_REFERER" in
-                    ${ALLOWED}/*|http://${HOSTNAME}/*) ;;
-                    *) echo '{"error":"Invalid origin"}'; exit 0 ;;
-                esac ;;
-            *) echo '{"error":"Invalid origin"}'; exit 0 ;;
-        esac
+        REQ_HOST=$(echo "$HTTP_HOST" | sed 's/:.*//')
+        _origin_ok() {
+            case "$1" in
+                "http://${LAN_IP}"*|"http://${HOSTNAME}"*) return 0 ;;
+            esac
+            [ -n "$REQ_HOST" ] && case "$1" in
+                "http://${REQ_HOST}"*) return 0 ;;
+            esac
+            return 1
+        }
+        if [ -n "$HTTP_ORIGIN" ]; then
+            _origin_ok "$HTTP_ORIGIN" || { echo '{"error":"Invalid origin"}'; exit 0; }
+        elif [ -n "$HTTP_REFERER" ]; then
+            _origin_ok "$HTTP_REFERER" || { echo '{"error":"Invalid origin"}'; exit 0; }
+        fi
     fi
 }
 
@@ -201,6 +207,123 @@ iperf3)
 
     OUTPUT=$(timeout 60 iperf3 -c "$SERVER" -p "$PORT" -t "$DURATION" $EXTRA 2>&1)
     jq -n --arg output "$OUTPUT" '{"ok":true,"output":$output}'
+    ;;
+
+snapshot)
+    # One-shot LTE/system diagnostic dump — all data in single JSON response
+    UP=$(cat /proc/uptime 2>/dev/null | awk '{print $1}')
+
+    # rmnet state — operstate is always "unknown" on Qualcomm rmnet, derive from flags
+    RMNET_FLAGS=$(cat /sys/class/net/rmnet_data0/flags 2>/dev/null || echo "0x0")
+    RMNET_IP=$(ifconfig rmnet_data0 2>/dev/null | sed -n 's/.*inet addr:\([^ ]*\).*/\1/p')
+    if [ -z "$RMNET_IP" ]; then
+        RMNET_STATE="down (no IP)"
+    elif [ "$((RMNET_FLAGS & 1))" = "1" ]; then
+        RMNET_STATE="up"
+    else
+        RMNET_STATE="down"
+    fi
+    RMNET_RX=$(cat /sys/class/net/rmnet_data0/statistics/rx_bytes 2>/dev/null || echo 0)
+    RMNET_TX=$(cat /sys/class/net/rmnet_data0/statistics/tx_bytes 2>/dev/null || echo 0)
+
+    # Signal (from signal.cgi ca action)
+    SIGNAL=""
+    RSRP_VAL=""
+    CA_RAW=$(QUERY_STRING="action=ca" REQUEST_METHOD=GET /jrd-resource/resource/webrc/www/cgi-bin/signal.cgi 2>/dev/null)
+    # Strip HTTP headers (everything before first '{')
+    CA_JSON=$(echo "$CA_RAW" | sed -n '/^{/,/^}/p')
+    if [ -n "$CA_JSON" ]; then
+        SIGNAL=$(echo "$CA_JSON" | jq -r '
+            if .cells then
+                [.cells[] | .type + " B" + (.band|tostring) + " EARFCN=" + (.earfcn|tostring) +
+                 " RSRP=" + (if .rsrp then (.rsrp|tostring) + "dBm" else "?" end) +
+                 " RSRQ=" + (if .rsrq then (.rsrq|tostring) + "dB" else "?" end) +
+                 " SINR=" + (if .sinr then (.sinr|tostring) + "dB" else "?" end)
+                ] | join(", ")
+            else "no data" end' 2>/dev/null)
+        RSRP_VAL=$(echo "$CA_JSON" | jq -r '.cells[0].rsrp // empty' 2>/dev/null)
+    fi
+
+    # DNS
+    DNS=$(grep nameserver /etc/resolv.conf 2>/dev/null | awk '{print $2}' | head -2 | tr '\n' ',' | sed 's/,$//')
+
+    # Thermal
+    TEMPS=""
+    for z in /sys/devices/virtual/thermal/thermal_zone*/; do
+        N=$(cat "${z}type" 2>/dev/null)
+        T=$(cat "${z}temp" 2>/dev/null)
+        [ -n "$N" ] && TEMPS="${TEMPS}${N}:${T},"
+    done
+    TEMPS=$(echo "$TEMPS" | sed 's/,$//')
+
+    # Battery
+    BAT_CAP=$(cat /sys/class/power_supply/battery/capacity 2>/dev/null)
+    BAT_ST=$(cat /sys/class/power_supply/battery/status 2>/dev/null)
+
+    # WiFi
+    HAPD_2G=$(grep max_num_sta /etc/hostapd.conf 2>/dev/null | head -1)
+    HAPD_CH=$(grep "^channel=" /etc/hostapd.conf 2>/dev/null | head -1)
+    WLAN0_CLIENTS=$(hostapd_cli -i wlan0 -p /var/run/hostapd list_sta 2>/dev/null | grep -c '^[0-9a-f]')
+    WLAN1_CLIENTS=$(hostapd_cli -i wlan1 -p /var/run/hostapd list_sta 2>/dev/null | grep -c '^[0-9a-f]')
+
+    # Default route
+    DEF_ROUTE=$(ip route 2>/dev/null | head -1)
+
+    # Ping test (1 packet, 2s timeout)
+    PING_OK="false"
+    ping -c 1 -W 2 8.8.8.8 >/dev/null 2>&1 && PING_OK="true"
+
+    # Load
+    LOAD=$(cat /proc/loadavg 2>/dev/null | awk '{print $1}')
+
+    # Last 50 dmesg lines (unfiltered — catch everything around the event)
+    DMESG_TAIL=$(dmesg | tail -50)
+
+    # Last 30 syslog lines
+    SYSLOG_TAIL=$(logread 2>/dev/null | tail -30)
+
+    # LTE monitor log (if running)
+    MON_LOG=""
+    [ -f /tmp/lte_monitor.log ] && MON_LOG=$(tail -50 /tmp/lte_monitor.log)
+
+    # Conntrack
+    CT_COUNT=$(cat /proc/sys/net/netfilter/nf_conntrack_count 2>/dev/null || echo 0)
+
+    jq -n \
+        --arg uptime "$UP" \
+        --arg rmnet_state "$RMNET_STATE" \
+        --arg rmnet_ip "$RMNET_IP" \
+        --arg rmnet_rx "$RMNET_RX" \
+        --arg rmnet_tx "$RMNET_TX" \
+        --arg signal "$SIGNAL" \
+        --arg rsrp "$RSRP_VAL" \
+        --arg dns "$DNS" \
+        --arg temps "$TEMPS" \
+        --arg bat_cap "$BAT_CAP" \
+        --arg bat_status "$BAT_ST" \
+        --arg hapd "$HAPD_2G" \
+        --arg hapd_ch "$HAPD_CH" \
+        --argjson wlan0_clients "$WLAN0_CLIENTS" \
+        --argjson wlan1_clients "$WLAN1_CLIENTS" \
+        --arg def_route "$DEF_ROUTE" \
+        --argjson ping_ok "$PING_OK" \
+        --arg load "$LOAD" \
+        --arg dmesg "$DMESG_TAIL" \
+        --arg syslog "$SYSLOG_TAIL" \
+        --arg monitor "$MON_LOG" \
+        --argjson conntrack "$CT_COUNT" \
+        '{
+            uptime: $uptime,
+            lte: {state: $rmnet_state, ip: $rmnet_ip, rx_bytes: $rmnet_rx, tx_bytes: $rmnet_tx, ping_ok: $ping_ok, signal: $signal, rsrp: $rsrp},
+            dns: $dns,
+            thermal: $temps,
+            battery: {capacity: $bat_cap, status: $bat_status},
+            wifi: {hostapd: $hapd, channel: $hapd_ch, clients_2g: $wlan0_clients, clients_5g: $wlan1_clients},
+            system: {load: $load, def_route: $def_route, conntrack: $conntrack},
+            dmesg: $dmesg,
+            syslog: $syslog,
+            monitor_log: $monitor
+        }'
     ;;
 
 *)
