@@ -36,10 +36,18 @@
     var _wifiSettings = null;
     var _currentMode = '2g'; // '2g', '5g', or 'dual'
 
-    // Detect WiFi mode from settings
+    // Detect WiFi mode from settings + CGI status.
+    // In dual mode, 5GAPStatus=0 in DB (5G via our watchdog, not core_app),
+    // so Wlan5gState may be 0 even though wlan1 is running.
+    // Use _cgiStatus.wlan1 + wlan_mode as ground truth for dual-band.
+    var _cgiStatus = null;
     function _detectMode(s) {
         var on2g = s.Wlan2gState === 1 || s.Wlan2gState === '1';
         var on5g = s.Wlan5gState === 1 || s.Wlan5gState === '1';
+        // Check real wlan1 status from CGI
+        if (_cgiStatus && _cgiStatus.wlan1 && _cgiStatus.wlan_mode === 'AP-AP') {
+            on5g = true;
+        }
         if (on2g && on5g) return 'dual';
         if (on5g) return '5g';
         return '2g';
@@ -127,8 +135,10 @@
             API.webapi('GetWlanSettings').catch(function() { return null; }),
             API.webapi('GetWlanState').catch(function() { return null; }),
             API.webapi('GetWlanSupportMode').catch(function() { return null; }),
+            API.cgiGet('wifi.cgi', { action: 'status' }).catch(function() { return null; }),
         ]).then(function(results) {
             var settings = results[0], state = results[1];
+            _cgiStatus = results[3];
 
             // Map nested AP2G/AP5G/AP2G_guest to flat names for display.
             // In AP-AP mode, wlan1 (5GHz) is the "guest AP" — prefer AP2G_guest
@@ -222,6 +232,8 @@
         var tab5g = $('#wifi-tab-5g');
         if (!tab5g || !settings) return;
         var ap5on = settings.Wlan5gState === 1 || settings.Wlan5gState === '1' || settings.WlanAPEnable_5G === '1';
+        // In dual mode, 5G status comes from CGI (wlan1 running), not DB
+        if (!ap5on && _cgiStatus && _cgiStatus.wlan1 && _cgiStatus.wlan_mode === 'AP-AP') ap5on = true;
 
         tab5g.innerHTML = '<div class="card">' +
             '<h3>' +

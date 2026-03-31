@@ -108,13 +108,13 @@
 
     function _apnDelete(i) {
         if (!confirm('Delete APN profile?')) return;
-        API.webapi('DeleteProfile', { ProfileID: String(_apnList[i].ProfileID) }).then(function() {
+        API.webapi('DeleteProfile', { ProfileID: parseInt(_apnList[i].ProfileID, 10) }).then(function() {
             _loadAPN();
         }).catch(function(e) { alert('Error: ' + e.message); });
     }
 
     function _apnDefault(i) {
-        API.webapi('SetDefaultProfile', { ProfileID: String(_apnList[i].ProfileID) }).then(function() {
+        API.webapi('SetDefaultProfile', { ProfileID: parseInt(_apnList[i].ProfileID, 10) }).then(function() {
             _loadAPN();
         }).catch(function(e) { alert('Error: ' + e.message); });
     }
