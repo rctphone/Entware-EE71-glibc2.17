@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=ee71-webui
-PKG_VERSION:=1.4.1
+PKG_VERSION:=1.5.0
 PKG_RELEASE:=1
 
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)
@@ -65,6 +65,7 @@ define Build/Prepare
 	mkdir -p $(PKG_BUILD_DIR)
 	$(CP) ./src/www $(PKG_BUILD_DIR)/
 	$(CP) ./src/cgi-bin $(PKG_BUILD_DIR)/
+	if [ -d ./src/speedtest-ookla ]; then $(CP) ./src/speedtest-ookla $(PKG_BUILD_DIR)/speedtest; fi
 	# Download esbuild (host tool, cached in staging)
 	if [ ! -x $(ESBUILD) ]; then \
 		mkdir -p $(STAGING_DIR_HOST)/bin; \
@@ -128,6 +129,15 @@ define Package/ee71-webui/install
 	$(INSTALL_DIR) $(1)/etc/rc5.d
 	ln -sf ../init.d/wireguard $(1)/etc/rc5.d/S80wireguard
 	# sms_forward config provided by ee71-sms-forward package
+	# Speedtest Ookla Custom assets
+	if [ -d $(PKG_BUILD_DIR)/speedtest ]; then \
+		$(INSTALL_DIR) $(1)/jrd-resource/speedtest; \
+		$(CP) $(PKG_BUILD_DIR)/speedtest/cgi-bin $(1)/jrd-resource/speedtest/; \
+		find $(1)/jrd-resource/speedtest/cgi-bin -type f -exec chmod 755 {} \; ; \
+		$(CP) $(PKG_BUILD_DIR)/speedtest/css $(1)/jrd-resource/speedtest/; \
+		$(CP) $(PKG_BUILD_DIR)/speedtest/js $(1)/jrd-resource/speedtest/; \
+		$(CP) $(PKG_BUILD_DIR)/speedtest/static $(1)/jrd-resource/speedtest/; \
+	fi
 endef
 
 $(eval $(call BuildPackage,ee71-webui))

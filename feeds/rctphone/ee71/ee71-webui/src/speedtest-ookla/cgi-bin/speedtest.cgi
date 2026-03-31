@@ -59,6 +59,7 @@ if [ "$NEED_FETCH" = "1" ]; then
                 -e 's/"ispName":"[^"]*"/"ispName":""/' \
                 -e 's/"ispId":[0-9][0-9]*/"ispId":0/' \
                 -e 's|https:\\u002F\\u002F|http:\\u002F\\u002F|g' \
+                -e 's/"serverList":\[[^]]*\]/"serverList":[]/' \
             )
             echo "$PARAMS" > "${PARAMS_CACHE}.tmp" && mv -f "${PARAMS_CACHE}.tmp" "$PARAMS_CACHE"
         fi
@@ -79,6 +80,7 @@ if [ ! -f "$PARAMS_CACHE" ]; then
                 -e 's/"ipAddress":"[^"]*"/"ipAddress":""/' \
                 -e 's/"ispName":"[^"]*"/"ispName":""/' \
                 -e 's/"ispId":[0-9][0-9]*/"ispId":0/' \
+                -e 's/"serverList":\[[^]]*\]/"serverList":[]/' \
             )
             echo "$FALLBACK" > "$PARAMS_CACHE"
         fi
