@@ -287,15 +287,20 @@
         }
 
         if (data.system) {
-            // Restore system configs via ssh.cgi (has POST + CSRF)
             var sys = data.system;
-            if (sys.authorized_keys) {
-                tasks.push(API.cgiPost('ssh.cgi', {
-                    action: 'restore-keys', keys: sys.authorized_keys,
-                }).then(function() { applied.push('system:ssh_keys'); }).catch(function() {}));
-            }
+            // Restore files via system.cgi restore-extra
+            var restoreData = { action: 'restore-extra' };
+            if (sys.authorized_keys) restoreData.authorized_keys = sys.authorized_keys;
+            if (sys.hosts) restoreData.hosts = sys.hosts;
+            if (sys.wg_init) restoreData.wg_init = sys.wg_init;
+            if (sys.user_apn_profiles) restoreData.user_apn_profiles = sys.user_apn_profiles;
+            if (sys.disabled_inits) restoreData.disabled_inits = sys.disabled_inits;
+            tasks.push(API.cgiPost('system.cgi', restoreData).then(function(r) {
+                if (r && r.applied) applied.push('system:' + r.applied);
+            }).catch(function() {}));
+
+            // Restore WlanMode via wifi.cgi apply (triggers XML patch)
             if (sys.wlan_mode && sys.wlan_mode !== 'AP') {
-                // Set WiFi mode via wifi.cgi apply (triggers WlanMode change)
                 tasks.push(API.cgiPost('wifi.cgi', {
                     action: 'apply', mode: sys.wlan_mode === 'AP-AP' ? 'dual' : '2g',
                     AP2G: { ApStatus: 1 }, AP5G: { ApStatus: 0 },

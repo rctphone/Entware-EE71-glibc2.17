@@ -1,11 +1,38 @@
 #!/bin/sh
-# system.cgi — Read-only system information endpoints
-# All actions are GET-only, no CSRF needed
+# system.cgi — System information and config restore endpoints
 echo "Content-Type: application/json"
 echo ""
 
-ACTION="${QUERY_STRING%%&*}"
-ACTION="${ACTION#action=}"
+# For POST actions: read body and check CSRF
+BODY=""
+if [ "$REQUEST_METHOD" = "POST" ]; then
+    BODY=$(cat)
+    ACTION=$(echo "$BODY" | jq -r '.action // empty')
+    if [ "$HTTP_X_EE71_REQUEST" != "1" ]; then
+        echo '{"error":"Missing X-EE71-Request header"}'; exit 0
+    fi
+    LAN_IP=$(ifconfig bridge0 2>/dev/null | sed -n 's/.*inet addr:\([^ ]*\).*/\1/p')
+    LAN_IP="${LAN_IP:-192.168.1.1}"
+    HOSTNAME=$(cat /etc/hostname 2>/dev/null)
+    REQ_HOST=$(echo "$HTTP_HOST" | sed 's/:.*//')
+    _origin_ok() {
+        case "$1" in
+            "http://${LAN_IP}"*|"http://${HOSTNAME}"*) return 0 ;;
+        esac
+        [ -n "$REQ_HOST" ] && case "$1" in
+            "http://${REQ_HOST}"*) return 0 ;;
+        esac
+        return 1
+    }
+    if [ -n "$HTTP_ORIGIN" ]; then
+        _origin_ok "$HTTP_ORIGIN" || { echo '{"error":"Invalid origin"}'; exit 0; }
+    elif [ -n "$HTTP_REFERER" ]; then
+        _origin_ok "$HTTP_REFERER" || { echo '{"error":"Invalid origin"}'; exit 0; }
+    fi
+else
+    ACTION="${QUERY_STRING%%&*}"
+    ACTION="${ACTION#action=}"
+fi
 
 case "$ACTION" in
 
@@ -215,6 +242,75 @@ wifi_power)
     P5G=$(sqlite3 "$DB" "SELECT value FROM wifi_info WHERE items='5GPowerLevel';" 2>/dev/null)
     jq -n --argjson p2g "${P2G:-0}" --argjson p5g "${P5G:-0}" \
         '{"2GPowerLevel":$p2g,"5GPowerLevel":$p5g}'
+    ;;
+
+restore-extra)
+    # Restore custom config files from backup JSON.
+    # Expects POST with JSON body: { action: "restore-extra", ... }
+    [ "$REQUEST_METHOD" != "POST" ] && { echo '{"error":"POST required"}'; exit 0; }
+
+    APPLIED=""
+
+    # Restore /etc/hosts
+    HOSTS=$(echo "$BODY" | jq -r '.hosts // empty')
+    if [ -n "$HOSTS" ]; then
+        printf '%s\n' "$HOSTS" > /etc/hosts
+        kill -HUP "$(pidof dnsmasq)" 2>/dev/null
+        APPLIED="${APPLIED}hosts,"
+    fi
+
+    # Restore authorized_keys
+    AUTH_KEYS=$(echo "$BODY" | jq -r '.authorized_keys // empty')
+    if [ -n "$AUTH_KEYS" ]; then
+        mkdir -p /etc/dropbear
+        printf '%s\n' "$AUTH_KEYS" > /etc/dropbear/authorized_keys
+        chmod 600 /etc/dropbear/authorized_keys
+        APPLIED="${APPLIED}ssh_keys,"
+    fi
+
+    # Restore WG autostart init script
+    WG_INIT=$(echo "$BODY" | jq -r '.wg_init // empty')
+    if [ -n "$WG_INIT" ]; then
+        printf '%s\n' "$WG_INIT" > /etc/init.d/wg_vadim
+        chmod +x /etc/init.d/wg_vadim
+        [ ! -e /etc/rc5.d/S85wg_vadim ] && ln -s ../init.d/wg_vadim /etc/rc5.d/S85wg_vadim
+        APPLIED="${APPLIED}wg_init,"
+    fi
+
+    # Restore user-created APN profiles
+    APN_COUNT=$(echo "$BODY" | jq '.user_apn_profiles | length' 2>/dev/null)
+    if [ "${APN_COUNT:-0}" -gt 0 ]; then
+        mkdir -p /jrd-resource/resource/profile/create
+        I=0
+        while [ "$I" -lt "$APN_COUNT" ]; do
+            FNAME=$(echo "$BODY" | jq -r ".user_apn_profiles[$I].name")
+            FCONTENT=$(echo "$BODY" | jq -r ".user_apn_profiles[$I].content")
+            if [ -n "$FNAME" ] && [ -n "$FCONTENT" ]; then
+                printf '%s' "$FCONTENT" > "/jrd-resource/resource/profile/create/$FNAME"
+            fi
+            I=$((I + 1))
+        done
+        APPLIED="${APPLIED}user_apn,"
+    fi
+
+    # Restore disabled init scripts
+    DIS_COUNT=$(echo "$BODY" | jq '.disabled_inits | length' 2>/dev/null)
+    if [ "${DIS_COUNT:-0}" -gt 0 ]; then
+        I=0
+        while [ "$I" -lt "$DIS_COUNT" ]; do
+            SCRIPT=$(echo "$BODY" | jq -r ".disabled_inits[$I]")
+            SRC="/etc/rc5.d/$SCRIPT"
+            DST="/etc/rc5.d/DISABLED_$SCRIPT"
+            if [ -e "$SRC" ] && [ ! -e "$DST" ]; then
+                mv "$SRC" "$DST"
+            fi
+            I=$((I + 1))
+        done
+        APPLIED="${APPLIED}disabled_inits,"
+    fi
+
+    APPLIED=$(echo "$APPLIED" | sed 's/,$//')
+    jq -n --arg applied "$APPLIED" '{"ok":true,"applied":$applied}'
     ;;
 
 backup-extra)
