@@ -267,6 +267,7 @@ static int generate_hostapd_wlan1(const char *guest_json)
     int channel = 36;
     int hidden = 0;
     int bandwidth = 0;
+    int max_numsta = 15;
 
     json_get_string(guest_json, "Ssid", ssid, sizeof(ssid));
     json_get_string(guest_json, "WpaKey", key, sizeof(key));
@@ -274,10 +275,13 @@ static int generate_hostapd_wlan1(const char *guest_json)
     channel  = json_get_int(guest_json, "Channel", channel);
     hidden   = json_get_int(guest_json, "SsidHidden", hidden);
     bandwidth = json_get_int(guest_json, "Bandwidth", bandwidth);
+    max_numsta = json_get_int(guest_json, "max_numsta", max_numsta);
 
     if (channel == 0) channel = 36;
 
-    /* Determine HT/VHT capabilities based on bandwidth */
+    /* Determine HT/VHT capabilities based on bandwidth.
+     * Default (0=auto): 40 MHz — safer, 80MHz may fail if secondary
+     * channels are occupied (hostapd HT_SCAN failure). */
     const char *ht_capab;
     int vht_oper_chwidth;
     switch (bandwidth) {
@@ -302,6 +306,7 @@ static int generate_hostapd_wlan1(const char *guest_json)
         "ctrl_interface_group=0\n"
         "ssid=%s\n"
         "ignore_broadcast_ssid=%d\n"
+        "max_num_sta=%d\n"
         "ap_isolate=0\n"
         "beacon_int=100\n"
         "hw_mode=a\n"
@@ -309,7 +314,7 @@ static int generate_hostapd_wlan1(const char *guest_json)
         "ieee80211ac=1\n"
         "channel=%d\n"
         "country_code=GB\n",
-        BRIDGE, ssid, hidden, channel);
+        BRIDGE, ssid, hidden, max_numsta, channel);
 
     if (ht_capab[0])
         fprintf(f, "ht_capab=%s\n", ht_capab);

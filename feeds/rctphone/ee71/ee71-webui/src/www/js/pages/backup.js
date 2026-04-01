@@ -39,9 +39,10 @@
             API.cgiGet('usbcomp.cgi', { action: 'status' }).catch(function() { return null; }),
             API.cgiGet('power.cgi', { action: 'status' }).catch(function() { return null; }),
             API.webapi('GetProfileList').catch(function() { return null; }),
+            API.webapi('GetConnectionSettings').catch(function() { return null; }),
         ]).then(function(r) {
             var wifi = r[0], lan = r[1], ttl = r[2], wg = r[3], ss = r[4];
-            var sms = r[5], ssh = r[6], sshKeys = r[7], usb = r[8], power = r[9], apn = r[10];
+            var sms = r[5], ssh = r[6], sshKeys = r[7], usb = r[8], power = r[9], apn = r[10], conn = r[11];
 
             var config = {
                 version: 1,
@@ -97,6 +98,13 @@
             var apnList = apn && (apn.ProfileList || apn);
             if (Array.isArray(apnList) && apnList.length) config.apn = apnList;
 
+            if (conn) config.connection = {
+                ConnectMode: conn.ConnectMode,
+                ConnOffTime: conn.ConnOffTime,
+                RoamingConnect: conn.RoamingConnect,
+                PdpType: conn.PdpType,
+            };
+
             var blob = new Blob([JSON.stringify(config, null, 2)], { type: 'application/json' });
             var url = URL.createObjectURL(blob);
             var a = document.createElement('a');
@@ -136,6 +144,7 @@
                 if (data.usb) sections.push('usb');
                 if (data.power) sections.push('power');
                 if (data.apn) sections.push('apn');
+                if (data.connection) sections.push('connection');
                 _backupData = data;
                 if (result) result.innerHTML = 'Valid config v1. Sections: ' + escHtml(sections.join(', ') || 'none') +
                     '<br><button class="mt-1" ' + actionAttr('backupImport') + '>Import Now</button>';
@@ -245,13 +254,24 @@
         if (data.apn && Array.isArray(data.apn)) {
             data.apn.forEach(function(p) {
                 if (!p.ProfileName || !p.APN) return;
+                var pdp = parseInt(p.PdpType, 10);
                 tasks.push(API.webapi('AddNewProfile', {
                     ProfileName: p.ProfileName, APN: p.APN,
-                    AuthType: String(p.AuthType || 0),
-                    Username: p.Username || '', Password: p.Password || '',
-                    PdpType: String(p.PdpType || 0),
+                    AuthType: parseInt(p.AuthType, 10) || 0,
+                    UserName: p.UserName || p.Username || '',
+                    Password: p.Password || '',
+                    PdpType: isNaN(pdp) ? 0 : pdp,
                 }).then(function() { applied.push('apn'); }));
             });
+        }
+
+        if (data.connection) {
+            var cp = {};
+            if (data.connection.ConnectMode != null) cp.ConnectMode = parseInt(data.connection.ConnectMode, 10);
+            if (data.connection.ConnOffTime != null) cp.ConnOffTime = parseInt(data.connection.ConnOffTime, 10);
+            if (data.connection.RoamingConnect != null) cp.RoamingConnect = parseInt(data.connection.RoamingConnect, 10);
+            if (data.connection.PdpType != null) { var pv = parseInt(data.connection.PdpType, 10); cp.PdpType = isNaN(pv) ? 3 : pv; }
+            tasks.push(API.webapi('SetConnectionSettings', cp).then(function() { applied.push('connection'); }));
         }
 
         if (el) el.textContent = 'Importing...';
