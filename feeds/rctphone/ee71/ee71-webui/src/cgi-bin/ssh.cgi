@@ -217,6 +217,19 @@ remove_key)
     fi
     ;;
 
+restore-keys)
+    # Restore authorized_keys from backup
+    KEYS=$(echo "$BODY" | jq -r '.keys // empty')
+    if [ -n "$KEYS" ]; then
+        mkdir -p /etc/dropbear
+        printf '%s\n' "$KEYS" > /etc/dropbear/authorized_keys
+        chmod 600 /etc/dropbear/authorized_keys
+        printf '{"ok":true}'
+    else
+        printf '{"error":"no keys provided"}'
+    fi
+    ;;
+
 *)
     printf '{"error":"unknown action"}'
     ;;

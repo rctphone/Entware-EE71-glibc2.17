@@ -217,6 +217,41 @@ wifi_power)
         '{"2GPowerLevel":$p2g,"5GPowerLevel":$p5g}'
     ;;
 
+backup-extra)
+    # Export custom config files not covered by webapi/CGI endpoints.
+    # Used by backup.js for complete configuration export.
+    WLAN_MODE=$(sed -n 's/.*<WlanMode>\(.*\)<\/WlanMode>.*/\1/p' /etc/mobileap_cfg.xml 2>/dev/null)
+    AUTH_KEYS=$(cat /etc/dropbear/authorized_keys 2>/dev/null | head -20)
+    HOSTS=$(cat /etc/hosts 2>/dev/null)
+    WG_INIT=$(cat /etc/init.d/wg_vadim 2>/dev/null)
+
+    # User-created APN profiles (in /jrd-resource/resource/profile/create/)
+    APN_FILES=""
+    for F in /jrd-resource/resource/profile/create/profile*; do
+        [ -f "$F" ] || continue
+        NAME=$(basename "$F")
+        CONTENT=$(cat "$F")
+        APN_FILES="${APN_FILES}${APN_FILES:+,}$(jq -n --arg name "$NAME" --arg content "$CONTENT" \
+            '{"name":$name,"content":$content}')"
+    done
+
+    # Disabled init scripts
+    DISABLED=""
+    for D in /etc/rc5.d/DISABLED_*; do
+        [ -e "$D" ] || continue
+        DISABLED="${DISABLED}${DISABLED:+,}\"$(basename "$D" | sed 's/^DISABLED_//')\""
+    done
+
+    jq -n \
+        --arg wlan_mode "${WLAN_MODE:-AP}" \
+        --arg authorized_keys "$AUTH_KEYS" \
+        --arg hosts "$HOSTS" \
+        --arg wg_init "$WG_INIT" \
+        --argjson user_apn_profiles "[${APN_FILES}]" \
+        --argjson disabled_inits "[${DISABLED}]" \
+        '{wlan_mode:$wlan_mode,authorized_keys:$authorized_keys,hosts:$hosts,wg_init:$wg_init,user_apn_profiles:$user_apn_profiles,disabled_inits:$disabled_inits}'
+    ;;
+
 *)
     printf '{"error":"unknown action"}'
     ;;

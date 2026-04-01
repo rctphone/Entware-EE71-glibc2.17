@@ -40,9 +40,10 @@
             API.cgiGet('power.cgi', { action: 'status' }).catch(function() { return null; }),
             API.webapi('GetProfileList').catch(function() { return null; }),
             API.webapi('GetConnectionSettings').catch(function() { return null; }),
+            API.cgiGet('system.cgi', { action: 'backup-extra' }).catch(function() { return null; }),
         ]).then(function(r) {
             var wifi = r[0], lan = r[1], ttl = r[2], wg = r[3], ss = r[4];
-            var sms = r[5], ssh = r[6], sshKeys = r[7], usb = r[8], power = r[9], apn = r[10], conn = r[11];
+            var sms = r[5], ssh = r[6], sshKeys = r[7], usb = r[8], power = r[9], apn = r[10], conn = r[11], extra = r[12];
 
             var config = {
                 version: 1,
@@ -105,6 +106,16 @@
                 PdpType: conn.PdpType,
             };
 
+            if (extra) {
+                config.system = {};
+                if (extra.wlan_mode) config.system.wlan_mode = extra.wlan_mode;
+                if (extra.authorized_keys) config.system.authorized_keys = extra.authorized_keys;
+                if (extra.hosts) config.system.hosts = extra.hosts;
+                if (extra.wg_init) config.system.wg_init = extra.wg_init;
+                if (extra.user_apn_profiles && extra.user_apn_profiles.length) config.system.user_apn_profiles = extra.user_apn_profiles;
+                if (extra.disabled_inits && extra.disabled_inits.length) config.system.disabled_inits = extra.disabled_inits;
+            }
+
             var blob = new Blob([JSON.stringify(config, null, 2)], { type: 'application/json' });
             var url = URL.createObjectURL(blob);
             var a = document.createElement('a');
@@ -145,6 +156,7 @@
                 if (data.power) sections.push('power');
                 if (data.apn) sections.push('apn');
                 if (data.connection) sections.push('connection');
+                if (data.system) sections.push('system');
                 _backupData = data;
                 if (result) result.innerHTML = 'Valid config v1. Sections: ' + escHtml(sections.join(', ') || 'none') +
                     '<br><button class="mt-1" ' + actionAttr('backupImport') + '>Import Now</button>';
@@ -272,6 +284,23 @@
             if (data.connection.RoamingConnect != null) cp.RoamingConnect = parseInt(data.connection.RoamingConnect, 10);
             if (data.connection.PdpType != null) { var pv = parseInt(data.connection.PdpType, 10); cp.PdpType = isNaN(pv) ? 3 : pv; }
             tasks.push(API.webapi('SetConnectionSettings', cp).then(function() { applied.push('connection'); }));
+        }
+
+        if (data.system) {
+            // Restore system configs via ssh.cgi (has POST + CSRF)
+            var sys = data.system;
+            if (sys.authorized_keys) {
+                tasks.push(API.cgiPost('ssh.cgi', {
+                    action: 'restore-keys', keys: sys.authorized_keys,
+                }).then(function() { applied.push('system:ssh_keys'); }).catch(function() {}));
+            }
+            if (sys.wlan_mode && sys.wlan_mode !== 'AP') {
+                // Set WiFi mode via wifi.cgi apply (triggers WlanMode change)
+                tasks.push(API.cgiPost('wifi.cgi', {
+                    action: 'apply', mode: sys.wlan_mode === 'AP-AP' ? 'dual' : '2g',
+                    AP2G: { ApStatus: 1 }, AP5G: { ApStatus: 0 },
+                }).then(function() { applied.push('system:wlan_mode'); }).catch(function() {}));
+            }
         }
 
         if (el) el.textContent = 'Importing...';
