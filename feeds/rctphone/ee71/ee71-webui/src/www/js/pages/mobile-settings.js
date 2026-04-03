@@ -403,7 +403,7 @@
         };
         if (!params.ProfileName || !params.APN) { alert('Name and APN required'); return; }
         var method = _editingAPN !== null ? 'EditProfile' : 'AddNewProfile';
-        if (_editingAPN !== null) params.ProfileID = String(_apnList[_editingAPN].ProfileID);
+        if (_editingAPN !== null) params.ProfileID = parseInt(_apnList[_editingAPN].ProfileID, 10);
         API.webapi(method, params).then(function() {
             _loadAPNContent();
         }).catch(function(e) { alert('Error: ' + e.message); });
@@ -411,13 +411,13 @@
 
     function _msetApnDel(i) {
         if (!confirm('Delete APN profile?')) return;
-        API.webapi('DeleteProfile', { ProfileID: String(_apnList[i].ProfileID) }).then(function() {
+        API.webapi('DeleteProfile', { ProfileID: parseInt(_apnList[i].ProfileID, 10) }).then(function() {
             _loadAPNContent();
         }).catch(function(e) { alert('Error: ' + e.message); });
     }
 
     function _msetApnDef(i) {
-        API.webapi('SetDefaultProfile', { ProfileID: String(_apnList[i].ProfileID) }).then(function() {
+        API.webapi('SetDefaultProfile', { ProfileID: parseInt(_apnList[i].ProfileID, 10) }).then(function() {
             _loadAPNContent();
         }).catch(function(e) { alert('Error: ' + e.message); });
     }
