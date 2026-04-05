@@ -26,7 +26,7 @@
             if (list.length) {
                 html += '<table class="data-table"><thead><tr><th>Name</th><th>APN</th><th>Auth</th><th>Default</th><th></th></tr></thead><tbody>';
                 list.forEach(function(p, i) {
-                    var isDefault = p.IsDefault === 1 || p.IsDefault === '1';
+                    var isDefault = p.Default === 1 || p.Default === '1' || p.IsDefault === 1 || p.IsDefault === '1';
                     html += '<tr' + (isDefault ? ' class="text-bold"' : '') + '>' +
                         '<td>' + escHtml(p.ProfileName || '') + '</td>' +
                         '<td>' + escHtml(p.APN || '') + '</td>' +
@@ -35,7 +35,7 @@
                         '<td>' +
                             '<button class="btn-small" ' + actionAttr('apnEdit', [i]) + '>Edit</button> ' +
                             (!isDefault ? '<button class="btn-small" ' + actionAttr('apnDefault', [i]) + '>Set Default</button> ' : '') +
-                            '<button class="btn-small btn-danger" ' + actionAttr('apnDelete', [i]) + '>Del</button>' +
+                            (!isDefault ? '<button class="btn-small btn-danger" ' + actionAttr('apnDelete', [i]) + '>Del</button>' : '') +
                         '</td></tr>';
                 });
                 html += '</tbody></table>';
@@ -108,9 +108,23 @@
 
     function _apnDelete(i) {
         if (!confirm('Delete APN profile?')) return;
-        API.webapi('DeleteProfile', { ProfileID: parseInt(_apnList[i].ProfileID, 10) }).then(function() {
-            _loadAPN();
-        }).catch(function(e) { alert('Error: ' + e.message); });
+        var p = _apnList[i];
+        var pid = parseInt(p.ProfileID, 10);
+        var isDefault = p.Default === 1 || p.Default === '1' || p.IsDefault === 1 || p.IsDefault === '1';
+        var doDelete = function() {
+            API.webapi('DeleteProfile', { ProfileID: pid }).then(function() {
+                _loadAPN();
+            }).catch(function(e) { alert('Error: ' + e.message); });
+        };
+        if (isDefault && _apnList.length > 1) {
+            var other = _apnList.find(function(op, oi) { return oi !== i; });
+            if (other) {
+                API.webapi('SetDefaultProfile', { ProfileID: parseInt(other.ProfileID, 10) }).then(doDelete)
+                    .catch(function(e) { alert('Error switching default: ' + e.message); });
+                return;
+            }
+        }
+        doDelete();
     }
 
     function _apnDefault(i) {
