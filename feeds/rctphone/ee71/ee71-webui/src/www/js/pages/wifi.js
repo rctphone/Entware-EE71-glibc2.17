@@ -41,16 +41,54 @@
     // so Wlan5gState may be 0 even though wlan1 is running.
     // Use _cgiStatus.wlan1 + wlan_mode as ground truth for dual-band.
     var _cgiStatus = null;
-    function _detectMode(s) {
-        var on2g = s.Wlan2gState === 1 || s.Wlan2gState === '1';
-        var on5g = s.Wlan5gState === 1 || s.Wlan5gState === '1';
-        // Check real wlan1 status from CGI
-        if (_cgiStatus && _cgiStatus.wlan1 && _cgiStatus.wlan_mode === 'AP-AP') {
-            on5g = true;
+    function _flagOn(value) {
+        return value === 1 || value === '1' || value === true;
+    }
+
+    function _wifiState(settings, state) {
+        var dualConfigured = !!(_cgiStatus && _cgiStatus.wlan_mode === 'AP-AP');
+        var running2g = _flagOn(settings && settings.Wlan2gState) ||
+            (!_flagOn(settings && settings.Wlan2gState) && state && _flagOn(state.WlanState));
+        var running5g = _flagOn(settings && settings.Wlan5gState) || _flagOn(settings && settings.WlanAPEnable_5G);
+
+        if (dualConfigured) {
+            if (_cgiStatus && typeof _cgiStatus.wlan0 === 'boolean') running2g = _cgiStatus.wlan0;
+            running5g = !!(_cgiStatus && _cgiStatus.wlan1);
+            return {
+                mode: 'dual',
+                configured2g: true,
+                configured5g: true,
+                running2g: running2g,
+                running5g: running5g,
+                degradedDual: !running5g
+            };
         }
-        if (on2g && on5g) return 'dual';
-        if (on5g) return '5g';
-        return '2g';
+
+        var configured5g = _flagOn(settings && settings.Wlan5gState) || _flagOn(settings && settings.WlanAPEnable_5G);
+        if (configured5g) {
+            if (_cgiStatus && typeof _cgiStatus.wlan0 === 'boolean') running5g = _cgiStatus.wlan0 || running5g;
+            return {
+                mode: '5g',
+                configured2g: false,
+                configured5g: true,
+                running2g: false,
+                running5g: running5g,
+                degradedDual: false
+            };
+        }
+        if (_cgiStatus && typeof _cgiStatus.wlan0 === 'boolean') running2g = _cgiStatus.wlan0;
+        return {
+            mode: '2g',
+            configured2g: true,
+            configured5g: false,
+            running2g: running2g,
+            running5g: false,
+            degradedDual: false
+        };
+    }
+
+    function _detectMode(s, state) {
+        return _wifiState(s, state).mode;
     }
 
     // Compute mode from desired toggle states
@@ -168,27 +206,28 @@
             }
 
             _wifiSettings = settings;
-            if (settings) _currentMode = _detectMode(settings);
+            if (settings) _currentMode = _detectMode(settings, state);
 
             // --- 2.4 GHz ---
             _render2g(settings, state);
 
             // --- 5 GHz ---
-            _render5g(settings);
+            _render5g(settings, state);
         }).catch(function() {});
     }
 
     function _render2g(settings, state) {
         var tab2g = $('#wifi-tab-2g');
         if (!tab2g || !settings) return;
-        var wifiOn = settings.Wlan2gState === 1 || settings.Wlan2gState === '1' ||
-            (!settings.Wlan2gState && state && (state.WlanState === 1 || state.WlanState === '1'));
+        var wifi = _wifiState(settings, state);
+        var wifiOn = wifi.running2g;
+        var configured = wifi.configured2g;
 
         tab2g.innerHTML = '<div class="card">' +
             '<h3>' +
                 '2.4 GHz <span class="status-dot ' + (wifiOn ? 'green' : 'red') + '"></span>' +
                 '<span class="flex-spacer"></span>' +
-                '<label class="switch"><input type="checkbox" id="wifi-2g-sw"' + (wifiOn ? ' checked' : '') + '><span class="slider"></span></label>' +
+                '<label class="switch"><input type="checkbox" id="wifi-2g-sw"' + (configured ? ' checked' : '') + '><span class="slider"></span></label>' +
             '</h3>' +
             '<div class="float-field">' +
                 '<label>Network name (SSID)</label>' +
@@ -211,9 +250,9 @@
         '</div>';
 
         $('#wifi-2g-sw').addEventListener('change', function() {
-            var want2g = !wifiOn;
-            var s = _wifiSettings || {};
-            var cur5g = s.Wlan5gState === 1 || s.Wlan5gState === '1';
+            var want2g = this.checked;
+            var cur = _wifiState(_wifiSettings || {}, state);
+            var cur5g = cur.configured5g;
             if (!want2g && !cur5g) {
                 _toast('Cannot disable both bands', true);
                 this.checked = true;
@@ -228,19 +267,20 @@
         });
     }
 
-    function _render5g(settings) {
+    function _render5g(settings, state) {
         var tab5g = $('#wifi-tab-5g');
         if (!tab5g || !settings) return;
-        var ap5on = settings.Wlan5gState === 1 || settings.Wlan5gState === '1' || settings.WlanAPEnable_5G === '1';
-        // In dual mode, 5G status comes from CGI (wlan1 running), not DB
-        if (!ap5on && _cgiStatus && _cgiStatus.wlan1 && _cgiStatus.wlan_mode === 'AP-AP') ap5on = true;
+        var wifi = _wifiState(settings, state);
+        var ap5on = wifi.running5g;
+        var configured = wifi.configured5g;
 
         tab5g.innerHTML = '<div class="card">' +
             '<h3>' +
                 '5 GHz <span class="status-dot ' + (ap5on ? 'green' : 'red') + '"></span>' +
                 '<span class="flex-spacer"></span>' +
-                '<label class="switch"><input type="checkbox" id="wifi-5g-sw"' + (ap5on ? ' checked' : '') + '><span class="slider"></span></label>' +
+                '<label class="switch"><input type="checkbox" id="wifi-5g-sw"' + (configured ? ' checked' : '') + '><span class="slider"></span></label>' +
             '</h3>' +
+            (wifi.degradedDual ? '<div class="form-actions mb-1"><button class="btn-outline" ' + actionAttr('repairWifi5g') + '>Repair 5 GHz</button></div>' : '') +
             '<div class="float-field">' +
                 '<label>Network name (SSID)</label>' +
                 '<input type="text" id="w5-ssid" value="' + escHtml(settings.WlanSSID_5G || settings.WlanSSID || '') + '" maxlength="32">' +
@@ -262,9 +302,9 @@
         '</div>';
 
         $('#wifi-5g-sw').addEventListener('change', function() {
-            var want5g = !ap5on;
-            var s = _wifiSettings || {};
-            var cur2g = s.Wlan2gState === 1 || s.Wlan2gState === '1';
+            var want5g = this.checked;
+            var cur = _wifiState(_wifiSettings || {}, state);
+            var cur2g = cur.configured2g;
             if (!want5g && !cur2g) {
                 _toast('Cannot disable both bands', true);
                 this.checked = true;
@@ -277,6 +317,14 @@
                 setTimeout(_loadWifiSettings, 8000);
             }).catch(function(e) { _toast('Error: ' + e.message, true); });
         });
+    }
+
+    function _repairWifi5g() {
+        _toast('Restarting 5 GHz...');
+        API.cgiPost('wifi.cgi', { action: 'restart', target: 'guest' }).then(function() {
+            _toast('5 GHz restart requested');
+            setTimeout(_loadWifiSettings, 5000);
+        }).catch(function(e) { _toast('Error: ' + e.message, true); });
     }
 
     function _securityOptions(current) {
@@ -453,4 +501,5 @@
     App._saveWifiAll = _saveWifiAll;
     App._showWifiAdv = _showWifiAdv;
     App._togglePassVis = _togglePassVis;
+    App._repairWifi5g = _repairWifi5g;
 })();

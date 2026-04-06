@@ -101,7 +101,7 @@
 
             if (conn) config.connection = {
                 ConnectMode: conn.ConnectMode,
-                ConnOffTime: conn.ConnOffTime,
+                IdleTime: conn.IdleTime,
                 RoamingConnect: conn.RoamingConnect,
                 PdpType: conn.PdpType,
             };
@@ -280,7 +280,7 @@
         if (data.connection) {
             var cp = {};
             if (data.connection.ConnectMode != null) cp.ConnectMode = parseInt(data.connection.ConnectMode, 10);
-            if (data.connection.ConnOffTime != null) cp.ConnOffTime = parseInt(data.connection.ConnOffTime, 10);
+            if (data.connection.IdleTime != null) cp.IdleTime = parseInt(data.connection.IdleTime, 10);
             if (data.connection.RoamingConnect != null) cp.RoamingConnect = parseInt(data.connection.RoamingConnect, 10);
             if (data.connection.PdpType != null) { var pv = parseInt(data.connection.PdpType, 10); cp.PdpType = isNaN(pv) ? 3 : pv; }
             tasks.push(API.webapi('SetConnectionSettings', cp).then(function() { applied.push('connection'); }));

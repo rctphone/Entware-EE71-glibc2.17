@@ -8,6 +8,52 @@
     var _apnList = [];
     var _editingAPN = null;
 
+    function _isEmptyApnValue(value) {
+        var raw = value == null ? '' : String(value).trim();
+        return !raw || raw.toLowerCase() === 'null';
+    }
+
+    function _isBrokenApnProfile(profile) {
+        if (!profile) return false;
+        return _isEmptyApnValue(profile.ProfileName) || _isEmptyApnValue(profile.APN);
+    }
+
+    function _findReplacementApnDefault(excludeIds) {
+        return _apnList.find(function(profile) {
+            var pid = parseInt(profile.ProfileID, 10);
+            return !isNaN(pid) && excludeIds.indexOf(pid) === -1 && !_isBrokenApnProfile(profile);
+        }) || null;
+    }
+
+    function _deleteBrokenApnProfiles(pending, replacement) {
+        if (!pending.length) {
+            _loadAPNContent();
+            return;
+        }
+        var current = pending.shift();
+        var pid = parseInt(current.ProfileID, 10);
+        if (isNaN(pid)) {
+            _deleteBrokenApnProfiles(pending, replacement);
+            return;
+        }
+        var isDefault = current.Default === 1 || current.Default === '1' || current.IsDefault === 1 || current.IsDefault === '1';
+        var deleteNow = function() {
+            API.webapi('DeleteProfile', { ProfileID: pid }).then(function() {
+                _deleteBrokenApnProfiles(pending, replacement);
+            }).catch(function(e) { alert('Error: ' + e.message); });
+        };
+        if (isDefault && replacement) {
+            API.webapi('SetDefaultProfile', { ProfileID: parseInt(replacement.ProfileID, 10) }).then(deleteNow)
+                .catch(function(e) { alert('Error switching default: ' + e.message); });
+            return;
+        }
+        if (isDefault && !replacement) {
+            alert('Cannot delete the default broken profile because there is no valid replacement profile.');
+            return;
+        }
+        deleteNow();
+    }
+
     function renderMobileSettings(container) {
         container.innerHTML =
             '<h2>Settings</h2>' +
@@ -70,19 +116,21 @@
 
         Promise.all([
             API.webapi('GetConnectionSettings').catch(function() { return null; }),
+            API.webapi('GetNetworkSettings').catch(function() { return null; }),
             API.webapi('GetNetworkInfo').catch(function() { return null; }),
             API.webapi('GetConnectionState').catch(function() { return null; }),
             API.webapi('GetUsageSettings').catch(function() { return null; }),
         ]).then(function(results) {
-            var connSettings = results[0], netInfo = results[1], connSt = results[2], usage = results[3];
+            var connSettings = results[0], networkSettings = results[1], netInfo = results[2], connSt = results[3], usage = results[4];
             var cs = connSettings || {};
+            var ns = networkSettings || {};
             var us = usage || {};
 
-            var currentMode = cs.NetselectionMode || cs.NetworkMode || 'auto';
-            var netSelMode = cs.NetselectionMode || '0';
+            var currentMode = ns.NetworkMode != null ? String(ns.NetworkMode) : '0';
+            var netSelMode = ns.NetselectionMode != null ? String(ns.NetselectionMode) : '0';
             var connMode = cs.ConnectMode != null ? String(cs.ConnectMode) : '1';
             var roaming = cs.RoamingConnect || '0';
-            var idleTime = cs.ConnOffTime || '0';
+            var idleTime = cs.IdleTime != null ? cs.IdleTime : '0';
             var pdpType = String(cs.PdpType != null ? cs.PdpType : '3');
             _msPdpType = pdpType;
             var connected = connSt && (connSt.ConnectionStatus === 2 || connSt.ConnectionStatus === '2');
@@ -266,9 +314,10 @@
     // Connection settings
     function _msetSaveConn() {
         var pdp = parseInt($('#ms-pdptype').value, 10);
+        var idle = parseInt($('#ms-idle').value, 10) || 0;
         API.webapi('SetConnectionSettings', {
             ConnectMode: parseInt($('#ms-connmode').value, 10),
-            ConnOffTime: parseInt($('#ms-idle').value, 10) || 0,
+            IdleTime: idle,
             RoamingConnect: $('#ms-roaming').checked ? 1 : 0,
             PdpType: isNaN(pdp) ? 3 : pdp
         }).then(function() { alert('Saved.'); }).catch(function(e) { alert('Error: ' + e.message); });
@@ -324,14 +373,21 @@
             var list = profiles.ProfileList || profiles || [];
             if (!Array.isArray(list)) list = [];
             _apnList = list;
+            var brokenCount = list.filter(_isBrokenApnProfile).length;
 
             var html = '<div class="card"><h3>APN Profiles</h3>';
+            if (brokenCount > 0) {
+                html += '<div class="form-actions mb-1">' +
+                    '<button class="btn-outline-danger" ' + actionAttr('msetApnPurgeBroken') + '>Remove Empty/NULL Profiles (' + brokenCount + ')</button>' +
+                '</div>';
+            }
             if (list.length) {
                 html += '<table class="data-table"><thead><tr><th>Name</th><th>APN</th><th>Auth</th><th>Default</th><th></th></tr></thead><tbody>';
                 list.forEach(function(p, i) {
                     var isDefault = p.Default === 1 || p.Default === '1' || p.IsDefault === 1 || p.IsDefault === '1';
+                    var isBroken = _isBrokenApnProfile(p);
                     html += '<tr' + (isDefault ? ' class="text-bold"' : '') + '>' +
-                        '<td>' + escHtml(p.ProfileName || '') + '</td>' +
+                        '<td>' + escHtml(p.ProfileName || '') + (isBroken ? ' <span class="text-danger">(broken)</span>' : '') + '</td>' +
                         '<td>' + escHtml(p.APN || '') + '</td>' +
                         '<td>' + escHtml(p.AuthType == 0 ? 'None' : p.AuthType == 1 ? 'PAP' : p.AuthType == 2 ? 'CHAP' : String(p.AuthType || '')) + '</td>' +
                         '<td>' + (isDefault ? 'Yes' : '') + '</td>' +
@@ -435,6 +491,22 @@
         API.webapi('SetDefaultProfile', { ProfileID: parseInt(_apnList[i].ProfileID, 10) }).then(function() {
             _loadAPNContent();
         }).catch(function(e) { alert('Error: ' + e.message); });
+    }
+
+    function _msetApnPurgeBroken() {
+        var broken = _apnList.filter(_isBrokenApnProfile).sort(function(a, b) {
+            var aDefault = a && (a.Default === 1 || a.Default === '1' || a.IsDefault === 1 || a.IsDefault === '1');
+            var bDefault = b && (b.Default === 1 || b.Default === '1' || b.IsDefault === 1 || b.IsDefault === '1');
+            return aDefault === bDefault ? 0 : (aDefault ? 1 : -1);
+        });
+        if (!broken.length) {
+            alert('No empty/NULL profiles found.');
+            return;
+        }
+        if (!confirm('Delete ' + broken.length + ' empty/NULL APN profiles?')) return;
+        var brokenIds = broken.map(function(profile) { return parseInt(profile.ProfileID, 10); }).filter(function(pid) { return !isNaN(pid); });
+        var replacement = _findReplacementApnDefault(brokenIds);
+        _deleteBrokenApnProfiles(broken.slice(), replacement);
     }
 
     // --- AT Terminal tab (from at-terminal.js) ---
@@ -589,6 +661,7 @@
     App._msetApnSave = _msetApnSave;
     App._msetApnDel = _msetApnDel;
     App._msetApnDef = _msetApnDef;
+    App._msetApnPurgeBroken = _msetApnPurgeBroken;
     App._msetAtClear = _msetAtClear;
     App._msetAtSend = _msetAtSend;
     App._msetAtDrop = _msetAtDrop;

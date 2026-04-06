@@ -270,19 +270,21 @@
 
         Promise.all([
             API.webapi('GetConnectionSettings').catch(function() { return null; }),
+            API.webapi('GetNetworkSettings').catch(function() { return null; }),
             API.webapi('GetNetworkInfo').catch(function() { return null; }),
             API.webapi('GetConnectionState').catch(function() { return null; }),
             API.webapi('GetUsageSettings').catch(function() { return null; }),
         ]).then(function(results) {
-            var connSettings = results[0], netInfo = results[1], connSt = results[2], usage = results[3];
+            var connSettings = results[0], networkSettings = results[1], netInfo = results[2], connSt = results[3], usage = results[4];
             var cs = connSettings || {};
+            var ns = networkSettings || {};
             var us = usage || {};
 
-            var currentMode = cs.NetselectionMode || cs.NetworkMode || 'auto';
-            var netSelMode = cs.NetselectionMode || '0';
+            var currentMode = ns.NetworkMode != null ? String(ns.NetworkMode) : '0';
+            var netSelMode = ns.NetselectionMode != null ? String(ns.NetselectionMode) : '0';
             var connMode = cs.ConnectMode != null ? String(cs.ConnectMode) : '1';
             var roaming = cs.RoamingConnect || '0';
-            var idleTime = cs.ConnOffTime || '0';
+            var idleTime = cs.IdleTime != null ? cs.IdleTime : '0';
             var pdpType = String(cs.PdpType != null ? cs.PdpType : '3');
             _connPdpType = pdpType;
             var connected = connSt && (connSt.ConnectionStatus === 2 || connSt.ConnectionStatus === '2');
@@ -468,9 +470,10 @@
     // Feature 5: Connection settings
     function _connSaveConn() {
         var pdp = parseInt($('#m-pdptype').value, 10);
+        var idle = parseInt($('#m-idle').value, 10) || 0;
         var params = {
             ConnectMode: parseInt($('#m-connmode').value, 10),
-            ConnOffTime: parseInt($('#m-idle').value, 10) || 0,
+            IdleTime: idle,
             RoamingConnect: $('#m-roaming').checked ? 1 : 0,
             PdpType: isNaN(pdp) ? 3 : pdp
         };

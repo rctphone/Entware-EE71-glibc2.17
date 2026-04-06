@@ -5,7 +5,10 @@
 
     var _fwTab = 'portfwd';
     var _pfRules = [];
+    var _ipfBlacklist = [];
+    var _ipfAllowlist = [];
     var _ipfRules = [];
+    var _ipfPolicy = '0';
 
     function renderFirewall(container) {
         container.innerHTML =
@@ -131,13 +134,102 @@
         if (overlay) overlay.remove();
     }
 
+    function _pfProtoLabel(value) {
+        var raw = String(value == null ? '' : value).toUpperCase();
+        if (raw === '6') return 'TCP';
+        if (raw === '17') return 'UDP';
+        if (raw === '253') return 'TCP+UDP';
+        return raw || 'TCP';
+    }
+
+    function _pfProtoCode(label) {
+        return parseInt(label, 10) || 0;
+    }
+
+    function _normalizePortFwdRule(rule, index) {
+        return {
+            list_id: rule && rule.list_id != null ? String(rule.list_id) : String(index),
+            portfwd_name: rule ? (rule.portfwd_name || '') : '',
+            fwding_protocol: String(rule && rule.fwding_protocol != null ? rule.fwding_protocol : 6),
+            global_port: String(rule && rule.global_port != null ? rule.global_port : ''),
+            private_ip: rule ? (rule.private_ip || '') : '',
+            private_port: String(rule && rule.private_port != null ? rule.private_port : ''),
+            fwding_status: String(rule && rule.fwding_status != null ? rule.fwding_status : 0)
+        };
+    }
+
+    function _portFwdPayload(rule) {
+        return {
+            list_id: rule.list_id,
+            portfwd_name: rule.portfwd_name,
+            private_ip: rule.private_ip,
+            private_port: Number(rule.private_port),
+            global_port: Number(rule.global_port),
+            fwding_protocol: Number(rule.fwding_protocol),
+            fwding_status: Number(rule.fwding_status)
+        };
+    }
+
+    function _normalizeIpFilterRule(rule, index) {
+        return {
+            list_id: rule && rule.list_id != null ? String(rule.list_id) : String(index),
+            lan_ip: rule ? (rule.lan_ip || '') : '',
+            lan_port: String(rule && rule.lan_port != null ? rule.lan_port : ''),
+            wan_ip: rule ? (rule.wan_ip || '') : '',
+            wan_port: String(rule && rule.wan_port != null ? rule.wan_port : ''),
+            ip_protocol: String(rule && rule.ip_protocol != null ? rule.ip_protocol : 17),
+            ip_status: String(rule && rule.ip_status != null ? rule.ip_status : 1)
+        };
+    }
+
+    function _serializeIpFilterRule(rule, index) {
+        return {
+            list_id: rule.list_id != null && rule.list_id !== '' ? String(rule.list_id) : String(index),
+            lan_ip: rule.lan_ip,
+            lan_port: Number(rule.lan_port),
+            wan_ip: rule.wan_ip,
+            wan_port: Number(rule.wan_port),
+            ip_protocol: Number(rule.ip_protocol),
+            ip_status: Number(rule.ip_status)
+        };
+    }
+
+    function _getActiveIpFilterRules(policy) {
+        return String(policy) === '1' ? _ipfBlacklist : _ipfAllowlist;
+    }
+
+    function _setActiveIpFilterRules(policy, rules) {
+        if (String(policy) === '1') {
+            _ipfBlacklist = rules;
+        } else {
+            _ipfAllowlist = rules;
+        }
+        _ipfRules = _getActiveIpFilterRules(policy).slice();
+    }
+
+    function _savePortFwdRules(rules) {
+        return API.webapi('SetPortFwding', {
+            portfwd_list: rules.map(_portFwdPayload)
+        });
+    }
+
+    function _saveIpFilterRules(policy) {
+        var rules = _getActiveIpFilterRules(policy);
+        return API.webapi('SetIPFilter', {
+            filter_policy: parseInt(policy, 10) || 0,
+            ipFilter_list: rules.map(_serializeIpFilterRule)
+        });
+    }
+
     // --- Port Forwarding ---
 
     function _loadPortFwd() {
         var el = $('#fw-tab-portfwd');
         if (!el) return;
-        API.webapi('GetPortFwding').then(function(data) {
-            var rules = data && data.PortFwdingList ? data.PortFwdingList : [];
+        API.webapi('getPortFwding').then(function(data) {
+            var rules = data && data.portfwd_list;
+            if (!Array.isArray(rules)) rules = [];
+            rules = rules.map(_normalizePortFwdRule);
             _pfRules = rules;
 
             var html = '<div class="card">' +
@@ -155,18 +247,18 @@
                     '</tr></thead><tbody>';
                 for (var i = 0; i < rules.length; i++) {
                     var r = rules[i];
-                    var enabled = r.Enable === '1' || r.Enable === 1;
+                    var enabled = r.fwding_status === '1';
                     html += '<tr>' +
                         '<td class="drag-handle">\u2807</td>' +
                         '<td><label class="switch"><input type="checkbox"' + (enabled ? ' checked' : '') + ' ' + actionAttr('togglePF', [i]) + '><span class="slider"></span></label></td>' +
-                        '<td>' + escHtml(r.Protocol || '') + '</td>' +
-                        '<td>' + escHtml(r.WanPort || r.ExternalPort || '') + '</td>' +
-                        '<td>' + escHtml(r.LanIP || r.InternalIP || '') + '</td>' +
-                        '<td>' + escHtml(r.LanPort || r.InternalPort || '') + '</td>' +
-                        '<td>' + escHtml(r.PortFwdingName || '') + '</td>' +
+                        '<td>' + escHtml(_pfProtoLabel(r.fwding_protocol)) + '</td>' +
+                        '<td>' + escHtml(r.global_port || '') + '</td>' +
+                        '<td>' + escHtml(r.private_ip || '') + '</td>' +
+                        '<td>' + escHtml(r.private_port || '') + '</td>' +
+                        '<td>' + escHtml(r.portfwd_name || '') + '</td>' +
                         '<td>' +
                             '<button class="btn-icon" ' + actionAttr('showPFPanel', [i]) + '>\u270e</button>' +
-                            '<button class="btn-icon" ' + actionAttr('delPortFwd', [r.PortFwdingName || String(i)]) + '>' + icon('ic-delete') + '</button>' +
+                            '<button class="btn-icon" ' + actionAttr('delPortFwd', [i]) + '>' + icon('ic-delete') + '</button>' +
                         '</td></tr>';
                 }
                 html += '</tbody></table>';
@@ -188,70 +280,68 @@
         var r = editing ? _pfRules[index] : {};
         var title = editing ? 'Edit Port Forward Rule' : 'Add Port Forward Rule';
         var fields =
-            '<div class="float-field"><label>Name</label><input type="text" id="pf-name" value="' + escHtml(r.PortFwdingName || '') + '" placeholder="HTTP"></div>' +
+            '<div class="float-field"><label>Name</label><input type="text" id="pf-name" value="' + escHtml(r.portfwd_name || '') + '" placeholder="HTTP"></div>' +
             '<div class="float-field"><label>Protocol</label>' +
                 '<select id="pf-proto">' +
-                    '<option' + ((r.Protocol || 'TCP') === 'TCP' ? ' selected' : '') + '>TCP</option>' +
-                    '<option' + (r.Protocol === 'UDP' ? ' selected' : '') + '>UDP</option>' +
-                    '<option' + (r.Protocol === 'TCP+UDP' ? ' selected' : '') + '>TCP+UDP</option>' +
+                    '<option value="6"' + (String(r.fwding_protocol || '6') === '6' ? ' selected' : '') + '>TCP</option>' +
+                    '<option value="17"' + (String(r.fwding_protocol || '') === '17' ? ' selected' : '') + '>UDP</option>' +
+                    '<option value="253"' + (String(r.fwding_protocol || '') === '253' ? ' selected' : '') + '>TCP+UDP</option>' +
                 '</select>' +
             '</div>' +
-            '<div class="float-field"><label>External Port</label><input type="text" id="pf-ext" value="' + escHtml(r.WanPort || r.ExternalPort || '') + '" placeholder="8080"></div>' +
-            '<div class="float-field"><label>Internal IP</label><input type="text" id="pf-ip" value="' + escHtml(r.LanIP || r.InternalIP || '') + '" placeholder="192.168.1."></div>' +
-            '<div class="float-field"><label>Internal Port</label><input type="text" id="pf-int" value="' + escHtml(r.LanPort || r.InternalPort || '') + '" placeholder="80"></div>';
+            '<div class="float-field"><label>External Port</label><input type="text" id="pf-ext" value="' + escHtml(r.global_port || '') + '" placeholder="8080"></div>' +
+            '<div class="float-field"><label>Internal IP</label><input type="text" id="pf-ip" value="' + escHtml(r.private_ip || '') + '" placeholder="192.168.1."></div>' +
+            '<div class="float-field"><label>Internal Port</label><input type="text" id="pf-int" value="' + escHtml(r.private_port || '') + '" placeholder="80"></div>';
 
         _showRulePanel(title, fields, function() {
-            var params = {
-                PortFwdingName: $('#pf-name').value,
-                Protocol: $('#pf-proto').value,
-                WanPort: $('#pf-ext').value,
-                LanIP: $('#pf-ip').value,
-                LanPort: $('#pf-int').value,
-                Enable: '1',
+            var nextRules = _pfRules.slice();
+            var rule = {
+                list_id: editing ? r.list_id : String(nextRules.length),
+                portfwd_name: $('#pf-name').value,
+                fwding_protocol: $('#pf-proto').value,
+                global_port: $('#pf-ext').value,
+                private_ip: $('#pf-ip').value,
+                private_port: $('#pf-int').value,
+                fwding_status: '1'
             };
-            if (!params.PortFwdingName || !params.WanPort || !params.LanIP || !params.LanPort) {
+            if (!rule.portfwd_name || !rule.global_port || !rule.private_ip || !rule.private_port) {
                 alert('All fields required'); return;
             }
-            var doAdd = function() {
-                API.webapi('addPortFwding', params).then(function() {
-                    _hideRulePanel();
-                    _loadPortFwd();
-                }).catch(function(e) { alert('Error: ' + e.message); });
-            };
             if (editing) {
-                API.webapi('deletePortFwding', { PortFwdingName: r.PortFwdingName }).then(doAdd).catch(doAdd);
+                nextRules[index] = rule;
             } else {
-                doAdd();
+                nextRules.push(rule);
             }
+            _savePortFwdRules(nextRules).then(function() {
+                _hideRulePanel();
+                _loadPortFwd();
+            }).catch(function(e) { alert('Error: ' + e.message); });
         });
     }
 
     function _togglePF(i) {
         var r = _pfRules[i];
         if (!r) return;
-        var newEnable = (r.Enable === '1' || r.Enable === 1) ? '0' : '1';
-        API.webapi('SetPortFwding', {
-            PortFwdingName: r.PortFwdingName,
-            Enable: newEnable
-        }).then(_loadPortFwd).catch(function(e) { alert('Error: ' + e.message); });
+        var nextRules = _pfRules.slice();
+        nextRules[i] = Object.assign({}, r, {
+            fwding_status: r.fwding_status === '1' ? '0' : '1'
+        });
+        _savePortFwdRules(nextRules).then(_loadPortFwd).catch(function(e) { alert('Error: ' + e.message); });
     }
 
-    function _delPortFwd(name) {
+    function _delPortFwd(index) {
+        var rule = _pfRules[index];
+        var name = rule ? rule.portfwd_name : String(index);
         if (!confirm('Delete port forward rule "' + name + '"?')) return;
-        API.webapi('deletePortFwding', { PortFwdingName: name }).then(function() {
+        var nextRules = _pfRules.slice();
+        nextRules.splice(index, 1);
+        _savePortFwdRules(nextRules).then(function() {
             _loadPortFwd();
         }).catch(function(e) { alert('Error: ' + e.message); });
     }
 
     function _deleteAllPF() {
         if (!confirm('Delete ALL port forwarding rules?')) return;
-        var chain = Promise.resolve();
-        _pfRules.forEach(function(r) {
-            chain = chain.then(function() {
-                return API.webapi('deletePortFwding', { PortFwdingName: r.PortFwdingName });
-            });
-        });
-        chain.then(_loadPortFwd).catch(function(e) { alert('Error: ' + e.message); });
+        _savePortFwdRules([]).then(_loadPortFwd).catch(function(e) { alert('Error: ' + e.message); });
     }
 
     // --- IP Filter ---
@@ -259,14 +349,30 @@
     function _loadIpFilter() {
         var el = $('#fw-tab-ipfilter');
         if (!el) return;
-        API.webapi('GetIPFilterList').then(function(data) {
-            var rules = data && data.IPFilterList ? data.IPFilterList : [];
-            _ipfRules = rules;
+        API.webapi('getIPFilterList').then(function(data) {
+            _ipfPolicy = data && data.filter_policy != null ? String(data.filter_policy) : '0';
+            var blacklist = data && data.ipFilter_list;
+            var allowlist = data && data.ipFilterAllowlist;
+            if (!Array.isArray(blacklist)) blacklist = [];
+            if (!Array.isArray(allowlist)) allowlist = [];
+            _ipfBlacklist = blacklist.map(_normalizeIpFilterRule);
+            _ipfAllowlist = allowlist.map(_normalizeIpFilterRule);
+            _ipfRules = _getActiveIpFilterRules(_ipfPolicy).slice();
+            var rules = _ipfRules;
 
             var html = '<div class="card">' +
                 '<h3>IP Filter Rules</h3>' +
+                '<div class="form-group">' +
+                    '<label>Filter Mode</label>' +
+                    '<select id="ipf-policy">' +
+                        '<option value="0"' + (_ipfPolicy === '0' ? ' selected' : '') + '>Disabled</option>' +
+                        '<option value="1"' + (_ipfPolicy === '1' ? ' selected' : '') + '>Blacklist</option>' +
+                        '<option value="2"' + (_ipfPolicy === '2' ? ' selected' : '') + '>Whitelist</option>' +
+                    '</select>' +
+                '</div>' +
                 '<div class="action-bar">' +
                     '<button ' + actionAttr('showIPFPanel', [-1]) + '>+ Add rule</button>' +
+                    '<button class="btn-outline" ' + actionAttr('saveIpFilterPolicy') + '>Save Mode</button>' +
                     (rules.length > 0 ? '<button class="btn-outline-danger" ' + actionAttr('deleteAllIPF') + '>Delete all rules</button>' : '') +
                 '</div>';
 
@@ -274,19 +380,18 @@
                 html += '<p class="text-muted">No rules configured</p>';
             } else {
                 html += '<table class="data-table"><thead><tr>' +
-                    '<th></th><th>#</th><th>Action</th><th>Proto</th><th>Source IP</th><th>Src Port</th><th>Dest IP</th><th>Dst Port</th><th></th>' +
+                    '<th></th><th>#</th><th>Proto</th><th>LAN IP</th><th>LAN Port</th><th>WAN IP</th><th>WAN Port</th><th></th>' +
                     '</tr></thead><tbody>';
                 for (var i = 0; i < rules.length; i++) {
                     var r = rules[i];
                     html += '<tr>' +
                         '<td class="drag-handle">\u2807</td>' +
                         '<td>' + (i + 1) + '</td>' +
-                        '<td>' + escHtml(r.FilterAction || '') + '</td>' +
-                        '<td>' + escHtml(r.Protocol || '') + '</td>' +
-                        '<td>' + (r.StartIP ? escHtml(r.StartIP) : '<span class="text-muted">Any</span>') + '</td>' +
-                        '<td>' + (r.StartPort ? escHtml(r.StartPort) : '<span class="text-muted">Any</span>') + '</td>' +
-                        '<td>' + (r.EndIP ? escHtml(r.EndIP) : '<span class="text-muted">Any</span>') + '</td>' +
-                        '<td>' + (r.EndPort ? escHtml(r.EndPort) : '<span class="text-muted">Any</span>') + '</td>' +
+                        '<td>' + escHtml(_pfProtoLabel(r.ip_protocol)) + '</td>' +
+                        '<td>' + (r.lan_ip ? escHtml(r.lan_ip) : '<span class="text-muted">Any</span>') + '</td>' +
+                        '<td>' + (r.lan_port ? escHtml(r.lan_port) : '<span class="text-muted">Any</span>') + '</td>' +
+                        '<td>' + (r.wan_ip ? escHtml(r.wan_ip) : '<span class="text-muted">Any</span>') + '</td>' +
+                        '<td>' + (r.wan_port ? escHtml(r.wan_port) : '<span class="text-muted">Any</span>') + '</td>' +
                         '<td>' +
                             '<button class="btn-icon" ' + actionAttr('showIPFPanel', [i]) + '>\u270e</button>' +
                             '<button class="btn-icon" ' + actionAttr('delIpFilter', [i]) + '>' + icon('ic-delete') + '</button>' +
@@ -311,65 +416,65 @@
         var r = editing ? _ipfRules[index] : {};
         var title = editing ? 'Edit Firewall Rule' : 'Add Firewall Rule';
         var fields =
-            '<div class="float-field"><label>Action</label>' +
-                '<select id="ipf-action">' +
-                    '<option value="Accept"' + ((r.FilterAction || 'Accept') === 'Accept' ? ' selected' : '') + '>Accept</option>' +
-                    '<option value="Deny"' + (r.FilterAction === 'Deny' ? ' selected' : '') + '>Deny</option>' +
-                '</select>' +
-            '</div>' +
             '<div class="float-field"><label>Protocol</label>' +
                 '<select id="ipf-proto">' +
-                    '<option' + ((r.Protocol || 'TCP') === 'TCP' ? ' selected' : '') + '>TCP</option>' +
-                    '<option' + (r.Protocol === 'UDP' ? ' selected' : '') + '>UDP</option>' +
-                    '<option' + (r.Protocol === 'TCP+UDP' ? ' selected' : '') + '>TCP+UDP</option>' +
+                    '<option value="6"' + (String(r.ip_protocol || '') === '6' ? ' selected' : '') + '>TCP</option>' +
+                    '<option value="17"' + (String(r.ip_protocol || '17') === '17' ? ' selected' : '') + '>UDP</option>' +
+                    '<option value="253"' + (String(r.ip_protocol || '') === '253' ? ' selected' : '') + '>TCP+UDP</option>' +
                 '</select>' +
             '</div>' +
-            '<div class="float-field"><label>Source IP</label><input type="text" id="ipf-sip" value="' + escHtml(r.StartIP || '') + '" placeholder="Any"></div>' +
-            '<div class="float-field"><label>Source Port</label><input type="text" id="ipf-sport" value="' + escHtml(r.StartPort || '') + '" placeholder="Any"></div>' +
-            '<div class="float-field"><label>Destination IP</label><input type="text" id="ipf-eip" value="' + escHtml(r.EndIP || '') + '" placeholder="Any"></div>' +
-            '<div class="float-field"><label>Destination Port</label><input type="text" id="ipf-eport" value="' + escHtml(r.EndPort || '') + '" placeholder="Any"></div>';
+            '<div class="float-field"><label>LAN IP</label><input type="text" id="ipf-sip" value="' + escHtml(r.lan_ip || '') + '" placeholder="192.168.1.x"></div>' +
+            '<div class="float-field"><label>LAN Port</label><input type="text" id="ipf-sport" value="' + escHtml(r.lan_port || '') + '" placeholder="Any"></div>' +
+            '<div class="float-field"><label>WAN IP</label><input type="text" id="ipf-eip" value="' + escHtml(r.wan_ip || '') + '" placeholder="Any"></div>' +
+            '<div class="float-field"><label>WAN Port</label><input type="text" id="ipf-eport" value="' + escHtml(r.wan_port || '') + '" placeholder="Any"></div>';
 
         _showRulePanel(title, fields, function() {
-            var params = {
-                StartIP: $('#ipf-sip').value,
-                EndIP: $('#ipf-eip').value,
-                StartPort: $('#ipf-sport').value,
-                EndPort: $('#ipf-eport').value,
-                Protocol: $('#ipf-proto').value,
-                FilterAction: $('#ipf-action').value,
-            };
-            var doAdd = function() {
-                API.webapi('addIPFilter', params).then(function() {
-                    _hideRulePanel();
-                    _loadIpFilter();
-                }).catch(function(e) { alert('Error: ' + e.message); });
+            var nextRules = _ipfRules.slice();
+            var nextRule = {
+                list_id: editing ? r.list_id : String(nextRules.length),
+                lan_ip: $('#ipf-sip').value,
+                wan_ip: $('#ipf-eip').value,
+                lan_port: $('#ipf-sport').value,
+                wan_port: $('#ipf-eport').value,
+                ip_protocol: $('#ipf-proto').value,
+                ip_status: '1'
             };
             if (editing) {
-                API.webapi('deleteIPFilter', { Index: String(index) }).then(doAdd).catch(doAdd);
+                nextRules[index] = nextRule;
             } else {
-                doAdd();
+                nextRules.push(nextRule);
             }
+            _setActiveIpFilterRules(_ipfPolicy, nextRules);
+            _saveIpFilterRules(_ipfPolicy).then(function() {
+                _hideRulePanel();
+                _loadIpFilter();
+            }).catch(function(e) { alert('Error: ' + e.message); });
         });
     }
 
     function _delIpFilter(index) {
         if (!confirm('Delete IP filter rule?')) return;
-        API.webapi('deleteIPFilter', { Index: String(index) }).then(function() {
+        var nextRules = _ipfRules.slice();
+        nextRules.splice(index, 1);
+        _setActiveIpFilterRules(_ipfPolicy, nextRules);
+        _saveIpFilterRules(_ipfPolicy).then(function() {
             _loadIpFilter();
         }).catch(function(e) { alert('Error: ' + e.message); });
     }
 
     function _deleteAllIPF() {
         if (!confirm('Delete ALL IP filter rules?')) return;
-        var chain = Promise.resolve();
-        for (var i = _ipfRules.length - 1; i >= 0; i--) {
-            (function(idx) {
-                chain = chain.then(function() {
-                    return API.webapi('deleteIPFilter', { Index: String(idx) });
-                });
-            })(i);
-        }
-        chain.then(_loadIpFilter).catch(function(e) { alert('Error: ' + e.message); });
+        _setActiveIpFilterRules(_ipfPolicy, []);
+        _saveIpFilterRules(_ipfPolicy).then(_loadIpFilter).catch(function(e) { alert('Error: ' + e.message); });
+    }
+
+    function _saveIpFilterPolicy() {
+        var sel = $('#ipf-policy');
+        _ipfPolicy = sel ? String(sel.value) : _ipfPolicy;
+        _ipfRules = _getActiveIpFilterRules(_ipfPolicy).slice();
+        _saveIpFilterRules(_ipfPolicy).then(function() {
+            _loadIpFilter();
+        }).catch(function(e) { alert('Error: ' + e.message); });
     }
 
     // --- MAC Filter (unchanged) ---
@@ -625,6 +730,7 @@
     App._showIPFPanel = _showIPFPanel;
     App._delIpFilter = _delIpFilter;
     App._deleteAllIPF = _deleteAllIPF;
+    App._saveIpFilterPolicy = _saveIpFilterPolicy;
     App._fwAddUrl = _fwAddUrl;
     App._fwDelUrl = _fwDelUrl;
     App._saveMacFilterMode = _saveMacFilterMode;

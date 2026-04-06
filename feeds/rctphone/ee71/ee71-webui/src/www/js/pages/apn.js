@@ -4,6 +4,52 @@
 
     var _apnList = [], _editingAPN = null;
 
+    function _isEmptyApnValue(value) {
+        var raw = value == null ? '' : String(value).trim();
+        return !raw || raw.toLowerCase() === 'null';
+    }
+
+    function _isBrokenApnProfile(profile) {
+        if (!profile) return false;
+        return _isEmptyApnValue(profile.ProfileName) || _isEmptyApnValue(profile.APN);
+    }
+
+    function _findReplacementDefault(excludeIds) {
+        return _apnList.find(function(profile) {
+            var pid = parseInt(profile.ProfileID, 10);
+            return !isNaN(pid) && excludeIds.indexOf(pid) === -1 && !_isBrokenApnProfile(profile);
+        }) || null;
+    }
+
+    function _deleteProfilesSequential(pending, replacement) {
+        if (!pending.length) {
+            _loadAPN();
+            return;
+        }
+        var current = pending.shift();
+        var pid = parseInt(current.ProfileID, 10);
+        if (isNaN(pid)) {
+            _deleteProfilesSequential(pending, replacement);
+            return;
+        }
+        var isDefault = current.Default === 1 || current.Default === '1' || current.IsDefault === 1 || current.IsDefault === '1';
+        var deleteNow = function() {
+            API.webapi('DeleteProfile', { ProfileID: pid }).then(function() {
+                _deleteProfilesSequential(pending, replacement);
+            }).catch(function(e) { alert('Error: ' + e.message); });
+        };
+        if (isDefault && replacement) {
+            API.webapi('SetDefaultProfile', { ProfileID: parseInt(replacement.ProfileID, 10) }).then(deleteNow)
+                .catch(function(e) { alert('Error switching default: ' + e.message); });
+            return;
+        }
+        if (isDefault && !replacement) {
+            alert('Cannot delete the default broken profile because there is no valid replacement profile.');
+            return;
+        }
+        deleteNow();
+    }
+
     function renderAPN(container) {
         container.innerHTML =
             '<h2>APN Profiles</h2>' +
@@ -21,14 +67,21 @@
             var list = profiles.ProfileList || profiles || [];
             if (!Array.isArray(list)) list = [];
             _apnList = list;
+            var brokenCount = list.filter(_isBrokenApnProfile).length;
 
             var html = '<div class="card"><h3>APN Profiles</h3>';
+            if (brokenCount > 0) {
+                html += '<div class="form-actions mb-1">' +
+                    '<button class="btn-outline-danger" ' + actionAttr('apnPurgeBroken') + '>Remove Empty/NULL Profiles (' + brokenCount + ')</button>' +
+                '</div>';
+            }
             if (list.length) {
                 html += '<table class="data-table"><thead><tr><th>Name</th><th>APN</th><th>Auth</th><th>Default</th><th></th></tr></thead><tbody>';
                 list.forEach(function(p, i) {
                     var isDefault = p.Default === 1 || p.Default === '1' || p.IsDefault === 1 || p.IsDefault === '1';
+                    var isBroken = _isBrokenApnProfile(p);
                     html += '<tr' + (isDefault ? ' class="text-bold"' : '') + '>' +
-                        '<td>' + escHtml(p.ProfileName || '') + '</td>' +
+                        '<td>' + escHtml(p.ProfileName || '') + (isBroken ? ' <span class="text-danger">(broken)</span>' : '') + '</td>' +
                         '<td>' + escHtml(p.APN || '') + '</td>' +
                         '<td>' + escHtml(p.AuthType == 0 ? 'None' : p.AuthType == 1 ? 'PAP' : p.AuthType == 2 ? 'CHAP' : String(p.AuthType || '')) + '</td>' +
                         '<td>' + (isDefault ? 'Yes' : '') + '</td>' +
@@ -100,7 +153,7 @@
         };
         if (!params.ProfileName || !params.APN) { alert('Name and APN required'); return; }
         var method = _editingAPN !== null ? 'EditProfile' : 'AddNewProfile';
-        if (_editingAPN !== null) params.ProfileID = String(_apnList[_editingAPN].ProfileID);
+        if (_editingAPN !== null) params.ProfileID = parseInt(_apnList[_editingAPN].ProfileID, 10);
         API.webapi(method, params).then(function() {
             _loadAPN();
         }).catch(function(e) { alert('Error: ' + e.message); });
@@ -133,10 +186,27 @@
         }).catch(function(e) { alert('Error: ' + e.message); });
     }
 
+    function _apnPurgeBroken() {
+        var broken = _apnList.filter(_isBrokenApnProfile).sort(function(a, b) {
+            var aDefault = a && (a.Default === 1 || a.Default === '1' || a.IsDefault === 1 || a.IsDefault === '1');
+            var bDefault = b && (b.Default === 1 || b.Default === '1' || b.IsDefault === 1 || b.IsDefault === '1');
+            return aDefault === bDefault ? 0 : (aDefault ? 1 : -1);
+        });
+        if (!broken.length) {
+            alert('No empty/NULL profiles found.');
+            return;
+        }
+        if (!confirm('Delete ' + broken.length + ' empty/NULL APN profiles?')) return;
+        var brokenIds = broken.map(function(profile) { return parseInt(profile.ProfileID, 10); }).filter(function(pid) { return !isNaN(pid); });
+        var replacement = _findReplacementDefault(brokenIds);
+        _deleteProfilesSequential(broken.slice(), replacement);
+    }
+
     App.registerPage('apn', renderAPN);
     App._apnEdit = _apnEdit;
     App._apnCancelEdit = _apnCancelEdit;
     App._apnSave = _apnSave;
     App._apnDelete = _apnDelete;
     App._apnDefault = _apnDefault;
+    App._apnPurgeBroken = _apnPurgeBroken;
 })();
