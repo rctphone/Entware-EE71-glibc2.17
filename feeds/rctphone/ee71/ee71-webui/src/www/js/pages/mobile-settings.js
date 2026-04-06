@@ -25,21 +25,23 @@
         }) || null;
     }
 
-    function _deleteBrokenApnProfiles(pending, replacement) {
+    function _deleteBrokenApnProfiles(pending, replacement, skipped) {
+        skipped = skipped || 0;
         if (!pending.length) {
+            if (skipped) alert('Skipped ' + skipped + ' default broken profile(s) because there is no valid replacement profile.');
             _loadAPNContent();
             return;
         }
         var current = pending.shift();
         var pid = parseInt(current.ProfileID, 10);
         if (isNaN(pid)) {
-            _deleteBrokenApnProfiles(pending, replacement);
+            _deleteBrokenApnProfiles(pending, replacement, skipped);
             return;
         }
         var isDefault = current.Default === 1 || current.Default === '1' || current.IsDefault === 1 || current.IsDefault === '1';
         var deleteNow = function() {
             API.webapi('DeleteProfile', { ProfileID: pid }).then(function() {
-                _deleteBrokenApnProfiles(pending, replacement);
+                _deleteBrokenApnProfiles(pending, replacement, skipped);
             }).catch(function(e) { alert('Error: ' + e.message); });
         };
         if (isDefault && replacement) {
@@ -48,7 +50,7 @@
             return;
         }
         if (isDefault && !replacement) {
-            alert('Cannot delete the default broken profile because there is no valid replacement profile.');
+            _deleteBrokenApnProfiles(pending, replacement, skipped + 1);
             return;
         }
         deleteNow();
@@ -476,13 +478,14 @@
             }).catch(function(e) { alert('Error: ' + e.message); });
         };
         if (isDefault && _apnList.length > 1) {
-            // Switch default to another profile first, then delete
-            var other = _apnList.find(function(op, oi) { return oi !== i; });
+            var other = _findReplacementApnDefault([pid]);
             if (other) {
                 API.webapi('SetDefaultProfile', { ProfileID: parseInt(other.ProfileID, 10) }).then(doDelete)
                     .catch(function(e) { alert('Error switching default: ' + e.message); });
                 return;
             }
+            alert('Cannot delete the default profile because there is no valid replacement profile.');
+            return;
         }
         doDelete();
     }
@@ -506,7 +509,7 @@
         if (!confirm('Delete ' + broken.length + ' empty/NULL APN profiles?')) return;
         var brokenIds = broken.map(function(profile) { return parseInt(profile.ProfileID, 10); }).filter(function(pid) { return !isNaN(pid); });
         var replacement = _findReplacementApnDefault(brokenIds);
-        _deleteBrokenApnProfiles(broken.slice(), replacement);
+        _deleteBrokenApnProfiles(broken.slice(), replacement, 0);
     }
 
     // --- AT Terminal tab (from at-terminal.js) ---

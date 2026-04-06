@@ -53,7 +53,7 @@
 
         if (dualConfigured) {
             if (_cgiStatus && typeof _cgiStatus.wlan0 === 'boolean') running2g = _cgiStatus.wlan0;
-            running5g = !!(_cgiStatus && _cgiStatus.wlan1);
+            if (_cgiStatus && typeof _cgiStatus.wlan1 === 'boolean') running5g = _cgiStatus.wlan1;
             return {
                 mode: 'dual',
                 configured2g: true,
@@ -319,11 +319,35 @@
         });
     }
 
+    function _needs5gRepair() {
+        return _wifiState(_wifiSettings || {}, null).degradedDual;
+    }
+
+    function _schedule5gRepairCheck(retriesLeft) {
+        setTimeout(function() {
+            _loadWifiSettings();
+            setTimeout(function() {
+                if (_needs5gRepair()) {
+                    if (retriesLeft > 0) {
+                        _toast('5 GHz still down, retrying...');
+                        API.cgiPost('wifi.cgi', { action: 'restart', target: 'guest' }).then(function() {
+                            _schedule5gRepairCheck(retriesLeft - 1);
+                        }).catch(function(e) { _toast('Error: ' + e.message, true); });
+                        return;
+                    }
+                    _toast('5 GHz is still down after repair', true);
+                    return;
+                }
+                _toast('5 GHz is back');
+            }, 1500);
+        }, 8000);
+    }
+
     function _repairWifi5g() {
         _toast('Restarting 5 GHz...');
         API.cgiPost('wifi.cgi', { action: 'restart', target: 'guest' }).then(function() {
             _toast('5 GHz restart requested');
-            setTimeout(_loadWifiSettings, 5000);
+            _schedule5gRepairCheck(1);
         }).catch(function(e) { _toast('Error: ' + e.message, true); });
     }
 
