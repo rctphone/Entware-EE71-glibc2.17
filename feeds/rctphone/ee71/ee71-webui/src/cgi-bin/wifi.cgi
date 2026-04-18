@@ -9,6 +9,7 @@ echo ""
 
 WIFI_CTL="/usr/bin/qcmap_wifi_ctl"
 DB="/jrd-resource/resource/sqlite3/user_info.db3"
+MOBILEAP_CFG="/etc/mobileap_cfg.xml"
 
 # --- CSRF check for POST ---
 csrf_check() {
@@ -46,6 +47,31 @@ db_get() {
     sqlite3 "$DB" "SELECT value FROM wifi_info WHERE items='$1';" 2>/dev/null
 }
 
+db_set() {
+    sqlite3 "$DB" "UPDATE $1 SET value='$3' WHERE items='$2';" 2>/dev/null
+}
+
+sync_guest_ap_intent() {
+    case "$1" in
+        dual)
+            db_set wifi_config GuestAP 1
+            db_set wifi_info Guest5GAPStatus 1
+            db_set wifi_info 2GAPStatus 1
+            db_set wifi_info APMode 0
+            ;;
+        2g)
+            db_set wifi_config GuestAP 0
+            db_set wifi_info Guest5GAPStatus 0
+            db_set wifi_info 2GAPStatus 1
+            ;;
+        5g)
+            db_set wifi_config GuestAP 0
+            db_set wifi_info Guest5GAPStatus 0
+            db_set wifi_info 2GAPStatus 0
+            ;;
+    esac
+}
+
 # Validate SSID: 1-32 chars, no control chars
 valid_ssid() {
     [ -z "$1" ] && return 1
@@ -60,6 +86,37 @@ valid_key() {
     return 0
 }
 
+current_wlan_mode() {
+    sed -n 's:.*<WlanMode>\(.*\)</WlanMode>.*:\1:p' "$MOBILEAP_CFG" 2>/dev/null | head -1
+}
+
+normalize_mode() {
+    MODE=$(printf '%s' "$BODY" | jq -r '.mode // empty')
+    [ -n "$MODE" ] && { echo "$MODE"; return; }
+
+    AP2G_STATUS=$(printf '%s' "$BODY" | jq -r '.AP2G.ApStatus // empty')
+    AP5G_STATUS=$(printf '%s' "$BODY" | jq -r '.AP5G.ApStatus // empty')
+    GUEST_STATUS=$(printf '%s' "$BODY" | jq -r '.AP5G_guest.ApStatus // .AP2G_guest.ApStatus // empty')
+
+    if [ "$GUEST_STATUS" = "1" ]; then
+        echo "dual"
+        return
+    fi
+    if [ "$AP2G_STATUS" = "0" ] && [ "$AP5G_STATUS" = "1" ]; then
+        echo "5g"
+        return
+    fi
+    if [ "$AP2G_STATUS" = "1" ]; then
+        echo "2g"
+        return
+    fi
+
+    case "$(current_wlan_mode)" in
+        AP-AP) echo "dual" ;;
+        *) ;;
+    esac
+}
+
 # --- Parse action ---
 case "$REQUEST_METHOD" in
 GET)
@@ -69,7 +126,7 @@ GET)
 POST)
     csrf_check
     read -r BODY
-    ACTION=$(echo "$BODY" | jq -r '.action // empty')
+    ACTION=$(printf '%s' "$BODY" | jq -r '.action // empty')
     ;;
 esac
 
@@ -99,12 +156,12 @@ apply)
     # We need to pass the full JSON (minus action) to qcmap_wifi_ctl
 
     # Validate SSIDs from the body
-    SSID_2G=$(echo "$BODY" | jq -r '.AP2G.Ssid // empty')
-    SSID_5G=$(echo "$BODY" | jq -r '.AP2G_guest.Ssid // empty')
-    KEY_2G=$(echo "$BODY" | jq -r '.AP2G.WpaKey // empty')
-    KEY_5G=$(echo "$BODY" | jq -r '.AP2G_guest.WpaKey // empty')
-    SEC_2G=$(echo "$BODY" | jq -r '.AP2G.SecurityMode // empty')
-    SEC_5G=$(echo "$BODY" | jq -r '.AP2G_guest.SecurityMode // empty')
+    SSID_2G=$(printf '%s' "$BODY" | jq -r '.AP2G.Ssid // empty')
+    SSID_5G=$(printf '%s' "$BODY" | jq -r '.AP5G_guest.Ssid // .AP2G_guest.Ssid // .AP5G.Ssid // empty')
+    KEY_2G=$(printf '%s' "$BODY" | jq -r '.AP2G.WpaKey // empty')
+    KEY_5G=$(printf '%s' "$BODY" | jq -r '.AP5G_guest.WpaKey // .AP2G_guest.WpaKey // .AP5G.WpaKey // empty')
+    SEC_2G=$(printf '%s' "$BODY" | jq -r '.AP2G.SecurityMode // empty')
+    SEC_5G=$(printf '%s' "$BODY" | jq -r '.AP5G_guest.SecurityMode // .AP2G_guest.SecurityMode // .AP5G.SecurityMode // empty')
 
     # Validate SSIDs (if present)
     if [ -n "$SSID_2G" ] && ! valid_ssid "$SSID_2G"; then
@@ -127,12 +184,13 @@ apply)
     fi
 
     # Validate mode field (if present)
-    MODE=$(echo "$BODY" | jq -r '.mode // empty')
+    MODE=$(normalize_mode)
     if [ -n "$MODE" ]; then
         case "$MODE" in
             2g|5g|dual) ;;
             *) echo '{"error":"Invalid mode (use 2g/5g/dual)"}'; exit 0 ;;
         esac
+        BODY=$(printf '%s' "$BODY" | jq -c --arg mode "$MODE" '. + {mode:$mode}')
     fi
 
     # Call qcmap_wifi_ctl apply with the full JSON body
@@ -140,6 +198,8 @@ apply)
     RET=$?
 
     if [ $RET -eq 0 ]; then
+        sync_guest_ap_intent "$MODE"
+        sync
         jq -n --arg detail "$OUTPUT" '{"ok":true,"detail":$detail}'
     else
         jq -n --arg detail "$OUTPUT" '{"error":"apply failed","detail":$detail}'

@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=ee71-webui
-PKG_VERSION:=1.7.3
+PKG_VERSION:=1.7.4
 PKG_RELEASE:=1
 
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)
@@ -58,7 +58,7 @@ define Package/ee71-webui/description
   - miniupnpd, sqlite3, hostapd
 endef
 
-ESBUILD_VERSION:=0.24.2
+ESBUILD_VERSION:=0.27.4
 ESBUILD:=$(STAGING_DIR_HOST)/bin/esbuild
 
 define Build/Prepare
