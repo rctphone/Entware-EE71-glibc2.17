@@ -58,7 +58,7 @@ define Package/ee71-webui/description
   - miniupnpd, sqlite3, hostapd
 endef
 
-ESBUILD_VERSION:=0.27.4
+ESBUILD_VERSION:=0.28.0
 ESBUILD:=$(STAGING_DIR_HOST)/bin/esbuild
 
 define Build/Prepare
@@ -79,12 +79,12 @@ define Build/Prepare
 endef
 
 define Build/Compile
-	# Bundle JS (vendor + core + pages + boot)
+	# Bundle JS (vendor + core + pages + boot) — minified for device flash size
 	$(ESBUILD) $(PKG_BUILD_DIR)/www/js/entry.js \
-		--bundle --format=iife --outfile=$(PKG_BUILD_DIR)/www/js/app.bundle.js
-	# Bundle CSS (vendor + custom)
+		--bundle --format=iife --minify --outfile=$(PKG_BUILD_DIR)/www/js/app.bundle.js
+	# Bundle CSS (vendor + custom) — minified
 	$(ESBUILD) $(PKG_BUILD_DIR)/www/css/entry.css \
-		--bundle --external:'*.woff2' --outfile=$(PKG_BUILD_DIR)/www/css/app.bundle.css
+		--bundle --minify --external:'*.woff2' --outfile=$(PKG_BUILD_DIR)/www/css/app.bundle.css
 	# Patch index.html to use bundles
 	cd $(PKG_BUILD_DIR)/www && \
 		sed -i '/<link rel="stylesheet" href="css\/pico/d' index.html && \

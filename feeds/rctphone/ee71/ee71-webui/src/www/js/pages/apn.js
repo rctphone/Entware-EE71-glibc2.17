@@ -21,32 +21,46 @@
         }) || null;
     }
 
-    function _deleteProfilesSequential(pending, replacement, skipped) {
-        skipped = skipped || 0;
+    // Delete a batch of profiles one-by-one. Resilient: a failure on one
+    // profile is recorded and the loop continues with the rest, instead of
+    // aborting the whole sweep mid-way and leaving DB half-cleaned.
+    function _deleteProfilesSequential(pending, replacement, stats) {
+        stats = stats || { skipped: 0, deleted: 0, failed: 0 };
         if (!pending.length) {
-            if (skipped) alert('Skipped ' + skipped + ' default broken profile(s) because there is no valid replacement profile.');
+            var msg = 'Removed ' + stats.deleted + ' empty/NULL profile(s).';
+            if (stats.skipped) msg += '\nSkipped ' + stats.skipped + ' default profile(s): no valid replacement.';
+            if (stats.failed) msg += '\nFailed to delete ' + stats.failed + ' profile(s) — see console.';
+            if (stats.skipped || stats.failed) alert(msg);
             _loadAPN();
             return;
         }
         var current = pending.shift();
+        var next = function() { _deleteProfilesSequential(pending, replacement, stats); };
         var pid = parseInt(current.ProfileID, 10);
-        if (isNaN(pid)) {
-            _deleteProfilesSequential(pending, replacement, skipped);
-            return;
-        }
+        if (isNaN(pid)) { next(); return; }
         var isDefault = current.Default === 1 || current.Default === '1' || current.IsDefault === 1 || current.IsDefault === '1';
         var deleteNow = function() {
             API.webapi('DeleteProfile', { ProfileID: pid }).then(function() {
-                _deleteProfilesSequential(pending, replacement, skipped);
-            }).catch(function(e) { alert('Error: ' + e.message); });
+                stats.deleted++;
+                next();
+            }).catch(function(e) {
+                stats.failed++;
+                if (window.console) console.error('APN delete failed (ID ' + pid + '): ' + e.message);
+                next(); // keep going — don't abort the whole cleanup
+            });
         };
         if (isDefault && replacement) {
             API.webapi('SetDefaultProfile', { ProfileID: parseInt(replacement.ProfileID, 10) }).then(deleteNow)
-                .catch(function(e) { alert('Error switching default: ' + e.message); });
+                .catch(function(e) {
+                    stats.failed++;
+                    if (window.console) console.error('APN switch-default failed: ' + e.message);
+                    next();
+                });
             return;
         }
         if (isDefault && !replacement) {
-            _deleteProfilesSequential(pending, replacement, skipped + 1);
+            stats.skipped++;
+            next();
             return;
         }
         deleteNow();
@@ -203,7 +217,7 @@
         if (!confirm('Delete ' + broken.length + ' empty/NULL APN profiles?')) return;
         var brokenIds = broken.map(function(profile) { return parseInt(profile.ProfileID, 10); }).filter(function(pid) { return !isNaN(pid); });
         var replacement = _findReplacementDefault(brokenIds);
-        _deleteProfilesSequential(broken.slice(), replacement, 0);
+        _deleteProfilesSequential(broken.slice(), replacement, null);
     }
 
     App.registerPage('apn', renderAPN);
