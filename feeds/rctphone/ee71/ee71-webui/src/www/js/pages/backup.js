@@ -3,6 +3,45 @@
     var $ = App.$, icon = App.icon, escHtml = App.escHtml, actionAttr = App.actionAttr;
 
     var _backupData = null;
+    var _WIFI_DEFAULT_MAX_STA = 15;
+
+    function _wifiModeForExport(wifi, systemMode) {
+        var ap2g = wifi.AP2G || {};
+        var ap5g = wifi.AP5G || {};
+        var guest = wifi.AP2G_guest || wifi.AP5G_guest || {};
+        if (systemMode === 'AP-AP' || guest.ApStatus === 1 || guest.ApStatus === '1') return 'dual';
+        if (ap2g.ApStatus === 0 || ap2g.ApStatus === '0') {
+            if (ap5g.ApStatus === 1 || ap5g.ApStatus === '1') return '5g';
+        }
+        return '2g';
+    }
+
+    function _wifiModeForImport(data) {
+        var wifiMode = data.wifi && data.wifi.mode;
+        if (wifiMode === '2g' || wifiMode === '5g' || wifiMode === 'dual') return wifiMode;
+        if (data.system && data.system.wlan_mode === 'AP-AP') return 'dual';
+        if (data.wifi && (data.wifi.guest_status_5g === 1 || data.wifi.guest_status_5g === '1')) return 'dual';
+        if (data.wifi && (data.wifi.ap_status_24 === 0 || data.wifi.ap_status_24 === '0') &&
+            (data.wifi.ap_status_5g === 1 || data.wifi.ap_status_5g === '1')) return '5g';
+        return '2g';
+    }
+
+    function _securityModeForBackup(password) {
+        return password ? 3 : 0;
+    }
+
+    function _buildApPayload(ssid, password, channel, securityMode, status) {
+        var ap = {
+            ApStatus: status,
+            SecurityMode: securityMode,
+            WpaType: 1,
+            max_numsta: _WIFI_DEFAULT_MAX_STA
+        };
+        if (ssid) ap.Ssid = ssid;
+        if (password) ap.WpaKey = password;
+        if (channel != null) ap.Channel = parseInt(channel, 10) || 0;
+        return ap;
+    }
 
     function renderBackup(container) {
         container.innerHTML =
@@ -53,17 +92,24 @@
             if (wifi) {
                 var ap2g = wifi.AP2G || {};
                 var ap5g = wifi.AP5G || {};
+                var guest5g = wifi.AP2G_guest || wifi.AP5G_guest || {};
+                var wifiMode = _wifiModeForExport(wifi, extra && extra.wlan_mode);
+                var src5g = wifiMode === 'dual' ? guest5g : ap5g;
                 config.wifi = {
+                    mode: wifiMode,
                     ssid_24: ap2g.Ssid || wifi.WlanSSID || '',
                     password_24: ap2g.WpaKey || wifi.WlanAPPwd || '',
                     channel_24: ap2g.Channel != null ? String(ap2g.Channel) : (wifi.WlanChannel || '0'),
                     mode_24: wifi.WlanMode || '',
                     bandwidth_24: wifi.WlanBandwidth || '',
-                    ssid_5g: ap5g.Ssid || wifi.WlanSSID_5G || '',
-                    password_5g: ap5g.WpaKey || wifi.WlanAPPwd_5G || '',
-                    channel_5g: ap5g.Channel != null ? String(ap5g.Channel) : (wifi.WlanChannel_5G || '0'),
+                    ssid_5g: src5g.Ssid || wifi.WlanSSID_5G || '',
+                    password_5g: src5g.WpaKey || wifi.WlanAPPwd_5G || '',
+                    channel_5g: src5g.Channel != null ? String(src5g.Channel) : (wifi.WlanChannel_5G || '0'),
                     mode_5g: wifi.WlanMode_5G || '',
                     bandwidth_5g: wifi.WlanBandwidth_5G || '',
+                    ap_status_24: ap2g.ApStatus != null ? parseInt(ap2g.ApStatus, 10) : null,
+                    ap_status_5g: ap5g.ApStatus != null ? parseInt(ap5g.ApStatus, 10) : null,
+                    guest_status_5g: src5g.ApStatus != null ? parseInt(src5g.ApStatus, 10) : null,
                 };
             }
 
@@ -182,18 +228,27 @@
         var applied = [];
 
         if (data.wifi) {
-            var wp = {};
-            var ap2g = {};
-            if (data.wifi.ssid_24) ap2g.Ssid = data.wifi.ssid_24;
-            if (data.wifi.password_24) ap2g.WpaKey = data.wifi.password_24;
-            if (data.wifi.channel_24) ap2g.Channel = parseInt(data.wifi.channel_24) || 0;
-            var ap5g = {};
-            if (data.wifi.ssid_5g) ap5g.Ssid = data.wifi.ssid_5g;
-            if (data.wifi.password_5g) ap5g.WpaKey = data.wifi.password_5g;
-            if (data.wifi.channel_5g) ap5g.Channel = parseInt(data.wifi.channel_5g) || 0;
-            if (Object.keys(ap2g).length) wp.AP2G = ap2g;
-            if (Object.keys(ap5g).length) wp.AP5G = ap5g;
-            tasks.push(API.webapi('SetWlanSettings', wp).then(function() { applied.push('wifi'); }));
+            var mode = _wifiModeForImport(data);
+            var sec2g = _securityModeForBackup(data.wifi.password_24);
+            var sec5g = _securityModeForBackup(data.wifi.password_5g);
+            var wp = {
+                action: 'apply',
+                mode: mode,
+                AP2G: _buildApPayload(data.wifi.ssid_24, data.wifi.password_24, data.wifi.channel_24, sec2g, mode === '5g' ? 0 : 1),
+                AP5G: _buildApPayload(data.wifi.ssid_5g, data.wifi.password_5g, data.wifi.channel_5g, sec5g, mode === '5g' ? 1 : 0),
+            };
+
+            if (mode === 'dual') {
+                var guest5g = _buildApPayload(data.wifi.ssid_5g, data.wifi.password_5g, data.wifi.channel_5g, sec5g, 1);
+                wp.AP2G_guest = guest5g;
+                wp.AP5G_guest = guest5g;
+            } else {
+                var disabledGuest = _buildApPayload(data.wifi.ssid_5g, data.wifi.password_5g, data.wifi.channel_5g, sec5g, 0);
+                wp.AP2G_guest = disabledGuest;
+                wp.AP5G_guest = disabledGuest;
+            }
+
+            tasks.push(API.cgiPost('wifi.cgi', wp).then(function() { applied.push('wifi'); }));
         }
 
         if (data.network) {
@@ -299,8 +354,8 @@
                 if (r && r.applied) applied.push('system:' + r.applied);
             }).catch(function() {}));
 
-            // Restore WlanMode via wifi.cgi apply (triggers XML patch)
-            if (sys.wlan_mode && sys.wlan_mode !== 'AP') {
+            // Restore WlanMode via wifi.cgi only when WiFi section is absent.
+            if (!data.wifi && sys.wlan_mode && sys.wlan_mode !== 'AP') {
                 tasks.push(API.cgiPost('wifi.cgi', {
                     action: 'apply', mode: sys.wlan_mode === 'AP-AP' ? 'dual' : '2g',
                     AP2G: { ApStatus: 1 }, AP5G: { ApStatus: 0 },

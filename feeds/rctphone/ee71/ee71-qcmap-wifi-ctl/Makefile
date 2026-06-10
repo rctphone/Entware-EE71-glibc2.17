@@ -26,7 +26,7 @@ define Package/ee71-qcmap-wifi-ctl/description
   but only restarts wlan0. This tool generates the wlan1 config
   BEFORE the restart so QCMAP finds both configs.
 
-  Runtime deps (on device): hostapd, iw, brctl, libsock_client.so.0
+  Runtime deps (on device): hostapd, libsock_client.so.0
 endef
 
 define Build/Prepare

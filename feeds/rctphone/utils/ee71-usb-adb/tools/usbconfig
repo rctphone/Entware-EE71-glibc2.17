@@ -1,0 +1,68 @@
+#!/bin/sh
+# Copyright (c) 2011, The Linux Foundation. All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are
+# met:
+#     * Redistributions of source code must retain the above copyright
+#       notice, this list of conditions and the following disclaimer.
+#     * Redistributions in binary form must reproduce the above
+#       copyright notice, this list of conditions and the following
+#       disclaimer in the documentation and/or other materials provided
+#       with the distribution.
+#     * Neither the name of The Linux Foundation nor the names of its
+#       contributors may be used to endorse or promote products derived
+#       from this software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED "AS IS" AND ANY EXPRESS OR IMPLIED
+# WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+# MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT
+# ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS
+# BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+# SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR
+# BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
+# WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
+# OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+# IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+# usb config        init.d script to start the usb config file script
+
+case "$1" in
+  start)
+        config_file="/jrd-resource/resource/jrdcfg/usb_config.ini"
+        if [ -f $config_file ]
+        then
+          if [ ! -d /usb_conf ]
+          then
+            mkdir /usb_conf
+            sync
+          fi
+          cp $config_file /usb_conf/
+          sync
+          mv $config_file $config_file"_bak"
+          sync
+        else
+          if [ ! -f /usb_conf/usb_config.ini ]
+          then
+            cp $config_file"_bak" /usb_conf/usb_config.ini
+            sync
+          fi
+        fi
+
+        echo "done"
+        ;;
+  stop)
+        echo "done"
+        ;;
+  restart)
+        $0 stop
+        $0 start
+        ;;
+  *)
+        echo "Usage usb_config { start | stop | restart}" >&2
+        exit 1
+        ;;
+esac
+
+exit 0

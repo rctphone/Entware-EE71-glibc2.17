@@ -137,6 +137,54 @@ do_sysctl() {
     fi
 }
 
+do_cpu_governor() {
+    # core_app calls wifi_improve_tp which sets governor=performance and
+    # locks CPU to 1305MHz (doesn't even exist on MDM9640, max is 1190400).
+    # Patch the script to use interactive governor with correct freq range.
+    TP="/jrd-resource/resource/wlan/shell/wifi_improve_tp"
+    if [ -f "$TP" ] && grep -q "^echo performance" "$TP" 2>/dev/null; then
+        cat > "$TP" << 'TPEOF'
+#!/bin/sh
+# WiFi throughput optimization (patched: no performance governor lock)
+echo interactive > /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
+echo 300000 > /sys/devices/system/cpu/cpu0/cpufreq/scaling_min_freq
+echo 1190400 > /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq
+echo 1048576 > /proc/sys/net/core/rmem_default
+echo 1048576 > /proc/sys/net/core/rmem_max
+echo 1048576 > /proc/sys/net/core/wmem_default
+echo 1048576 > /proc/sys/net/core/wmem_max
+echo 0 > /proc/sys/net/ipv4/tcp_timestamps
+echo 1 > /proc/sys/net/ipv4/tcp_sack
+echo 1 > /proc/sys/net/ipv4/tcp_window_scaling
+TPEOF
+        echo "optimize: patched wifi_improve_tp (performance → interactive)"
+    fi
+    # Failsafe: if governor is still performance, fix it now
+    GOV="/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor"
+    if [ -w "$GOV" ]; then
+        CUR=$(cat "$GOV" 2>/dev/null)
+        if [ "$CUR" = "performance" ]; then
+            echo "interactive" > "$GOV" 2>/dev/null || \
+                echo "ondemand" > "$GOV" 2>/dev/null
+            echo "optimize: cpu governor $CUR → $(cat "$GOV")"
+        fi
+    fi
+}
+
+do_fix_root_home() {
+    # Stock firmware sets root home to /home/root which breaks scp/sftp
+    # relative paths. Fix to /root (idempotent — safe to run every boot).
+    if grep -q 'root:/home/root:' /etc/passwd 2>/dev/null; then
+        mkdir -p /root/.ssh
+        cp -an /home/root/.ssh/* /root/.ssh/ 2>/dev/null
+        cp -an /home/root/.ash_history /root/ 2>/dev/null
+        chmod 700 /root/.ssh
+        chmod 600 /root/.ssh/authorized_keys 2>/dev/null
+        sed -i 's|root:/home/root:|root:/root:|' /etc/passwd
+        echo "optimize: root home /home/root → /root"
+    fi
+}
+
 do_lan_accept() {
     iptables -C INPUT $LAN_RULE 2>/dev/null || iptables -I INPUT 1 $LAN_RULE
 }
@@ -155,6 +203,8 @@ case "$1" in
     fi
 
     do_onetime
+    do_fix_root_home
+    do_cpu_governor
     do_tmpfs
     do_noatime
     do_sysctl

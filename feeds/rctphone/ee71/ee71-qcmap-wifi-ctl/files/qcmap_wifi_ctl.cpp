@@ -20,15 +20,27 @@
  *   status           — check hostapd process status
  *
  * Build: cross-compile for ARM (ARMv7-A, soft-float, glibc 2.17)
- * Runtime deps: hostapd, iw, brctl, libsock_client.so.0 (all on device)
+ * Runtime deps: hostapd, libsock_client.so.0 (all on device)
  */
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cerrno>
 #include <unistd.h>
+#include <dirent.h>
 #include <dlfcn.h>
+#include <fcntl.h>
+#include <signal.h>
 #include <sys/stat.h>
+#include <sys/types.h>
 #include <sys/wait.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <sys/ioctl.h>
+#include <net/if.h>
+#include <poll.h>
+#include <time.h>
+#include <linux/sockios.h>
 
 /* ─── Config paths ───────────────────────────────────────────────── */
 static const char *HOSTAPD_CONF_2G    = "/etc/hostapd.conf";
@@ -36,9 +48,11 @@ static const char *HOSTAPD_CONF_5G    = "/etc/hostapd-wlan1.conf";
 static const char *HOSTAPD_PID_2G     = "/etc/hostapd_ssid1.pid";
 static const char *HOSTAPD_PID_5G     = "/etc/hostapd_ssid2.pid";
 static const char *ENTROPY_FILE       = "/etc/entropy_file1";
+static const char *HOSTAPD_CTRL_DIR   = "/var/run/hostapd";
 static const char *BRIDGE             = "bridge0";
 static const char *MOBILEAP_CFG      = "/etc/mobileap_cfg.xml";
 static const char *MOBILEAP_FACTORY  = "/etc/factory_mobileap_cfg.xml";
+static const char *QCMAP_STA_IFACE    = "/usr/bin/QCMAP_StaInterface";
 
 /* ─── Simple JSON value extractor ────────────────────────────────── */
 /* Extract a string value for a given key from JSON.
@@ -103,24 +117,356 @@ static const char *json_get_object(const char *json, const char *key,
 }
 
 /* ─── System helpers ─────────────────────────────────────────────── */
-static int run(const char *cmd)
-{
-    int ret = system(cmd);
-    return WIFEXITED(ret) ? WEXITSTATUS(ret) : -1;
-}
-
-static bool process_running(const char *pattern)
-{
-    char cmd[256];
-    snprintf(cmd, sizeof(cmd),
-             "ps w 2>/dev/null | grep '%s' | grep -qv grep", pattern);
-    return run(cmd) == 0;
-}
-
 static bool file_exists(const char *path)
 {
     struct stat st;
     return stat(path, &st) == 0;
+}
+
+static bool iface_exists(const char *ifname)
+{
+    char path[128];
+    snprintf(path, sizeof(path), "/sys/class/net/%s", ifname);
+    return file_exists(path);
+}
+
+static long long monotonic_ms()
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000LL + ts.tv_nsec / 1000000LL;
+}
+
+static void sleep_ms(int ms)
+{
+    if (ms <= 0) return;
+    struct timespec req;
+    req.tv_sec = ms / 1000;
+    req.tv_nsec = (ms % 1000) * 1000000L;
+    while (nanosleep(&req, &req) != 0 && errno == EINTR) {
+    }
+}
+
+static bool read_file(const char *path, char *buf, size_t buf_sz, ssize_t *out_len)
+{
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return false;
+
+    ssize_t rd = read(fd, buf, buf_sz - 1);
+    close(fd);
+    if (rd < 0) return false;
+
+    buf[rd] = '\0';
+    if (out_len) *out_len = rd;
+    return true;
+}
+
+static bool read_cmdline(pid_t pid, char *buf, size_t buf_sz)
+{
+    char path[64];
+    snprintf(path, sizeof(path), "/proc/%d/cmdline", pid);
+
+    ssize_t rd = 0;
+    if (!read_file(path, buf, buf_sz, &rd) || rd <= 0)
+        return false;
+
+    for (ssize_t i = 0; i < rd; i++) {
+        if (buf[i] == '\0')
+            buf[i] = ' ';
+    }
+
+    return true;
+}
+
+static bool cmdline_contains_all(const char *cmdline,
+                                 const char *const needles[], size_t count)
+{
+    for (size_t i = 0; i < count; i++) {
+        if (!needles[i] || !needles[i][0]) continue;
+        if (strstr(cmdline, needles[i]) == NULL)
+            return false;
+    }
+    return true;
+}
+
+static size_t find_matching_processes(const char *const needles[],
+                                      size_t count, pid_t *pids,
+                                      size_t max_pids)
+{
+    size_t found = 0;
+    DIR *dir = opendir("/proc");
+    if (!dir) return 0;
+
+    struct dirent *de;
+    while ((de = readdir(dir)) != NULL) {
+        if (de->d_name[0] < '0' || de->d_name[0] > '9')
+            continue;
+
+        pid_t pid = (pid_t)atoi(de->d_name);
+        if (pid <= 1 || pid == getpid())
+            continue;
+
+        char cmdline[4096];
+        if (!read_cmdline(pid, cmdline, sizeof(cmdline)))
+            continue;
+
+        if (cmdline_contains_all(cmdline, needles, count))
+            pids[found++] = pid;
+        if (found == max_pids)
+            break;
+    }
+
+    closedir(dir);
+    return found;
+}
+
+static bool process_running_needles(const char *const needles[], size_t count)
+{
+    pid_t pids[1];
+    return find_matching_processes(needles, count, pids, 1) > 0;
+}
+
+static int terminate_matching_processes(const char *const needles[],
+                                        size_t count, int timeout_ms,
+                                        const char *label)
+{
+    pid_t pids[64];
+    size_t pid_count = find_matching_processes(needles, count, pids, 64);
+    if (pid_count == 0)
+        return 0;
+
+    for (size_t i = 0; i < pid_count; i++) {
+        if (kill(pids[i], SIGTERM) != 0 && errno != ESRCH) {
+            fprintf(stderr, "[ERR] Failed to SIGTERM %s pid %d: %s\n",
+                    label, pids[i], strerror(errno));
+        }
+    }
+
+    long long deadline = monotonic_ms() + timeout_ms;
+    while (monotonic_ms() < deadline) {
+        if (!process_running_needles(needles, count))
+            return 0;
+        sleep_ms(100);
+    }
+
+    pid_count = find_matching_processes(needles, count, pids, 64);
+    for (size_t i = 0; i < pid_count; i++) {
+        if (kill(pids[i], SIGKILL) != 0 && errno != ESRCH) {
+            fprintf(stderr, "[ERR] Failed to SIGKILL %s pid %d: %s\n",
+                    label, pids[i], strerror(errno));
+        }
+    }
+
+    deadline = monotonic_ms() + 2000;
+    while (monotonic_ms() < deadline) {
+        if (!process_running_needles(needles, count))
+            return 0;
+        sleep_ms(100);
+    }
+
+    fprintf(stderr, "[ERR] Timed out stopping %s\n", label);
+    return 1;
+}
+
+static int spawn_and_wait(char *const argv[], bool quiet = false)
+{
+    pid_t pid = fork();
+    if (pid < 0) {
+        fprintf(stderr, "[ERR] fork failed for %s: %s\n",
+                argv[0], strerror(errno));
+        return 1;
+    }
+
+    if (pid == 0) {
+        if (quiet) {
+            int nullfd = open("/dev/null", O_RDWR);
+            if (nullfd >= 0) {
+                dup2(nullfd, STDOUT_FILENO);
+                dup2(nullfd, STDERR_FILENO);
+                if (nullfd > STDERR_FILENO)
+                    close(nullfd);
+            }
+        }
+        execvp(argv[0], argv);
+        fprintf(stderr, "[ERR] execvp %s failed: %s\n",
+                argv[0], strerror(errno));
+        _exit(127);
+    }
+
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0) {
+        if (errno != EINTR) {
+            fprintf(stderr, "[ERR] waitpid failed for %s: %s\n",
+                    argv[0], strerror(errno));
+            return 1;
+        }
+    }
+
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        fprintf(stderr, "[ERR] %s exited with status %d\n",
+                argv[0], WIFEXITED(status) ? WEXITSTATUS(status) : -1);
+        return 1;
+    }
+
+    return 0;
+}
+
+static int hostapd_ctrl_request(const char *ifname, const char *cmd,
+                                char *reply, size_t reply_sz, int timeout_ms)
+{
+    char ctrl_path[128];
+    snprintf(ctrl_path, sizeof(ctrl_path), "%s/%s", HOSTAPD_CTRL_DIR, ifname);
+    if (!file_exists(ctrl_path))
+        return -1;
+
+    int fd = socket(AF_UNIX, SOCK_DGRAM, 0);
+    if (fd < 0)
+        return -1;
+
+    struct sockaddr_un local;
+    memset(&local, 0, sizeof(local));
+    local.sun_family = AF_UNIX;
+
+    static int seq = 0;
+    snprintf(local.sun_path, sizeof(local.sun_path),
+             "/tmp/qcmap-%d-%d", (int)getpid(), ++seq);
+    unlink(local.sun_path);
+
+    if (bind(fd, (struct sockaddr *)&local, sizeof(local)) != 0) {
+        close(fd);
+        unlink(local.sun_path);
+        return -1;
+    }
+
+    struct sockaddr_un remote;
+    memset(&remote, 0, sizeof(remote));
+    remote.sun_family = AF_UNIX;
+    strncpy(remote.sun_path, ctrl_path, sizeof(remote.sun_path) - 1);
+
+    if (connect(fd, (struct sockaddr *)&remote, sizeof(remote)) != 0) {
+        close(fd);
+        unlink(local.sun_path);
+        return -1;
+    }
+
+    if (send(fd, cmd, strlen(cmd), 0) < 0) {
+        close(fd);
+        unlink(local.sun_path);
+        return -1;
+    }
+
+    struct pollfd pfd;
+    memset(&pfd, 0, sizeof(pfd));
+    pfd.fd = fd;
+    pfd.events = POLLIN;
+    int pr = poll(&pfd, 1, timeout_ms);
+    if (pr <= 0) {
+        close(fd);
+        unlink(local.sun_path);
+        return -1;
+    }
+
+    ssize_t rd = recv(fd, reply, reply_sz - 1, 0);
+    close(fd);
+    unlink(local.sun_path);
+    if (rd < 0)
+        return -1;
+
+    reply[rd] = '\0';
+    return 0;
+}
+
+static int wait_hostapd_ready(const char *ifname, int timeout_ms)
+{
+    long long deadline = monotonic_ms() + timeout_ms;
+    char reply[128];
+
+    while (monotonic_ms() < deadline) {
+        if (hostapd_ctrl_request(ifname, "PING", reply, sizeof(reply), 250) == 0 &&
+            strncmp(reply, "PONG", 4) == 0)
+            return 0;
+        sleep_ms(100);
+    }
+
+    fprintf(stderr, "[ERR] Timed out waiting for hostapd ctrl on %s\n", ifname);
+    return 1;
+}
+
+static bool bridge_hasif(const char *bridge, const char *ifname)
+{
+    char path[160];
+    snprintf(path, sizeof(path), "/sys/class/net/%s/brif/%s", bridge, ifname);
+    return file_exists(path);
+}
+
+static int bridge_if_ioctl(unsigned long request, const char *bridge,
+                           const char *ifname, int allowed_errno)
+{
+    unsigned int ifindex = if_nametoindex(ifname);
+    if (ifindex == 0) {
+        fprintf(stderr, "[ERR] Interface %s is missing\n", ifname);
+        return 1;
+    }
+
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) {
+        fprintf(stderr, "[ERR] socket() failed for bridge ioctl: %s\n",
+                strerror(errno));
+        return 1;
+    }
+
+    struct ifreq ifr;
+    memset(&ifr, 0, sizeof(ifr));
+    strncpy(ifr.ifr_name, bridge, IFNAMSIZ - 1);
+    ifr.ifr_ifindex = (int)ifindex;
+
+    int ret = ioctl(fd, request, &ifr);
+    close(fd);
+    if (ret != 0 && errno != allowed_errno) {
+        fprintf(stderr, "[ERR] bridge ioctl failed for %s/%s: %s\n",
+                bridge, ifname, strerror(errno));
+        return 1;
+    }
+
+    return 0;
+}
+
+static int bridge_addif(const char *bridge, const char *ifname)
+{
+    if (bridge_hasif(bridge, ifname))
+        return 0;
+    return bridge_if_ioctl(SIOCBRADDIF, bridge, ifname, EEXIST);
+}
+
+static int bridge_delif(const char *bridge, const char *ifname)
+{
+    if (!bridge_hasif(bridge, ifname))
+        return 0;
+    return bridge_if_ioctl(SIOCBRDELIF, bridge, ifname, ENOENT);
+}
+
+static bool hostapd_running(const char *conf_path)
+{
+    const char *needles[] = {"hostapd", "-B", conf_path};
+    return process_running_needles(needles, 3);
+}
+
+static bool hostapd_cli_running(const char *ifname)
+{
+    const char *needles[] = {"hostapd_cli", ifname};
+    return process_running_needles(needles, 2);
+}
+
+static int stop_hostapd(const char *conf_path, const char *label)
+{
+    const char *needles[] = {"hostapd", "-B", conf_path};
+    return terminate_matching_processes(needles, 3, 5000, label);
+}
+
+static int stop_hostapd_cli(const char *ifname)
+{
+    const char *needles[] = {"hostapd_cli", ifname};
+    return terminate_matching_processes(needles, 2, 3000, ifname);
 }
 
 /* ─── WlanMode management (mobileap_cfg.xml) ────────────────────── */
@@ -235,16 +581,15 @@ static int set_wlan_mode(const char *mode)
     return 0;
 }
 
-/* Kill wlan1 hostapd and delete the interface.
- * Used when transitioning from AP-AP to AP (single-band). */
+/* Stop wlan1 userspace without tearing down the netdev.
+ * The interface delete path is fragile on EE71 and can wedge the driver. */
 static void cleanup_wlan1()
 {
-    run("kill $(ps w | grep 'hostapd_cli.*wlan1' | grep -v grep | awk '{print $1}') 2>/dev/null");
-    run("kill $(ps w | grep 'hostapd.*hostapd-wlan1' | grep -v grep | awk '{print $1}') 2>/dev/null");
-    usleep(500000);
+    stop_hostapd_cli("wlan1");
+    stop_hostapd(HOSTAPD_CONF_5G, "wlan1 hostapd");
+    bridge_delif(BRIDGE, "wlan1");
     unlink(HOSTAPD_PID_5G);
     unlink("/var/run/hostapd/wlan1");
-    run("iw dev wlan1 del 2>/dev/null");
     printf("[OK] wlan1 cleaned up\n");
 }
 
@@ -346,9 +691,9 @@ static int generate_hostapd_wlan1(const char *guest_json)
 /* ─── Hostapd restart ────────────────────────────────────────────── */
 /* Restart procedure:
  *   1. Kill existing hostapd for the interface
- *   2. For wlan1: delete + recreate interface (driver state cleanup)
- *   3. Start hostapd with config
- *   4. Add to bridge
+ *   2. Start hostapd with config
+ *   3. Wait for control socket readiness
+ *   4. Ensure bridge membership
  *   5. Start hostapd_cli (for QCMAP event handling)
  */
 static int restart_hostapd_wlan0()
@@ -360,29 +705,48 @@ static int restart_hostapd_wlan0()
         return 1;
     }
 
-    /* Kill existing */
-    run("kill $(ps w | grep 'hostapd_cli.*wlan0' | grep -v grep | awk '{print $1}') 2>/dev/null");
-    run("kill $(ps w | grep 'hostapd.*hostapd\\.conf' | grep -v grep | awk '{print $1}') 2>/dev/null");
-    usleep(500000);
+    if (stop_hostapd_cli("wlan0") != 0)
+        return 1;
+    if (stop_hostapd(HOSTAPD_CONF_2G, "wlan0 hostapd") != 0)
+        return 1;
 
     /* Remove stale ctrl interface */
+    unlink(HOSTAPD_PID_2G);
     unlink("/var/run/hostapd/wlan0");
 
-    /* Start hostapd */
-    char cmd[512];
-    snprintf(cmd, sizeof(cmd),
-             "hostapd -B %s -P %s -e %s",
-             HOSTAPD_CONF_2G, HOSTAPD_PID_2G, ENTROPY_FILE);
-    if (run(cmd) != 0) {
+    char *hostapd_argv[] = {
+        (char *)"hostapd",
+        (char *)"-B",
+        (char *)HOSTAPD_CONF_2G,
+        (char *)"-P",
+        (char *)HOSTAPD_PID_2G,
+        (char *)"-e",
+        (char *)ENTROPY_FILE,
+        NULL
+    };
+    if (spawn_and_wait(hostapd_argv) != 0) {
         fprintf(stderr, "[ERR] Failed to start wlan0 hostapd\n");
         return 1;
     }
 
-    usleep(500000);
+    if (wait_hostapd_ready("wlan0", 15000) != 0)
+        return 1;
 
-    /* Start hostapd_cli */
-    run("hostapd_cli -i wlan0 -p /var/run/hostapd -B "
-        "-a /usr/bin/QCMAP_StaInterface 2>/dev/null");
+    char *hostapd_cli_argv[] = {
+        (char *)"hostapd_cli",
+        (char *)"-i",
+        (char *)"wlan0",
+        (char *)"-p",
+        (char *)HOSTAPD_CTRL_DIR,
+        (char *)"-B",
+        (char *)"-a",
+        (char *)QCMAP_STA_IFACE,
+        NULL
+    };
+    if (spawn_and_wait(hostapd_cli_argv, true) != 0) {
+        fprintf(stderr, "[ERR] Failed to start wlan0 hostapd_cli\n");
+        return 1;
+    }
 
     printf("[OK] wlan0 hostapd restarted\n");
     return 0;
@@ -397,50 +761,60 @@ static int restart_hostapd_wlan1()
         return 1;
     }
 
-    /* Kill existing */
-    run("kill $(ps w | grep 'hostapd_cli.*wlan1' | grep -v grep | awk '{print $1}') 2>/dev/null");
-    run("kill $(ps w | grep 'hostapd.*hostapd-wlan1' | grep -v grep | awk '{print $1}') 2>/dev/null");
-    usleep(500000);
+    if (stop_hostapd_cli("wlan1") != 0)
+        return 1;
+    if (stop_hostapd(HOSTAPD_CONF_5G, "wlan1 hostapd") != 0)
+        return 1;
 
     /* Remove stale PID + ctrl interface */
     unlink(HOSTAPD_PID_5G);
     unlink("/var/run/hostapd/wlan1");
 
-    /* Recreate wlan1 interface — after any teardown, wlan1 has
-     * corrupted driver state ("Failed to set beacon parameters").
-     * Must delete and recreate from wlan0. */
-    run("iw dev wlan1 del 2>/dev/null");
-    usleep(500000);
-    run("iw dev wlan0 interface add wlan1 type __ap 2>/dev/null");
-    usleep(500000);
-
-    /* Verify interface exists */
-    if (run("ifconfig wlan1 >/dev/null 2>&1") != 0) {
-        fprintf(stderr, "[ERR] Failed to create wlan1 interface\n");
+    /* On EE71, deleting/recreating wlan1 through iw can wedge the driver
+     * and leave both iw and hostapd stuck in D-state. Keep the existing
+     * wlan1 if the interface is already present and only fail if it is
+     * genuinely missing. */
+    if (!iface_exists("wlan1")) {
+        fprintf(stderr, "[ERR] wlan1 interface is missing\n");
         return 1;
     }
 
-    /* Start hostapd */
-    char cmd[512];
-    snprintf(cmd, sizeof(cmd),
-             "hostapd -B %s -P %s -e %s",
-             HOSTAPD_CONF_5G, HOSTAPD_PID_5G, ENTROPY_FILE);
-    if (run(cmd) != 0) {
+    char *hostapd_argv[] = {
+        (char *)"hostapd",
+        (char *)"-B",
+        (char *)HOSTAPD_CONF_5G,
+        (char *)"-P",
+        (char *)HOSTAPD_PID_5G,
+        (char *)"-e",
+        (char *)ENTROPY_FILE,
+        NULL
+    };
+    if (spawn_and_wait(hostapd_argv) != 0) {
         fprintf(stderr, "[ERR] Failed to start wlan1 hostapd\n");
         return 1;
     }
 
-    /* Wait for 5GHz ACS/DFS scan */
-    sleep(3);
+    if (wait_hostapd_ready("wlan1", 20000) != 0)
+        return 1;
 
-    /* Add to bridge (may already be there) */
-    char brcmd[256];
-    snprintf(brcmd, sizeof(brcmd), "brctl addif %s wlan1 2>/dev/null", BRIDGE);
-    run(brcmd);
+    if (bridge_addif(BRIDGE, "wlan1") != 0)
+        return 1;
 
-    /* Start hostapd_cli */
-    run("hostapd_cli -i wlan1 -p /var/run/hostapd -B "
-        "-a /usr/bin/QCMAP_StaInterface 2>/dev/null");
+    char *hostapd_cli_argv[] = {
+        (char *)"hostapd_cli",
+        (char *)"-i",
+        (char *)"wlan1",
+        (char *)"-p",
+        (char *)HOSTAPD_CTRL_DIR,
+        (char *)"-B",
+        (char *)"-a",
+        (char *)QCMAP_STA_IFACE,
+        NULL
+    };
+    if (spawn_and_wait(hostapd_cli_argv, true) != 0) {
+        fprintf(stderr, "[ERR] Failed to start wlan1 hostapd_cli\n");
+        return 1;
+    }
 
     printf("[OK] wlan1 hostapd restarted\n");
     return 0;
@@ -593,10 +967,10 @@ static bool ipc_set_wlan_settings(const char *ap2g, const char *ap5g,
 /* ─── Status ─────────────────────────────────────────────────────── */
 static int cmd_status()
 {
-    bool wlan0_up = process_running("hostapd.*hostapd\\.conf");
-    bool wlan1_up = process_running("hostapd.*hostapd-wlan1");
-    bool wlan0_cli = process_running("hostapd_cli.*wlan0");
-    bool wlan1_cli = process_running("hostapd_cli.*wlan1");
+    bool wlan0_up = hostapd_running(HOSTAPD_CONF_2G);
+    bool wlan1_up = hostapd_running(HOSTAPD_CONF_5G);
+    bool wlan0_cli = hostapd_cli_running("wlan0");
+    bool wlan1_cli = hostapd_cli_running("wlan1");
     char wlan_mode[32] = "unknown";
     get_wlan_mode(wlan_mode, sizeof(wlan_mode));
 
@@ -612,6 +986,18 @@ static int cmd_status()
            file_exists(HOSTAPD_CONF_5G) ? "true" : "false",
            wlan_mode);
     return 0;
+}
+
+static bool wait_for_hostapd_state(const char *conf_path, bool want_running,
+                                   int timeout_ms)
+{
+    long long deadline = monotonic_ms() + timeout_ms;
+    while (monotonic_ms() < deadline) {
+        if (hostapd_running(conf_path) == want_running)
+            return true;
+        sleep_ms(200);
+    }
+    return hostapd_running(conf_path) == want_running;
 }
 
 /* ─── Apply ──────────────────────────────────────────────────────── */
@@ -700,30 +1086,27 @@ static int cmd_apply(const char *json)
             fflush(stdout);
 
             /* Phase 1: Wait for teardown (max 15s) */
-            for (int i = 0; i < 15; i++) {
-                sleep(1);
-                if (!process_running("hostapd.*hostapd\\.conf")) {
-                    printf("[watchdog] WiFi teardown detected\n");
-                    fflush(stdout);
-                    break;
-                }
+            if (wait_for_hostapd_state(HOSTAPD_CONF_2G, false, 15000)) {
+                printf("[watchdog] WiFi teardown detected\n");
+                fflush(stdout);
+            } else {
+                printf("[watchdog] Teardown not observed before timeout\n");
+                fflush(stdout);
             }
 
             /* Phase 2: Wait for wlan0 recovery (max 30s) */
             printf("[watchdog] Waiting for wlan0 recovery...\n");
             fflush(stdout);
-            for (int i = 0; i < 30; i++) {
-                sleep(1);
-                if (process_running("hostapd.*hostapd\\.conf")) {
-                    printf("[watchdog] wlan0 hostapd is back\n");
-                    fflush(stdout);
-                    break;
-                }
+            if (wait_for_hostapd_state(HOSTAPD_CONF_2G, true, 30000)) {
+                printf("[watchdog] wlan0 hostapd is back\n");
+                fflush(stdout);
+            } else {
+                printf("[watchdog] wlan0 recovery timed out\n");
+                fflush(stdout);
             }
-            sleep(5);
 
             /* Phase 3: Start wlan1 hostapd if not running */
-            if (!process_running("hostapd.*hostapd-wlan1")) {
+            if (!hostapd_running(HOSTAPD_CONF_5G)) {
                 printf("[watchdog] Starting wlan1 hostapd...\n");
                 fflush(stdout);
                 restart_hostapd_wlan1();

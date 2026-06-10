@@ -32,13 +32,19 @@ config WPA_WOLFSSL
 	select WOLFSSL_HAS_WPAS
 
 config DRIVER_11AC_SUPPORT
-	bool
+	bool "Enable 802.11ac/VHT support"
 	default n
+	help
+	  Enable compile-time 802.11ac/VHT support in hostapd and
+	  wpa_supplicant nl80211 builds.
 
 config DRIVER_11AX_SUPPORT
-	bool
+	bool "Enable 802.11ax/HE support"
 	default n
 	select WPA_MBO_SUPPORT
+	help
+	  Enable compile-time 802.11ax/HE support in hostapd and
+	  wpa_supplicant nl80211 builds.
 
 config DRIVER_11BE_SUPPORT
 	bool

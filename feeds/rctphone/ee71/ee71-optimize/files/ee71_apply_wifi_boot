@@ -1,0 +1,135 @@
+#!/bin/sh
+# ee71_apply_wifi_boot — re-apply WiFi config via IPC after QCMAP startup
+#
+# Problem: QCMAP_ConnectionManager on EE71 has an OEM-patched jrd_check_cfg_file
+# that hardcodes reading /etc/mobileap_cfg.xml during initialization. The binary
+# serializes internal state back to XML, and the default WlanMode in the state
+# is "AP" (from WriteDefaultsToXML hardcoded default). This causes AP-AP mode
+# to revert to single AP mode after every reboot.
+#
+# Fix: After QCMAP is fully initialized, read WiFi config from user_info.db3
+# and re-apply it via qcmap_wifi_ctl (which uses QMI IPC SetWlanSettings).
+# This updates the in-memory state correctly and QCMAP writes the proper
+# AP-AP config back to XML.
+
+DB="/jrd-resource/resource/sqlite3/user_info.db3"
+XML="/etc/mobileap_cfg.xml"
+QCMAP_WIFI_CTL="/usr/bin/qcmap_wifi_ctl"
+LOG="/tmp/ee71_apply_wifi_boot.log"
+MAX_WAIT=60
+
+log() {
+    echo "[$(date '+%F %H:%M:%S')] $*" >> "$LOG"
+}
+
+# Prereqs
+[ -x "$QCMAP_WIFI_CTL" ] || { log "qcmap_wifi_ctl missing, skip"; exit 0; }
+[ -f "$DB" ] || { log "DB missing, skip"; exit 0; }
+
+# Read user intent from DB
+GUEST5G=$(sqlite3 "$DB" "SELECT value FROM wifi_info WHERE items='Guest5GAPStatus';" 2>/dev/null)
+AP2G=$(sqlite3 "$DB" "SELECT value FROM wifi_info WHERE items='2GAPStatus';" 2>/dev/null)
+AP5G=$(sqlite3 "$DB" "SELECT value FROM wifi_info WHERE items='5GAPStatus';" 2>/dev/null)
+
+log "DB: 2GAPStatus=$AP2G 5GAPStatus=$AP5G Guest5GAPStatus=$GUEST5G"
+
+# Determine desired mode:
+#   dual (AP-AP):   2GAPStatus=1 AND Guest5GAPStatus=1  — wlan0 2.4G + wlan1 5G
+#   5g (single 5G): 5GAPStatus=1 AND 2GAPStatus=0
+#   2g (single 2G): 2GAPStatus=1 AND rest=0
+MODE=""
+if [ "$AP2G" = "1" ] && [ "$GUEST5G" = "1" ]; then
+    MODE="dual"
+elif [ "$AP5G" = "1" ]; then
+    MODE="5g"
+elif [ "$AP2G" = "1" ]; then
+    MODE="2g"
+fi
+
+log "Desired mode: $MODE"
+
+# Only fix dual — single-band modes work correctly out of the box
+[ "$MODE" = "dual" ] || { log "not dual, nothing to fix"; exit 0; }
+
+# Wait for QCMAP to be ready
+i=0
+while [ $i -lt $MAX_WAIT ]; do
+    if pidof QCMAP_ConnectionManager >/dev/null 2>&1 && [ -f "$XML" ]; then
+        break
+    fi
+    sleep 1
+    i=$((i+1))
+done
+
+if ! pidof QCMAP_ConnectionManager >/dev/null 2>&1; then
+    log "QCMAP not started after ${MAX_WAIT}s, abort"
+    exit 1
+fi
+
+# Give QCMAP extra time to finish QMI init
+sleep 10
+
+# Check current XML state — skip if already AP-AP
+CUR_MODE=$(grep -o '<WlanMode>[^<]*</WlanMode>' "$XML" | sed 's|<[^>]*>||g')
+log "Current WlanMode in XML: $CUR_MODE"
+
+if [ "$CUR_MODE" = "AP-AP" ]; then
+    log "Already AP-AP, no action needed"
+    exit 0
+fi
+
+# Read WiFi settings from DB (with safe defaults)
+SSID_2G=$(sqlite3 "$DB" "SELECT value FROM wifi_info WHERE items='2GSSID';" 2>/dev/null)
+KEY_2G=$(sqlite3 "$DB" "SELECT value FROM wifi_info WHERE items='2GWPAKey';" 2>/dev/null)
+SEC_2G=$(sqlite3 "$DB" "SELECT value FROM wifi_info WHERE items='2GSecurityMode';" 2>/dev/null)
+WPA_2G=$(sqlite3 "$DB" "SELECT value FROM wifi_info WHERE items='2GWPAMode';" 2>/dev/null)
+MAX_2G=$(sqlite3 "$DB" "SELECT value FROM wifi_info WHERE items='2GMaxStaNum';" 2>/dev/null)
+
+SSID_5G=$(sqlite3 "$DB" "SELECT value FROM wifi_info WHERE items='Guest5GSSID';" 2>/dev/null)
+KEY_5G=$(sqlite3 "$DB" "SELECT value FROM wifi_info WHERE items='Guest5GWPAKey';" 2>/dev/null)
+SEC_5G=$(sqlite3 "$DB" "SELECT value FROM wifi_info WHERE items='Guest5GSecurityMode';" 2>/dev/null)
+WPA_5G=$(sqlite3 "$DB" "SELECT value FROM wifi_info WHERE items='Guest5GWPAMode';" 2>/dev/null)
+MAX_5G=$(sqlite3 "$DB" "SELECT value FROM wifi_info WHERE items='Guest5GMaxStaNum';" 2>/dev/null)
+
+[ -z "$SSID_2G" ] && SSID_2G="EE71_2G"
+[ -z "$SSID_5G" ] && SSID_5G="EE71_5G"
+[ -z "$KEY_2G" ] && KEY_2G=""
+[ -z "$KEY_5G" ] && KEY_5G=""
+[ -z "$SEC_2G" ] && SEC_2G="3"
+[ -z "$SEC_5G" ] && SEC_5G="3"
+[ -z "$WPA_2G" ] && WPA_2G="1"
+[ -z "$WPA_5G" ] && WPA_5G="1"
+[ -z "$MAX_2G" ] && MAX_2G="15"
+[ -z "$MAX_5G" ] && MAX_5G="15"
+
+log "Applying dual-band: 2G='$SSID_2G' 5G='$SSID_5G'"
+
+# Build JSON payload and apply
+JSON=$(jq -n \
+    --arg s2g "$SSID_2G" --arg k2g "$KEY_2G" \
+    --argjson sec2g "$SEC_2G" --argjson wpa2g "$WPA_2G" --argjson max2g "$MAX_2G" \
+    --arg s5g "$SSID_5G" --arg k5g "$KEY_5G" \
+    --argjson sec5g "$SEC_5G" --argjson wpa5g "$WPA_5G" --argjson max5g "$MAX_5G" \
+    '{
+        mode: "dual",
+        AP2G: {ApStatus: 1, Ssid: $s2g, WpaKey: $k2g, SecurityMode: $sec2g, WpaType: $wpa2g, max_numsta: $max2g},
+        AP5G: {ApStatus: 0, Ssid: $s5g, WpaKey: $k5g, SecurityMode: $sec5g, WpaType: $wpa5g, max_numsta: $max5g},
+        AP5G_guest: {ApStatus: 1, Ssid: $s5g, WpaKey: $k5g, SecurityMode: $sec5g, WpaType: $wpa5g, max_numsta: $max5g}
+    }' 2>/dev/null)
+
+if [ -z "$JSON" ]; then
+    log "Failed to build JSON (jq missing?)"
+    exit 1
+fi
+
+log "Calling qcmap_wifi_ctl apply..."
+"$QCMAP_WIFI_CTL" apply "$JSON" >> "$LOG" 2>&1
+RC=$?
+log "apply RC=$RC"
+
+# Verify
+sleep 5
+NEW_MODE=$(grep -o '<WlanMode>[^<]*</WlanMode>' "$XML" | sed 's|<[^>]*>||g')
+log "Final WlanMode: $NEW_MODE"
+
+exit 0

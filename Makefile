@@ -128,11 +128,21 @@ buildinfo: FORCE
 	$(_SINGLE)$(SUBMAKE) -r diffconfig buildversion feedsversion
 
 headers: FORCE
-	tar -czf $(BIN_DIR)/include.tar.gz \
-	-C $(STAGING_DIR)/opt/include . \
-	-C $(STAGING_DIR)/opt/lib/libiconv-full/include . \
-	-C $(STAGING_DIR)/opt/lib/libintl-full/include . \
-	-C $(STAGING_DIR)/opt/lib/glib-2.0/include . 
+	rm -rf $(BIN_DIR)/include-root
+	mkdir -p $(BIN_DIR)/include-root
+	for dir in \
+		$(STAGING_DIR)/opt/include \
+		$(STAGING_DIR)/usr/include \
+		$(STAGING_DIR)/opt/lib/libiconv-full/include \
+		$(STAGING_DIR)/usr/lib/libiconv-full/include \
+		$(STAGING_DIR)/opt/lib/libintl-full/include \
+		$(STAGING_DIR)/usr/lib/libintl-full/include \
+		$(STAGING_DIR)/opt/lib/glib-2.0/include \
+		$(STAGING_DIR)/usr/lib/glib-2.0/include; do \
+		[ ! -d "$$dir" ] || tar -cf - -C "$$dir" . | tar -xf - -C $(BIN_DIR)/include-root; \
+	done
+	tar -czf $(BIN_DIR)/include.tar.gz -C $(BIN_DIR)/include-root .
+	rm -rf $(BIN_DIR)/include-root
 
 prepare: .config $(tools/stamp-compile) $(toolchain/stamp-compile)
 	$(_SINGLE)$(SUBMAKE) -r buildinfo

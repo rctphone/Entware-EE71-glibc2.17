@@ -10,7 +10,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=hostapd
-PKG_RELEASE:=1
+PKG_RELEASE:=3
 
 PKG_SOURCE_URL:=https://w1.fi/hostap.git
 PKG_SOURCE_PROTO:=git
@@ -108,6 +108,10 @@ endef
 
 define Package/wpa-supplicant/description
  WPA Supplicant with full feature set (internal TLS).
+endef
+
+define Package/hostapd/config
+	source "$(SOURCE)/Config.in"
 endef
 
 define Package/wpa-supplicant/config

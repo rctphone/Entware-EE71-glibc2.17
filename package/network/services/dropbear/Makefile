@@ -12,7 +12,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=dropbear
 PKG_VERSION:=2025.89
-PKG_RELEASE:=1
+PKG_RELEASE:=2
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.bz2
 PKG_SOURCE_URL:= \
@@ -259,6 +259,9 @@ define Package/dropbear/install
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./files/dropbear.init $(1)/etc/init.d/dropbear
 	$(INSTALL_DIR) $(1)/etc/dropbear
+	# OpenSSH sftp-server for modern scp (SFTP protocol)
+	$(INSTALL_DIR) $(1)/usr/libexec
+	$(INSTALL_BIN) ./files/sftp-server $(1)/usr/libexec/sftp-server
 endef
 
 define Package/dropbearconvert/install

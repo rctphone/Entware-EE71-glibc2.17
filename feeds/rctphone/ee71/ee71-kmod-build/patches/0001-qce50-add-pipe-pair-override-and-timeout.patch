@@ -1,0 +1,64 @@
+--- a/drivers/crypto/msm/qce50.c
++++ b/drivers/crypto/msm/qce50.c
+@@ -27,6 +27,15 @@
+ #include "qce50.h"
+ #include "qcryptohw_50.h"
+
++/*
++ * Module parameter to override BAM pipe pair from device tree.
++ * Default -1 means use DT value. Valid: 0, 1, 2, 3.
++ * qcedev uses pair 2 (pipes 4-5), qcrypto DT says pair 3 (pipes 6-7).
++ * Pipe pair 3 hangs on EE71 (MDM9640) — try 0 or 1.
++ */
++static int qce_pipe_pair_override = -1;
++module_param(qce_pipe_pair_override, int, 0644);
++MODULE_PARM_DESC(qce_pipe_pair_override, "Override BAM pipe pair index from DT (-1=use DT)");
+
+ #define QCE_SECTOR_SIZE	0x200
+
+--- a/drivers/crypto/msm/qce50.c.orig_sps_init_ep_conn
++++ b/drivers/crypto/msm/qce50.c
+@@ -2460,6 +2460,8 @@
+ static int qce_sps_init_ep_conn(struct qce_device *pce_dev,
+ 				struct qce_sps_ep_conn_data *ep,
+ 				bool is_producer)
+ {
+ 	int rc = 0;
+ 	struct sps_pipe *sps_pipe_info;
+@@ -2544,6 +2546,13 @@
+ 	memset(sps_connect_info->desc.base, 0x00, sps_connect_info->desc.size);
+
++	pr_info("qce50: sps_connect %s pipe: src_pipe=%d dest_pipe=%d "
++		"lock_group=%d bam_handle=0x%lx\n",
++		is_producer ? "PRODUCER" : "CONSUMER",
++		sps_connect_info->src_pipe_index,
++		sps_connect_info->dest_pipe_index,
++		sps_connect_info->lock_group,
++		(unsigned long)pce_dev->ce_sps.bam_handle);
++
+ 	/* Establish connection between peripheral and memory endpoint */
+ 	rc = sps_connect(sps_pipe_info, sps_connect_info);
+ 	if (rc) {
+--- a/drivers/crypto/msm/qce50.c.orig_get_dt
++++ b/drivers/crypto/msm/qce50.c
+@@ -5214,6 +5214,17 @@
+ 	if (of_property_read_u32((&pdev->dev)->of_node,
+ 				"qcom,bam-pipe-pair",
+ 				&pce_dev->ce_sps.pipe_pair_index)) {
+ 		pr_err("Fail to get bam pipe pair information.\n");
+ 		return -EINVAL;
+ 	}
++
++	/* Allow module parameter to override DT pipe pair */
++	if (qce_pipe_pair_override >= 0 && qce_pipe_pair_override <= 3) {
++		pr_info("qce50: overriding DT pipe_pair %d -> %d (module param)\n",
++			pce_dev->ce_sps.pipe_pair_index,
++			qce_pipe_pair_override);
++		pce_dev->ce_sps.pipe_pair_index = qce_pipe_pair_override;
++	} else if (qce_pipe_pair_override >= 0) {
++		pr_warn("qce50: invalid pipe_pair_override=%d, using DT value %d\n",
++			qce_pipe_pair_override, pce_dev->ce_sps.pipe_pair_index);
++	}
++
+ 	if (of_property_read_u32((&pdev->dev)->of_node,
+ 				"qcom,ce-device",
