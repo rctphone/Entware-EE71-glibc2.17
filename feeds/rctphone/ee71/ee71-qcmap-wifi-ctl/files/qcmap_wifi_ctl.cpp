@@ -1134,6 +1134,100 @@ static int cmd_apply(const char *json)
     return 0;
 }
 
+/* ─── Continuous 5GHz (wlan1) watchdog ───────────────────────────── */
+/* The apply-time watchdog (cmd_apply step 2) only covers the WiFi
+ * restart that follows a settings change. But wlan1 hostapd can also
+ * die silently during normal operation (driver hiccup, OOM kill) —
+ * the symptom Vadim reported: "5GHz works but doesn't show in webui".
+ * This long-running daemon periodically re-checks wlan1 health in
+ * dual-band mode and restarts it, so the user never has to press the
+ * manual "Repair 5 GHz" button.
+ *
+ * Degraded condition (all must hold):
+ *   - WlanMode is AP-AP (dual-band configured)
+ *   - /etc/hostapd-wlan1.conf exists (5GHz config present)
+ *   - wlan0 hostapd IS running (WiFi globally up — not booting / not
+ *     mid-teardown / not a single-band switch in progress)
+ *   - wlan1 hostapd is NOT running
+ * Acting only when wlan0 is up avoids fighting QCMAP during a restart.
+ *
+ * Anti-flapping: after MAX_BURST consecutive restarts that don't stick,
+ * back off to BACKOFF_S between attempts so a truly dead radio is not
+ * hammered. The burst counter resets once wlan1 is observed healthy. */
+static bool dual_band_configured()
+{
+    char mode[32];
+    if (!get_wlan_mode(mode, sizeof(mode)))
+        return false;
+    if (strcmp(mode, "AP-AP") != 0)
+        return false;
+    return file_exists(HOSTAPD_CONF_5G);
+}
+
+static int cmd_watchdog(int interval_s)
+{
+    const int MAX_BURST = 3;       /* restarts before backing off */
+    const int BACKOFF_S = 600;     /* 10 min cool-down for dead radio */
+    if (interval_s < 10) interval_s = 10;
+
+    /* Detach: own session, log to file, release inherited fds. */
+    setsid();
+    for (int fd = 3; fd < 64; fd++) close(fd);
+    freopen("/dev/null", "r", stdin);
+    freopen("/tmp/qcmap_watchdog.log", "a", stdout);
+    freopen("/tmp/qcmap_watchdog.log", "a", stderr);
+
+    printf("[watchdog] 5GHz monitor started (interval=%ds)\n", interval_s);
+    fflush(stdout);
+
+    int burst = 0;
+    long long backoff_until = 0;
+
+    for (;;) {
+        sleep_ms(interval_s * 1000);
+
+        if (!dual_band_configured()) {
+            burst = 0;
+            continue;
+        }
+        /* Only act when WiFi is globally up but 5GHz is missing. */
+        if (!hostapd_running(HOSTAPD_CONF_2G))
+            continue;
+        if (hostapd_running(HOSTAPD_CONF_5G)) {
+            if (burst != 0) {
+                printf("[watchdog] wlan1 healthy again, reset burst\n");
+                fflush(stdout);
+            }
+            burst = 0;
+            continue;
+        }
+
+        /* Degraded: 5GHz down while dual-band active. */
+        long long now = monotonic_ms();
+        if (burst >= MAX_BURST && now < backoff_until) {
+            continue; /* cooling down */
+        }
+        if (burst >= MAX_BURST && now >= backoff_until) {
+            printf("[watchdog] backoff elapsed, retrying\n");
+            fflush(stdout);
+            burst = 0;
+        }
+
+        printf("[watchdog] wlan1 down in dual-band mode, restarting (attempt %d)\n",
+               burst + 1);
+        fflush(stdout);
+        restart_hostapd_wlan1();
+        burst++;
+        if (burst >= MAX_BURST) {
+            backoff_until = monotonic_ms() + (long long)BACKOFF_S * 1000;
+            printf("[watchdog] %d restarts didn't stick, backing off %ds\n",
+                   MAX_BURST, BACKOFF_S);
+            fflush(stdout);
+        }
+    }
+    return 0; /* not reached */
+}
+
 /* ─── Main ───────────────────────────────────────────────────────── */
 static void usage(const char *prog)
 {
@@ -1149,6 +1243,7 @@ static void usage(const char *prog)
         "  restart-primary   Restart wlan0 hostapd only\n"
         "  restart-guest     Restart wlan1 hostapd only\n"
         "  status            Check hostapd process status (JSON)\n"
+        "  watchdog [secs]   Run continuous 5GHz monitor (default 45s)\n"
         "\n", prog);
 }
 
@@ -1174,6 +1269,10 @@ int main(int argc, char *argv[])
     }
     if (strcmp(cmd, "restart-guest") == 0) {
         return restart_hostapd_wlan1();
+    }
+    if (strcmp(cmd, "watchdog") == 0) {
+        int interval = (argc >= 3) ? atoi(argv[2]) : 45;
+        return cmd_watchdog(interval);
     }
     if (strcmp(cmd, "apply") == 0) {
         if (argc < 3) {

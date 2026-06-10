@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=ee71-qcmap-wifi-ctl
-PKG_VERSION:=1.3.1
+PKG_VERSION:=1.4.0
 PKG_RELEASE:=1
 
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)
@@ -44,6 +44,11 @@ endef
 define Package/ee71-qcmap-wifi-ctl/install
 	$(INSTALL_DIR) $(1)/usr/bin
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/qcmap_wifi_ctl $(1)/usr/bin/
+	# Continuous 5GHz (wlan1) watchdog — runs after WiFi boot-apply (S92)
+	$(INSTALL_DIR) $(1)/etc/init.d
+	$(INSTALL_BIN) ./files/ee71_5g_watchdog.init $(1)/etc/init.d/ee71_5g_watchdog
+	$(INSTALL_DIR) $(1)/etc/rc5.d
+	$(LN) ../init.d/ee71_5g_watchdog $(1)/etc/rc5.d/S93ee71_5g_watchdog
 endef
 
 $(eval $(call BuildPackage,ee71-qcmap-wifi-ctl))
