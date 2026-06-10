@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=ee71-webui
-PKG_VERSION:=1.7.4
+PKG_VERSION:=1.8.0
 PKG_RELEASE:=1
 
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)
@@ -116,6 +116,9 @@ define Package/ee71-webui/install
 	# CGI scripts
 	$(INSTALL_DIR) $(1)/jrd-resource/resource/webrc/www/cgi-bin
 	find $(PKG_BUILD_DIR)/cgi-bin -maxdepth 1 -type f -exec $(INSTALL_BIN) {} $(1)/jrd-resource/resource/webrc/www/cgi-bin/ \;
+	# Shared CGI library (sourced by every *.cgi)
+	$(INSTALL_DIR) $(1)/jrd-resource/resource/webrc/www/cgi-bin/lib
+	$(INSTALL_DATA) $(PKG_BUILD_DIR)/cgi-bin/lib/cgi-common.sh $(1)/jrd-resource/resource/webrc/www/cgi-bin/lib/cgi-common.sh
 	# Init script
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./files/ee71_webui.init $(1)/etc/init.d/ee71_webui

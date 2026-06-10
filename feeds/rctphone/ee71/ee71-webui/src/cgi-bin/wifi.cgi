@@ -11,45 +11,10 @@ WIFI_CTL="/usr/bin/qcmap_wifi_ctl"
 DB="/jrd-resource/resource/sqlite3/user_info.db3"
 MOBILEAP_CFG="/etc/mobileap_cfg.xml"
 
-# --- CSRF check for POST ---
-csrf_check() {
-    if [ "$REQUEST_METHOD" = "POST" ]; then
-        case "$CONTENT_TYPE" in
-            application/json*) ;;
-            *) echo '{"error":"JSON required"}'; exit 0 ;;
-        esac
-        if [ "$HTTP_X_EE71_REQUEST" != "1" ]; then
-            echo '{"error":"Missing X-EE71-Request header"}'; exit 0
-        fi
-        LAN_IP=$(ifconfig bridge0 2>/dev/null | sed -n 's/.*inet addr:\([^ ]*\).*/\1/p')
-        LAN_IP="${LAN_IP:-192.168.1.1}"
-        HOSTNAME=$(cat /etc/hostname 2>/dev/null)
-        REQ_HOST=$(echo "$HTTP_HOST" | sed 's/:.*//')
-        _origin_ok() {
-            case "$1" in
-                "http://${LAN_IP}"*|"http://${HOSTNAME}"*) return 0 ;;
-            esac
-            [ -n "$REQ_HOST" ] && case "$1" in
-                "http://${REQ_HOST}"*) return 0 ;;
-            esac
-            return 1
-        }
-        if [ -n "$HTTP_ORIGIN" ]; then
-            _origin_ok "$HTTP_ORIGIN" || { echo '{"error":"Invalid origin"}'; exit 0; }
-        elif [ -n "$HTTP_REFERER" ]; then
-            _origin_ok "$HTTP_REFERER" || { echo '{"error":"Invalid origin"}'; exit 0; }
-        fi
-    fi
-}
+. /jrd-resource/resource/webrc/www/cgi-bin/lib/cgi-common.sh
 
 # Read a value from wifi_info table
-db_get() {
-    sqlite3 "$DB" "SELECT value FROM wifi_info WHERE items='$1';" 2>/dev/null
-}
 
-db_set() {
-    sqlite3 "$DB" "UPDATE $1 SET value='$3' WHERE items='$2';" 2>/dev/null
-}
 
 sync_guest_ap_intent() {
     case "$1" in

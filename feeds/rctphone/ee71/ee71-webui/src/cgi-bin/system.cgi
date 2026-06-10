@@ -3,32 +3,14 @@
 echo "Content-Type: application/json"
 echo ""
 
-# For POST actions: read body and check CSRF
+. /jrd-resource/resource/webrc/www/cgi-bin/lib/cgi-common.sh
+
+# For POST actions: read body and check CSRF/origin (shared csrf_check)
 BODY=""
 if [ "$REQUEST_METHOD" = "POST" ]; then
+    csrf_check
     BODY=$(cat)
     ACTION=$(echo "$BODY" | jq -r '.action // empty')
-    if [ "$HTTP_X_EE71_REQUEST" != "1" ]; then
-        echo '{"error":"Missing X-EE71-Request header"}'; exit 0
-    fi
-    LAN_IP=$(ifconfig bridge0 2>/dev/null | sed -n 's/.*inet addr:\([^ ]*\).*/\1/p')
-    LAN_IP="${LAN_IP:-192.168.1.1}"
-    HOSTNAME=$(cat /etc/hostname 2>/dev/null)
-    REQ_HOST=$(echo "$HTTP_HOST" | sed 's/:.*//')
-    _origin_ok() {
-        case "$1" in
-            "http://${LAN_IP}"*|"http://${HOSTNAME}"*) return 0 ;;
-        esac
-        [ -n "$REQ_HOST" ] && case "$1" in
-            "http://${REQ_HOST}"*) return 0 ;;
-        esac
-        return 1
-    }
-    if [ -n "$HTTP_ORIGIN" ]; then
-        _origin_ok "$HTTP_ORIGIN" || { echo '{"error":"Invalid origin"}'; exit 0; }
-    elif [ -n "$HTTP_REFERER" ]; then
-        _origin_ok "$HTTP_REFERER" || { echo '{"error":"Invalid origin"}'; exit 0; }
-    fi
 else
     ACTION="${QUERY_STRING%%&*}"
     ACTION="${ACTION#action=}"
