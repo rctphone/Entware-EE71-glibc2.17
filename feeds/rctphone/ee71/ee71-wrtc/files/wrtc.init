@@ -10,11 +10,10 @@
 
 BIN=/usr/sbin/ee71-wrtc
 CFG=/etc/wrtc/config
-PSK=/etc/wrtc/psk
 PID_FILE=/var/run/wrtc.pid
 LOCAL_PORT=51821
 
-# config: строки KEY=VALUE; обязателен WRTC_URL=wrtc://...
+# config: KEY=VALUE lines; WRTC_URL=wrtc://... is required
 [ -f "$CFG" ] && . "$CFG"
 
 is_running() { [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE" 2>/dev/null)" 2>/dev/null; }
@@ -23,10 +22,10 @@ start() {
     is_running && { echo "wrtc already running (pid $(cat "$PID_FILE"))"; exit 0; }
     [ -x "$BIN" ] || { echo "wrtc: binary not found"; exit 1; }
     [ -n "$WRTC_URL" ] || { echo "wrtc: WRTC_URL not set in $CFG"; exit 1; }
-    [ -f "$PSK" ] || { echo "wrtc: PSK file $PSK missing (0600)"; exit 1; }
-    # NB: kernel-WireGuard (wg0) поднимается отдельно (wg-quick/wireguard-tools),
-    #     peer Endpoint = 127.0.0.1:$LOCAL_PORT (на него смотрит этот joiner).
-    "$BIN" -url "$WRTC_URL" -psk-file "$PSK" -local-port "$LOCAL_PORT" >/var/log/wrtc.log 2>&1 &
+    # NB: kernel-WireGuard (wg0) is brought up separately (wg-quick/wireguard-tools)
+    #     with peer Endpoint = 127.0.0.1:$LOCAL_PORT. WG carries all crypto; this binary
+    #     only pumps the raw WG datagrams through the carrier (no extra encryption).
+    "$BIN" -url "$WRTC_URL" -local-port "$LOCAL_PORT" >/var/log/wrtc.log 2>&1 &
     echo $! > "$PID_FILE"
     echo "wrtc started (pid $!)"
 }
