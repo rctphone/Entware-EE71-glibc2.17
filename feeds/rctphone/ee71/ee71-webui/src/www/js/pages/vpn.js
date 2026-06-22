@@ -26,8 +26,8 @@
 
     function _reorderVpn() {
         var active = null;
-        if (_wgStatus && _wgStatus.up) active = 'vpn-wg';
-        else if (_awgStatus && _awgStatus.up) active = 'vpn-awg';
+        if (_wgStatus && (_wgStatus.up || (_wgStatus.auto_start && _wgStatus.runtime_state === 'failed'))) active = 'vpn-wg';
+        else if (_awgStatus && (_awgStatus.up || (_awgStatus.auto_start && _awgStatus.runtime_state === 'failed'))) active = 'vpn-awg';
         else if (_ssStatus && _ssStatus.running) active = 'vpn-ss';
         if (!active) return;
         var el = document.getElementById(active);
@@ -58,6 +58,10 @@
             card.style.transition = 'transform 0.3s ease';
             card.style.transform = '';
         }
+    }
+
+    function _runtimeFailed(status) {
+        return status && status.runtime_state === 'failed';
     }
 
     // Silent refresh — update all VPN statuses without showing loading spinner
@@ -106,20 +110,29 @@
 
     function _renderWg(el, status) {
         var up = status.up;
+        var failed = _runtimeFailed(status);
+        var enabled = up || (failed && status.auto_start);
         var switchDisabled = !status.has_wg ? ' disabled' : '';
         var html = '<div class="card">';
 
         // Header with toggle
         html += '<div class="card-header">';
         html += '<h3>' + icon('ic-vpn') + ' WireGuard</h3>';
-        html += '<label class="switch"><input type="checkbox" id="wg-toggle"' + (up ? ' checked' : '') + switchDisabled + '><span class="slider"></span></label>';
+        html += '<label class="switch"><input type="checkbox" id="wg-toggle"' + (enabled ? ' checked' : '') + switchDisabled + '><span class="slider"></span></label>';
         html += '</div>';
 
         // Status line + interface details
         var peer = (status.peers && status.peers.length > 0) ? status.peers[0] : null;
         var hasPeerHandshake = peer && peer.latest_handshake && peer.latest_handshake !== 'never' && peer.latest_handshake !== '';
 
-        if (up) {
+        if (failed) {
+            html += '<div class="vpn-status"><span class="status-dot off"></span><span class="text-danger">Failed</span>';
+            if (status.runtime_message) html += ' <span class="text-muted text-small">\u2022 ' + escHtml(status.runtime_message) + '</span>';
+            html += '</div>';
+            if (status.endpoint) {
+                html += '<div class="vpn-endpoint">' + escHtml(status.endpoint) + '</div>';
+            }
+        } else if (up) {
             if (hasPeerHandshake) {
                 html += '<div class="vpn-status"><span class="status-dot on"></span><span class="text-success">Connected</span></div>';
             } else if (peer) {
@@ -322,20 +335,29 @@
 
     function _renderAwg(el, status) {
         var up = status.up;
+        var failed = _runtimeFailed(status);
+        var enabled = up || (failed && status.auto_start);
         var switchDisabled = !status.has_awg ? ' disabled' : '';
         var html = '<div class="card">';
 
         // Header with toggle
         html += '<div class="card-header">';
         html += '<h3>' + icon('ic-vpn') + ' AmneziaWG</h3>';
-        html += '<label class="switch"><input type="checkbox" id="awg-toggle"' + (up ? ' checked' : '') + switchDisabled + '><span class="slider"></span></label>';
+        html += '<label class="switch"><input type="checkbox" id="awg-toggle"' + (enabled ? ' checked' : '') + switchDisabled + '><span class="slider"></span></label>';
         html += '</div>';
 
         // Status line + interface details
         var peer = (status.peers && status.peers.length > 0) ? status.peers[0] : null;
         var hasPeerHandshake = peer && peer.latest_handshake && peer.latest_handshake !== 'never' && peer.latest_handshake !== '';
 
-        if (up) {
+        if (failed) {
+            html += '<div class="vpn-status"><span class="status-dot off"></span><span class="text-danger">Failed</span>';
+            if (status.runtime_message) html += ' <span class="text-muted text-small">\u2022 ' + escHtml(status.runtime_message) + '</span>';
+            html += '</div>';
+            if (status.endpoint) {
+                html += '<div class="vpn-endpoint">' + escHtml(status.endpoint) + '</div>';
+            }
+        } else if (up) {
             if (hasPeerHandshake) {
                 html += '<div class="vpn-status"><span class="status-dot on"></span><span class="text-success">Connected</span></div>';
             } else if (peer) {

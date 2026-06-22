@@ -110,6 +110,12 @@
     // --- Network tab (from connection.js _loadNetwork) ---
 
     var _msNetSearchTimer = null;
+    var NETWORK_MODE_AUTO = '050302';
+
+    function _isAutoNetworkMode(mode) {
+        mode = String(mode);
+        return mode === 'auto' || mode === '0' || mode === '050302' || mode === '150302';
+    }
 
     function _loadNetwork() {
         var tab = $('#mset-tab-network');
@@ -128,7 +134,7 @@
             var ns = networkSettings || {};
             var us = usage || {};
 
-            var currentMode = ns.NetworkMode != null ? String(ns.NetworkMode) : '0';
+            var currentMode = ns.NetworkMode != null ? String(ns.NetworkMode) : NETWORK_MODE_AUTO;
             var netSelMode = ns.NetselectionMode != null ? String(ns.NetselectionMode) : '0';
             var connMode = cs.ConnectMode != null ? String(cs.ConnectMode) : '1';
             var roaming = cs.RoamingConnect || '0';
@@ -143,7 +149,7 @@
                     '<div class="form-group">' +
                         '<label>Preferred Mode</label>' +
                         '<select id="ms-netmode">' +
-                            '<option value="auto"' + (currentMode === 'auto' || currentMode === '0' ? ' selected' : '') + '>Auto (4G/3G/2G)</option>' +
+                            '<option value="auto"' + (_isAutoNetworkMode(currentMode) ? ' selected' : '') + '>Auto (4G/3G/2G)</option>' +
                             '<option value="4g3g"' + (currentMode === '4g3g' || currentMode === '0302' ? ' selected' : '') + '>4G + 3G</option>' +
                             '<option value="4g"' + (currentMode === '4g' || currentMode === '03' ? ' selected' : '') + '>4G Only (LTE)</option>' +
                             '<option value="3g"' + (currentMode === '3g' || currentMode === '02' ? ' selected' : '') + '>3G Only (WCDMA)</option>' +
@@ -244,8 +250,8 @@
         var sel = $('#ms-netmode');
         if (!sel) return;
         var mode = sel.value;
-        var modeMap = { 'auto': '0', '4g3g': '0302', '4g': '03', '3g': '02', '2g': '01' };
-        API.webapi('SetNetworkSettings', { NetworkMode: modeMap[mode] || '0' }).then(function() {
+        var modeMap = { 'auto': NETWORK_MODE_AUTO, '4g3g': '0302', '4g': '03', '3g': '02', '2g': '01' };
+        API.webapi('SetNetworkSettings', { NetworkMode: modeMap[mode] || NETWORK_MODE_AUTO }).then(function() {
             alert('Network mode changed. Reconnecting may take 10-30s.');
             setTimeout(_loadNetwork, 3000);
         }).catch(function(e) { alert('Error: ' + e.message); });

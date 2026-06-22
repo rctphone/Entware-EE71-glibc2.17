@@ -23,6 +23,9 @@ SS_TUNNEL_PID="/tmp/ss-tunnel.pid"
 DNS_CHAIN="EE71_VPN_DNS"
 FALLBACK_DNS="1.1.1.1"
 SS_IPV6_TABLE="53"
+VPN_STATUS_FILE="/var/run/ee71_vpn.status"
+HANDSHAKE_MAX_AGE="${HANDSHAKE_MAX_AGE:-180}"
+HANDSHAKE_WAIT_SEC="${HANDSHAKE_WAIT_SEC:-8}"
 # Detect LAN subnet from bridge0 (e.g. 192.168.1.0/24)
 LAN_IP=$(ifconfig bridge0 2>/dev/null | sed -n 's/.*inet addr:\([^ ]*\).*/\1/p')
 LAN_IP="${LAN_IP:-192.168.1.1}"
@@ -33,6 +36,16 @@ LAN6_NET=$(ip -6 route show dev "$LAN_IFACE" 2>/dev/null | awk '/scope global/ {
 # --- Read config ---
 VPN="off"
 [ -f "$VPN_CONF" ] && . "$VPN_CONF"
+
+write_vpn_status() {
+    mkdir -p "$(dirname "$VPN_STATUS_FILE")" 2>/dev/null
+    {
+        echo "mode=$1"
+        echo "state=$2"
+        echo "message=$3"
+        echo "updated=$(date +%s)"
+    } > "$VPN_STATUS_FILE" 2>/dev/null
+}
 
 # --- DNS overlay helpers ---
 # QCMAP owns /etc/resolv.conf and updates it on carrier/backhaul events.
@@ -200,6 +213,40 @@ tun_allows_ipv6_default() {
         tr ',' '\n' |
         sed 's/^[[:space:]]*//;s/[[:space:]]*$//' |
         grep -qx '::/0'
+}
+
+tun_latest_handshake() {
+    _BIN="$1" _IFACE="$2"
+    "$_BIN" show "$_IFACE" latest-handshakes 2>/dev/null |
+        awk 'BEGIN { max = 0 } $2 > max { max = $2 } END { print max }'
+}
+
+tun_handshake_fresh() {
+    _BIN="$1" _IFACE="$2"
+    _HS="$(tun_latest_handshake "$_BIN" "$_IFACE")"
+    _NOW="$(date +%s)"
+    [ -n "$_HS" ] || return 1
+    [ "$_HS" -gt 0 ] 2>/dev/null || return 1
+    [ "$_NOW" -ge "$_HS" ] 2>/dev/null || return 1
+    [ "$((_NOW - _HS))" -le "$HANDSHAKE_MAX_AGE" ] 2>/dev/null
+}
+
+wait_tun_handshake() {
+    _BIN="$1" _IFACE="$2" _CONF="$3" _WAIT="$4"
+    tun_handshake_fresh "$_BIN" "$_IFACE" && return 0
+
+    # Trigger outbound traffic through the tunnel; WireGuard/AWG handshakes are
+    # demand-driven and may not refresh until a packet is queued to a peer.
+    _PROBE_DNS="$(conf_dns_ipv4 "$_CONF")"
+    ping -c 1 -W 1 "$_PROBE_DNS" >/dev/null 2>&1 || true
+
+    _I=0
+    while [ "$_I" -lt "$_WAIT" ]; do
+        tun_handshake_fresh "$_BIN" "$_IFACE" && return 0
+        sleep 1
+        _I=$((_I + 1))
+    done
+    return 1
 }
 
 ip6_nat_available() {
@@ -482,12 +529,14 @@ case "$VPN" in
         wg_stop
         awg_stop
         restore_main_dns
+        write_vpn_status "off" "off" "VPN disabled"
         ;;
 esac
 
 # Start what should be running + always route all traffic
 case "$VPN" in
     wg)
+        write_vpn_status "wg" "applying" "Starting WireGuard"
         wg_is_up || wg_start
         # Always sync config (reload peers, keys, etc)
         if wg_is_up && [ -x "$WG_BIN" ] && [ -f "$WG_CONF" ]; then
@@ -498,12 +547,21 @@ case "$VPN" in
         if wg_is_up; then
             route_all_tun "$WG_IFACE" "$WG_CONF" 51
             apply_tun_dns "$WG_CONF"
+            if wait_tun_handshake "$WG_BIN" "$WG_IFACE" "$WG_CONF" "$HANDSHAKE_WAIT_SEC"; then
+                write_vpn_status "wg" "up" "WireGuard connected"
+            else
+                write_vpn_status "wg" "failed" "No fresh WireGuard handshake; routes restored"
+                wg_stop
+                restore_main_dns
+            fi
         else
+            write_vpn_status "wg" "failed" "WireGuard interface failed to start"
             wg_stop
             restore_main_dns
         fi
         ;;
     awg)
+        write_vpn_status "awg" "applying" "Starting AmneziaWG"
         awg_is_up || awg_start
         if awg_is_up && [ -x "$AWG_BIN" ] && [ -f "$AWG_CONF" ]; then
             grep -vi "^\(Address\|DNS\|MTU\|Table\|PreUp\|PostUp\|PreDown\|PostDown\|SaveConfig\)[[:space:]]*=" "$AWG_CONF" > /tmp/.awg_stripped
@@ -513,17 +571,28 @@ case "$VPN" in
         if awg_is_up; then
             route_all_tun "$AWG_IFACE" "$AWG_CONF" 52
             apply_tun_dns "$AWG_CONF"
+            if wait_tun_handshake "$AWG_BIN" "$AWG_IFACE" "$AWG_CONF" "$HANDSHAKE_WAIT_SEC"; then
+                write_vpn_status "awg" "up" "AmneziaWG connected"
+            else
+                write_vpn_status "awg" "failed" "No fresh AmneziaWG handshake; routes restored"
+                awg_stop
+                restore_main_dns
+            fi
         else
+            write_vpn_status "awg" "failed" "AmneziaWG interface failed to start"
             awg_stop
             restore_main_dns
         fi
         ;;
     ss)
+        write_vpn_status "ss" "applying" "Starting ShadowSocks"
         ss_is_up || ss_start
         if ss_is_up; then
             route_all_ss
             apply_ss_dns
+            write_vpn_status "ss" "up" "ShadowSocks running"
         else
+            write_vpn_status "ss" "failed" "ShadowSocks failed to start"
             ss_stop
             restore_main_dns
         fi

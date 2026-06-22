@@ -8,6 +8,7 @@ echo ""
 WG_CONF="/etc/wireguard/wg0.conf"
 VPN_CONF="/etc/vpn.conf"
 VPN_APPLY="/usr/bin/vpn_apply"
+VPN_STATUS_FILE="/var/run/ee71_vpn.status"
 WG_MODULE="/usr/lib/modules/$(uname -r)/kernel/drivers/net/wireguard.ko"
 WG_BIN="/usr/bin/wg"
 IFACE="wg0"
@@ -32,6 +33,11 @@ vpn_read() {
 
 vpn_write() {
     printf 'VPN=%s\n' "$1" > "$VPN_CONF"
+}
+
+runtime_status_field() {
+    [ -f "$VPN_STATUS_FILE" ] || return
+    sed -n "s/^$1=//p" "$VPN_STATUS_FILE" 2>/dev/null | head -1
 }
 
 # --- Parse action ---
@@ -70,6 +76,14 @@ status)
     vpn_read
     AUTO_START=0
     [ "$_VPN" = "wg" ] && AUTO_START=1
+    RUNTIME_STATE=""
+    RUNTIME_MESSAGE=""
+    RUNTIME_UPDATED=""
+    if [ "$(runtime_status_field mode)" = "wg" ]; then
+        RUNTIME_STATE=$(runtime_status_field state)
+        RUNTIME_MESSAGE=$(runtime_status_field message)
+        RUNTIME_UPDATED=$(runtime_status_field updated)
+    fi
 
     # Get wg show dump if interface is up
     PEERS_JSON="[]"
@@ -127,9 +141,12 @@ status)
         --argjson as "$AUTO_START" \
         --arg addr "$WG_ADDRESS" \
         --arg ep "$CONF_ENDPOINT" \
+        --arg runtime_state "$RUNTIME_STATE" \
+        --arg runtime_message "$RUNTIME_MESSAGE" \
+        --arg runtime_updated "$RUNTIME_UPDATED" \
         --argjson iface "$IFACE_JSON" \
         --argjson peers "$PEERS_JSON" \
-        '{"up":$up,"module_loaded":$ml,"has_config":$hc,"has_wg":$hw,"auto_start":$as,"address":$addr,"endpoint":$ep,"interface":$iface,"peers":$peers}'
+        '{"up":$up,"module_loaded":$ml,"has_config":$hc,"has_wg":$hw,"auto_start":$as,"address":$addr,"endpoint":$ep,"runtime_state":$runtime_state,"runtime_message":$runtime_message,"runtime_updated":$runtime_updated,"interface":$iface,"peers":$peers}'
     ;;
 
 config)
