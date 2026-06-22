@@ -4,16 +4,19 @@
 # This is free software, licensed under the GNU General Public License v2.
 # See /LICENSE for more information.
 #
-# EE71: OpenSSL 1.1.1w — ABI-compatible with stock OEM binaries.
+# EE71: OpenSSL 1.1.1zh — ABI-compatible with stock OEM binaries.
+# Source is a pinned third-party backport fork because upstream 1.1.1zh is
+# available only through OpenSSL Corporation extended support.
 # Synced with OpenWrt v22.03.7 Makefile structure (full Kconfig integration).
 
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=openssl
 PKG_BASE:=1.1.1
-PKG_BUGFIX:=w
+PKG_BUGFIX:=zh
 PKG_VERSION:=$(PKG_BASE)$(PKG_BUGFIX)
-PKG_RELEASE:=1
+PKG_RELEASE:=2
+PKG_BUILD_DIR:=$(BUILD_DIR)/openssl-$(PKG_BASE)-$(PKG_VERSION)
 
 PKG_BUILD_PARALLEL:=1
 PKG_BUILD_DEPENDS:=OPENSSL_WITH_COMPRESSION:zlib
@@ -21,12 +24,11 @@ PKG_BUILD_FLAGS:=no-gc-sections no-lto
 PKG_FLAGS:=essential
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
+PKG_SOURCE_URL_FILE:=$(PKG_VERSION).tar.gz
 PKG_SOURCE_URL:= \
-	https://github.com/openssl/openssl/releases/download/OpenSSL_1_1_1w/ \
-	https://www.openssl.org/source/ \
-	https://www.openssl.org/source/old/$(PKG_BASE)/
+	https://github.com/kzalewski/openssl-1.1.1/archive/refs/tags/
 
-PKG_HASH:=cf3098950cb4d853ad95c0841f1f9c6d3dc102dccfcacd521d93925208b76ac8
+PKG_HASH:=5872dd71b14d637ddf409386b7532baff555fe3d68a880f638ca102e6c2d3872
 
 PKG_LICENSE:=OpenSSL
 PKG_LICENSE_FILES:=LICENSE
