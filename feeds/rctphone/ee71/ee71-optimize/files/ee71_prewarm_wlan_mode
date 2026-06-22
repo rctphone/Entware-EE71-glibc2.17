@@ -37,12 +37,8 @@ done
 AP2G=$(sqlite3 "$DB" "SELECT value FROM wifi_info WHERE items='2GAPStatus';" 2>/dev/null)
 AP5G=$(sqlite3 "$DB" "SELECT value FROM wifi_info WHERE items='5GAPStatus';" 2>/dev/null)
 GUEST5G=$(sqlite3 "$DB" "SELECT value FROM wifi_info WHERE items='Guest5GAPStatus';" 2>/dev/null)
-CONN_MODE=$(sqlite3 "$DB" "SELECT value FROM Connection WHERE items='ConnMode';" 2>/dev/null)
-JRD_AUTOCONNECT=$(sqlite3 "$DB" "SELECT value FROM Connection WHERE items='jrdautoconnect';" 2>/dev/null)
-ROAMING_CONNECT=$(sqlite3 "$DB" "SELECT value FROM Connection WHERE items='RoaminConnMode';" 2>/dev/null)
 
 log "DB: 2GAPStatus=$AP2G 5GAPStatus=$AP5G Guest5GAPStatus=$GUEST5G"
-log "DB: ConnMode=$CONN_MODE jrdautoconnect=$JRD_AUTOCONNECT RoaminConnMode=$ROAMING_CONNECT"
 
 # Determine desired WlanMode:
 #   AP-AP: 2GAPStatus=1 AND Guest5GAPStatus=1 (our dual-band convention)
@@ -78,68 +74,6 @@ for f in "$XML" "$FACTORY_XML"; do
         log "ERROR: $f sed did not apply ($CUR → $NEW, expected $DESIRED)"
     fi
 done
-
-patch_xml_tag() {
-    file="$1"
-    tag="$2"
-    value="$3"
-
-    [ -f "$file" ] || return 0
-    cur=$(grep -o "<$tag>[^<]*</$tag>" "$file" | sed "s|<[^>]*>||g")
-    if [ -z "$cur" ]; then
-        health_err "$file missing <$tag> tag"
-        log "ERROR: $file has no <$tag> tag, skip"
-        return 1
-    fi
-    if [ "$cur" = "$value" ]; then
-        log "$file $tag already $value"
-        return 0
-    fi
-    sed -i "s|<$tag>[^<]*</$tag>|<$tag>$value</$tag>|" "$file"
-    new=$(grep -o "<$tag>[^<]*</$tag>" "$file" | sed "s|<[^>]*>||g")
-    if [ "$new" = "$value" ]; then
-        log "Patched $file: $tag $cur -> $value"
-        return 0
-    fi
-    health_err "$file $tag sed failed: expected $value, got '$new'"
-    log "ERROR: $file $tag sed did not apply ($cur -> $new, expected $value)"
-    return 1
-}
-
-patch_qcmap_boot_policy() {
-    autoconnect=0
-    roaming=0
-    wlan_boot=0
-
-    # Web UI uses ConnMode=1/jrdautoconnect=1 for automatic cellular connect.
-    if [ "$CONN_MODE" = "1" ] || [ "$JRD_AUTOCONNECT" = "1" ]; then
-        autoconnect=1
-    fi
-    if [ "$ROAMING_CONNECT" = "1" ]; then
-        roaming=1
-    fi
-    if [ "$AP2G" = "1" ] || [ "$AP5G" = "1" ] || [ "$GUEST5G" = "1" ]; then
-        wlan_boot=1
-    fi
-
-    for f in "$XML" "$FACTORY_XML"; do
-        [ -f "$f" ] || continue
-        patch_xml_tag "$f" AutoConnect "$autoconnect"
-        patch_xml_tag "$f" Roaming "$roaming"
-        patch_xml_tag "$f" MobileAPEnableAtBootup "$autoconnect"
-        patch_xml_tag "$f" WLANEnableAtBootup "$wlan_boot"
-
-        if [ "$autoconnect" = "1" ]; then
-            # EE71 is primarily a cellular router. Prefer WWAN immediately at
-            # boot so LTE is not gated by USB-cradle or WLAN backhaul probing.
-            patch_xml_tag "$f" FirstPreferredBackhaul wwan
-            patch_xml_tag "$f" SecondPreferredBackhaul usb_cradle
-            patch_xml_tag "$f" ThirdPreferredBackhaul wlan
-        fi
-    done
-}
-
-patch_qcmap_boot_policy
 
 sync
 exit 0
