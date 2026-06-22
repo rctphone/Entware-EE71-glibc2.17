@@ -33,6 +33,94 @@ const API = (() => {
 
     // --- API error class ---
 
+    const CORE_API_ERRORS = {
+        '021001': 'Erase SIM lock failed.',
+        '040101': 'Get network information data error.',
+        '040201': 'Search network failed.',
+        '040301': 'Get result failed.',
+        '040401': 'Register network fail.',
+        '040501': 'Get register network state failed.',
+        '040601': 'Get network setting failed.',
+        '040701': 'Set network setting failed.',
+        '040702': 'Just can set when disconnected.',
+        '040801': 'Get NetworkModeListType failed.',
+        '040901': 'Get DomRoamGuardForced failed.',
+        '050101': 'Get WLAN state failed.',
+        '050201': 'Set WLAN off failed.',
+        '050202': 'WLAN is off.',
+        '050301': 'Set WLAN on failed.',
+        '050302': 'WLAN is on.',
+        '050401': 'Get WLAN settings failed.',
+        '050501': 'Set WLAN settings failed.',
+        '050601': 'Set WPS pin mode failed.',
+        '050602': 'Set WPS pin code failed, the security mode not support.',
+        '050603': 'Set WPS pin fail, WPS is active.',
+        '050701': 'Set WPS PBC failed.',
+        '050702': 'Set WPS PBC failed, the security mode not support.',
+        '050703': 'Set WPS PBC failed, WPS is active.',
+        '051901': 'Import SMS to device failed.',
+        '060101': 'Get SMS init status failed.',
+        '060201': 'Get SMS contact list failed.',
+        '060301': 'Get SMS content list failed.',
+        '060401': 'Get SMS storage state failed.',
+        '060501': 'Delete SMS failed.',
+        '060601': 'Send SMS failed.',
+        '060602': 'Fail still sending last message.',
+        '060603': 'Fail with store space full.',
+        '060701': 'Get send SMS status failed.',
+        '060801': 'Save SMS failed.',
+        '061001': 'Set SMS settings failed.',
+        '061101': 'Get single SMS failed.',
+        '061301': 'Get SMS list by contact number failed.',
+        '070101': 'Get usage record failed.',
+        '070201': 'Clear all usage records failed.',
+        '070301': 'Get usage settings failed.',
+        '070401': 'Set usage settings failed.',
+        '090501': 'Set check device new version failed.',
+        '101901': 'Get URL filter settings failed.',
+        '102001': 'Set URL filter settings failed.',
+        '110201': 'Set LAN settings failed.',
+        '132401': 'Send ping failed.',
+        '132402': 'Ping operation fails.',
+        '140101': 'Get DLNA settings failed.',
+        '140201': 'Set DLNA settings failed.',
+        '140301': 'Get samba status failed.',
+        '140401': 'Set samba status failed.',
+        '140501': 'Get FTP status failed.',
+        '140601': 'Set FTP status failed.',
+        '140701': 'Get sdshare space failed.',
+        '140801': 'Get sdshare filelist failed.',
+        '140901': 'Get sdcard status failed.',
+        '141001': 'Get usbcard status failed.',
+        '141101': 'Set usbcard status failed.',
+        '150101': 'Get profile list failed.',
+        '150201': 'Add new profile failed.',
+        '150301': 'Edit profile failed.',
+        '150302': 'Profile is not exist.',
+        '150401': 'Delete profile failed.',
+        '150402': 'Profile is not exist.',
+        '150501': 'Set default profile failed.',
+        '160101': 'Get battery state failed.',
+        '160201': 'Get power saving mode failed.',
+        '160301': 'Set power saving mode failed.'
+    };
+
+    function normalizeApiMessage(code, message, method) {
+        let raw = String(message || '').trim();
+        if (method && raw.indexOf(method + ':') === 0) {
+            raw = raw.slice(method.length + 1).trim();
+        }
+        const mapped = CORE_API_ERRORS[String(code || '')];
+        if (!mapped) return raw || 'Unknown API error';
+        if (!raw || raw === 'Unknown API error' || raw === String(code) || raw === mapped) {
+            return mapped + ' (' + code + ')';
+        }
+        if (raw.indexOf(mapped) !== -1) {
+            return raw.indexOf('(' + code + ')') === -1 ? raw + ' (' + code + ')' : raw;
+        }
+        return mapped + ' (' + code + '): ' + raw;
+    }
+
     class ApiError extends Error {
         constructor(code, message, method) {
             super(method ? method + ': ' + message : message);
@@ -452,7 +540,7 @@ const API = (() => {
 
             if (data.error) {
                 const code = String(data.error.code || '');
-                const message = data.error.message || 'Unknown API error';
+                const message = normalizeApiMessage(code, data.error.message, method);
 
                 // Session expiration is handled centrally by the heartbeat —
                 // never auto-expire here (avoids race conditions with concurrent requests)

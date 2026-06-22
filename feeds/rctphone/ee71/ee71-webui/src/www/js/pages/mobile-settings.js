@@ -149,9 +149,10 @@
                             '<option value="3g"' + (currentMode === '3g' || currentMode === '02' ? ' selected' : '') + '>3G Only (WCDMA)</option>' +
                             '<option value="2g"' + (currentMode === '2g' || currentMode === '01' ? ' selected' : '') + '>2G Only (GSM)</option>' +
                         '</select>' +
+                        '<p class="text-muted text-small">Changing preferred mode is disabled until the router enum values are verified.</p>' +
                     '</div>' +
                     '<div class="form-actions">' +
-                        '<button ' + actionAttr('msetNetMode') + '>Apply Mode</button>' +
+                        '<button disabled title="Waiting for verified NetworkMode enum">Apply Mode</button>' +
                     '</div>' +
                 '</div>' +
 
@@ -241,14 +242,7 @@
     }
 
     function _msetNetMode() {
-        var sel = $('#ms-netmode');
-        if (!sel) return;
-        var mode = sel.value;
-        var modeMap = { 'auto': '0', '4g3g': '0302', '4g': '03', '3g': '02', '2g': '01' };
-        API.webapi('SetNetworkSettings', { NetworkMode: modeMap[mode] || '0' }).then(function() {
-            alert('Network mode changed. Reconnecting may take 10-30s.');
-            setTimeout(_loadNetwork, 3000);
-        }).catch(function(e) { alert('Error: ' + e.message); });
+        alert('Changing preferred mode is disabled until the router NetworkMode enum values are verified.');
     }
 
     // Operator search
