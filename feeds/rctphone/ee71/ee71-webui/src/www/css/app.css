@@ -1314,16 +1314,18 @@ input[type="submit"]:hover {
 .chat-item-action-bg {
     flex: 0 0 76px;
     scroll-snap-align: end;
-    background: color-mix(in srgb, var(--color-danger) 10%, var(--bg-surface));
+    background: var(--bg-surface-secondary);
     display: flex; align-items: center; justify-content: center;
     flex-direction: column; gap: 2px;
-    color: var(--color-danger); font-size: 0.7rem; font-weight: 600;
+    color: var(--text-secondary); font-size: 0.7rem; font-weight: 600;
     cursor: pointer; border: none; border-left: 1px solid var(--border-color);
     padding: 0;
+    transition: background 0.15s, color 0.15s;
 }
 .chat-item-action-bg:hover,
 .chat-item-action-bg:focus-visible {
     background: color-mix(in srgb, var(--color-danger) 16%, var(--bg-surface));
+    color: var(--color-danger);
 }
 .chat-item-action-bg svg { width: 18px; height: 18px; fill: currentColor; }
 

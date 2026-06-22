@@ -133,6 +133,16 @@
         });
     }
 
+    function _smsDelay(ms) {
+        return new Promise(function(resolve) { setTimeout(resolve, ms); });
+    }
+
+    function _isSmsContentListError(e) {
+        var msg = (e && (e.apiMessage || e.message)) || '';
+        return e && e.method === 'GetSMSContentList' ||
+            /GetSMSContentList|Get SMS content list failed/i.test(msg);
+    }
+
     function _renderSmsInbox(el, storage, contactList) {
         var used = parseInt(storage.TUseCount || storage.UsedNum || 0, 10);
         var left = parseInt(storage.LeftCount || 0, 10);
@@ -185,10 +195,11 @@
         el.innerHTML = html;
     }
 
-    function _loadSmsInbox() {
+    function _loadSmsInbox(retries) {
         var el = document.getElementById('sms-inbox');
         if (!el) return;
         el.innerHTML = '<div class="page-loading"><div class="spinner"></div> Loading messages...</div>';
+        retries = retries == null ? 2 : retries;
 
         Promise.all([
             API.webapi('GetSMSStorageState'),
@@ -199,8 +210,19 @@
             var contactList = contacts && contacts.SMSContactList || [];
             if (contactList.length === 0 && used > 0) {
                 return _loadFlatSmsList().then(function(list) {
-                    _renderSmsInbox(el, storage, _flatSmsToContacts(list));
-                }).catch(function() {
+                    var fallbackContacts = _flatSmsToContacts(list);
+                    if (fallbackContacts.length === 0 && retries > 0) {
+                        return _smsDelay(900).then(function() {
+                            return _loadSmsInbox(retries - 1);
+                        });
+                    }
+                    _renderSmsInbox(el, storage, fallbackContacts);
+                }).catch(function(e) {
+                    if (retries > 0) {
+                        return _smsDelay(900).then(function() {
+                            return _loadSmsInbox(retries - 1);
+                        });
+                    }
                     _renderSmsInbox(el, storage, contactList);
                 });
             }
@@ -226,7 +248,7 @@
             _renderSmsThread(el, phone, contactId, list);
         }).catch(function(e) {
             var msg = (e && (e.apiMessage || e.message)) || '';
-            if (/Get SMS content list failed/i.test(msg)) {
+            if (_isSmsContentListError(e)) {
                 return _openFlatSmsThread(phone);
             }
             el.innerHTML = '<div class="card"><p class="text-danger">Error: ' + escHtml(msg || e) + '</p></div>';
@@ -243,7 +265,7 @@
             }).reverse();
             _renderSmsThread(el, phone, 0, filtered);
         }).catch(function(e) {
-            el.innerHTML = '<div class="card"><p class="text-danger">Error: ' + escHtml(e.message || e) + '</p></div>';
+            _renderEmptySmsThread(el, phone);
         });
     }
 
@@ -525,11 +547,12 @@
         }).then(function() {
             return _openSmsThread(phone, contactId);
         }).catch(function(e) {
+            if (_isSmsContentListError(e)) return _openFlatSmsThread(phone);
             if (attempts <= 1) {
                 if (el) el.innerHTML = '<div class="card"><p class="text-danger">Error: ' + escHtml(e.message) + '</p></div>';
                 return;
             }
-            return new Promise(function(r) { setTimeout(r, delay); }).then(function() {
+            return _smsDelay(delay).then(function() {
                 return _retryOpenThread(phone, contactId, attempts - 1, delay);
             });
         });
@@ -645,13 +668,15 @@
     }
 
     function _reloadSmsInboxSoon() {
-        setTimeout(_loadSmsInbox, 800);
+        setTimeout(function() { _loadSmsInbox(4); }, 1200);
     }
 
     function _deleteSingleSms(smsId, phone, contactId) {
         if (!confirm('Delete this message?')) return;
         API.webapi('DeleteSMS', { DelFlag: 3, SMSArray: [parseInt(smsId, 10)] }).then(function() {
-            _reloadSmsInboxSoon();
+            return _smsDelay(1200).then(function() {
+                return _openSmsThread(phone, contactId);
+            });
         }).catch(function(e) { alert('Delete failed: ' + (e.message || e)); });
     }
 
