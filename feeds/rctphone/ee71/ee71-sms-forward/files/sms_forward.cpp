@@ -336,7 +336,7 @@ static void telegram_curl_error(char *out, size_t out_size, CURLcode res,
     if (res == CURLE_OPERATION_TIMEDOUT) {
         snprintf(out, out_size,
                  "api.telegram.org:443 connection timed out after 3s. "
-                 "The current network/VPN exit cannot reach Telegram API");
+                 "The current network/VPN path cannot complete a TCP connection to Telegram API");
         return;
     }
     if (res == CURLE_COULDNT_CONNECT) {
@@ -403,7 +403,6 @@ static bool send_telegram(const config &cfg,
     curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, errbuf);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_discard);
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
-    curl_easy_setopt(curl, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
 
     CURLcode res = curl_easy_perform(curl);
     long http_code = 0;
@@ -468,8 +467,6 @@ static int list_telegram_chats(const config &cfg)
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_cb);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buf);
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
-    curl_easy_setopt(curl, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
-
     CURLcode res = curl_easy_perform(curl);
     long http_code = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);

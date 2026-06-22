@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=curl
 PKG_VERSION:=8.17.0
-PKG_RELEASE:=1
+PKG_RELEASE:=2
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.xz
 PKG_SOURCE_URL:=https://curl.se/download/
@@ -45,7 +45,7 @@ CONFIGURE_ARGS += \
 	--without-zstd \
 	--enable-shared --disable-debug --disable-docs \
 	--disable-manual --disable-verbose --disable-ares \
-	--disable-cookies --disable-ipv6 --disable-proxy \
+	--disable-cookies --enable-ipv6 --disable-proxy \
 	--disable-unix-sockets \
 	--disable-dict --disable-file --disable-ftp \
 	--disable-gopher --disable-imap --disable-ldap \
