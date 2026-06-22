@@ -86,6 +86,23 @@ static void config_defaults(config &cfg)
     cfg.poll_interval = 10;
 }
 
+static const char *normalize_config_value(char *val)
+{
+    while (*val == ' ' || *val == '\t')
+        val++;
+
+    char *end = val + strlen(val);
+    while (end > val && (end[-1] == ' ' || end[-1] == '\t'))
+        *--end = '\0';
+
+    if ((end - val) >= 2 && val[0] == '"' && end[-1] == '"') {
+        val++;
+        end[-1] = '\0';
+    }
+
+    return val;
+}
+
 static void load_config(config &cfg)
 {
     config_defaults(cfg);
@@ -110,7 +127,7 @@ static void load_config(config &cfg)
             continue;
         *eq = '\0';
         const char *key = line;
-        const char *val = eq + 1;
+        const char *val = normalize_config_value(eq + 1);
 
         if (strcmp(key, "TELEGRAM_ENABLED") == 0)
             cfg.telegram_enabled = (atoi(val) == 1);
