@@ -38,7 +38,7 @@ telegram_error() {
 
 telegram_get() {
     _url="$1"
-    curl -sS --connect-timeout 3 --max-time 5 --speed-limit 1 --speed-time 3 "$_url" 2>&1
+    curl -4 -sS --connect-timeout 3 --max-time 5 --speed-limit 1 --speed-time 3 "$_url" 2>&1
 }
 
 json_sh_quote() {
@@ -181,7 +181,7 @@ test_telegram)
 
     # Send test message
     MSG="EE71 SMS Forward test message. If you see this, forwarding is configured correctly."
-    RESULT=$(curl -sS --connect-timeout 3 --max-time 5 \
+    RESULT=$(curl -4 -sS --connect-timeout 3 --max-time 5 \
         --speed-limit 1 --speed-time 3 \
         "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
         -d "chat_id=${TG_CHAT}" \

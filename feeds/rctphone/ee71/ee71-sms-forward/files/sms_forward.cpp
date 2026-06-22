@@ -373,6 +373,21 @@ static void telegram_curl_error(char *out, size_t out_size, CURLcode res,
              (detail && detail[0] && strcmp(detail, curl_easy_strerror(res)) != 0) ? detail : "");
 }
 
+static void telegram_set_common_curl_opts(CURL *curl)
+{
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 3L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
+    curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1L);
+    curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 3L);
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+    /*
+     * EE71 may receive Telegram AAAA records while IPv6 default route is a
+     * blackhole in the VPN routing table. Keep Telegram on IPv4; VPN policy
+     * routing still sends 0.0.0.0/0 through wg/awg when the profile is active.
+     */
+    curl_easy_setopt(curl, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
+}
+
 static bool send_telegram(const config &cfg,
                           const char *from, const char *text,
                           const char *time_str)
@@ -413,13 +428,9 @@ static bool send_telegram(const config &cfg,
 
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, postdata);
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 3L);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
-    curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1L);
-    curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 3L);
     curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, errbuf);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_discard);
-    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+    telegram_set_common_curl_opts(curl);
 
     CURLcode res = curl_easy_perform(curl);
     long http_code = 0;
@@ -477,13 +488,9 @@ static int list_telegram_chats(const config &cfg)
 
     curl_buf buf = {NULL, 0};
     curl_easy_setopt(curl, CURLOPT_URL, url);
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 3L);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
-    curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1L);
-    curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 3L);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_cb);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buf);
-    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+    telegram_set_common_curl_opts(curl);
     CURLcode res = curl_easy_perform(curl);
     long http_code = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
