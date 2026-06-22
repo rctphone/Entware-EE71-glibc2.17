@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=sqlite3
 PKG_VERSION:=3.53.2
-PKG_RELEASE:=1
+PKG_RELEASE:=2
 
 PKG_SOURCE:=sqlite-autoconf-3530200.tar.gz
 PKG_SOURCE_URL:=https://www.sqlite.org/2026/
@@ -45,6 +45,7 @@ CONFIGURE_ARGS = \
 	--build=$(GNU_HOST_NAME) \
 	--prefix=$(CONFIGURE_PREFIX) \
 	--disable-static \
+	--disable-static-shell \
 	--disable-readline \
 	--disable-rpath \
 	--soname=legacy \
