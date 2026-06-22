@@ -41,10 +41,9 @@ wait_for_core_app() {
     last_pid=""
     stable=0
 
-    while [ "$i" -lt 90 ]; do
+    while [ "$i" -lt 45 ]; do
         core_pid="$(pidof core_app 2>/dev/null)"
         if [ -n "$core_pid" ] &&
-           dmesg | grep -q "QCMAP:Init Complete" &&
            grep -q "jrd_nw_thread" /core_app_thread_pid 2>/dev/null &&
            grep -q "jrd_oem_connection_thread" /core_app_thread_pid 2>/dev/null; then
             if [ "$core_pid" = "$last_pid" ]; then
@@ -53,7 +52,7 @@ wait_for_core_app() {
                 last_pid="$core_pid"
                 stable=0
             fi
-            if [ "$stable" -ge 10 ]; then
+            if [ "$stable" -ge 3 ]; then
                 return 0
             fi
         else
