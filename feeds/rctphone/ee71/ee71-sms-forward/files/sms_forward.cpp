@@ -328,6 +328,34 @@ static size_t curl_discard(void *ptr, size_t size, size_t nmemb, void *)
     return size * nmemb;
 }
 
+static void telegram_curl_error(char *out, size_t out_size, CURLcode res,
+                                const char *errbuf)
+{
+    const char *detail = (errbuf && errbuf[0]) ? errbuf : curl_easy_strerror(res);
+
+    if (res == CURLE_OPERATION_TIMEDOUT) {
+        snprintf(out, out_size,
+                 "api.telegram.org:443 connection timed out after 3s. "
+                 "The current network/VPN exit cannot reach Telegram API");
+        return;
+    }
+    if (res == CURLE_COULDNT_CONNECT) {
+        snprintf(out, out_size,
+                 "api.telegram.org:443 connection failed: %s",
+                 detail ? detail : "connect failed");
+        return;
+    }
+    if (res == CURLE_COULDNT_RESOLVE_HOST) {
+        snprintf(out, out_size, "api.telegram.org DNS lookup failed");
+        return;
+    }
+
+    snprintf(out, out_size, "%s%s%s",
+             curl_easy_strerror(res),
+             (detail && detail[0] && strcmp(detail, curl_easy_strerror(res)) != 0) ? ": " : "",
+             (detail && detail[0] && strcmp(detail, curl_easy_strerror(res)) != 0) ? detail : "");
+}
+
 static bool send_telegram(const config &cfg,
                           const char *from, const char *text,
                           const char *time_str)
@@ -375,6 +403,7 @@ static bool send_telegram(const config &cfg,
     curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, errbuf);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_discard);
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+    curl_easy_setopt(curl, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
 
     CURLcode res = curl_easy_perform(curl);
     long http_code = 0;
@@ -382,10 +411,9 @@ static bool send_telegram(const config &cfg,
     curl_easy_cleanup(curl);
 
     if (res != CURLE_OK) {
-        logmsg(LOG_ERR, "Telegram curl error: %s%s%s",
-               curl_easy_strerror(res),
-               errbuf[0] ? ": " : "",
-               errbuf[0] ? errbuf : "");
+        char msg[512];
+        telegram_curl_error(msg, sizeof(msg), res, errbuf);
+        logmsg(LOG_ERR, "Telegram API: %s", msg);
         return false;
     }
     if (http_code != 200) {
@@ -440,6 +468,7 @@ static int list_telegram_chats(const config &cfg)
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_cb);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buf);
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+    curl_easy_setopt(curl, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
 
     CURLcode res = curl_easy_perform(curl);
     long http_code = 0;
@@ -447,7 +476,9 @@ static int list_telegram_chats(const config &cfg)
     curl_easy_cleanup(curl);
 
     if (res != CURLE_OK) {
-        fprintf(stderr, "[ERR] curl: %s\n", curl_easy_strerror(res));
+        char msg[512];
+        telegram_curl_error(msg, sizeof(msg), res, NULL);
+        fprintf(stderr, "[ERR] Telegram API: %s\n", msg);
         free(buf.data);
         return 1;
     }
