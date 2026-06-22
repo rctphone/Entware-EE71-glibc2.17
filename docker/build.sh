@@ -21,7 +21,30 @@ cd "$(dirname "$0")/.."
 
 IMAGE="ee71-entware"
 VOLUME="entware-build"
+SEED_CONFIG="$(pwd)/configs/ee71-armv7.config"
+HOST_CONFIG_DIR="$(pwd)/.build"
+HOST_CONFIG="${HOST_CONFIG_DIR}/ee71-armv7.config"
 COMMAND="${1:-}"
+
+if [[ ! -f "$SEED_CONFIG" ]]; then
+    echo "[ERR] Entware seed config not found: $SEED_CONFIG"
+    exit 1
+fi
+
+prepare_host_config() {
+    mkdir -p "$HOST_CONFIG_DIR"
+    cp "$SEED_CONFIG" "$HOST_CONFIG"
+    chmod u+rw "$HOST_CONFIG"
+}
+
+require_host_config() {
+    if [[ ! -f "$HOST_CONFIG" ]]; then
+        echo "[ERR] Build config not found: $HOST_CONFIG"
+        echo "  Run ./docker/build.sh setup once to generate it from:"
+        echo "  $SEED_CONFIG"
+        exit 1
+    fi
+}
 
 # Build Docker image if needed
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
@@ -37,6 +60,18 @@ fi
 
 # Run command in container
 run() {
+    require_host_config
+    docker run --rm \
+        -e EE71_RUN_CMD="$1" \
+        -v "$VOLUME":/entware \
+        -v "${HOST_CONFIG_DIR}:/ee71-config" \
+        -w /entware \
+        "$IMAGE" \
+        bash -c 'ln -sfn /ee71-config/ee71-armv7.config .config; exec bash -c "$EE71_RUN_CMD"'
+}
+
+# Run command in container before .config has been generated.
+run_unconfigured() {
     docker run --rm \
         -v "$VOLUME":/entware \
         -w /entware \
@@ -46,11 +81,14 @@ run() {
 
 # Interactive run
 run_tty() {
+    require_host_config
     docker run --rm -it \
+        -e EE71_RUN_CMD="$1" \
         -v "$VOLUME":/entware \
+        -v "${HOST_CONFIG_DIR}:/ee71-config" \
         -w /entware \
         "$IMAGE" \
-        bash -c "$1"
+        bash -c 'ln -sfn /ee71-config/ee71-armv7.config .config; exec bash -c "$EE71_RUN_CMD"'
 }
 
 # Sync source into Docker volume (excludes build artifacts)
@@ -75,18 +113,20 @@ do_sync() {
             --exclude='/.config.old' \
             /src/ /dst/
     echo "[*] Sync complete"
+
+    run_unconfigured 'rm -f .config .config.old'
 }
 
 do_setup() {
     do_sync
+    echo "[*] Seeding host build config from configs/ee71-armv7.config..."
+    prepare_host_config
     echo "=== Setting up Entware build tree ==="
     run '
 set -e
 echo "[*] Installing feeds..."
 rm -rf package/feeds/rctphone
 make package/symlinks
-echo "[*] Copying config..."
-cp configs/ee71-armv7.config .config
 echo "[*] Running defconfig..."
 make defconfig
 echo ""

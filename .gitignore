@@ -3,6 +3,7 @@
 .*.swp
 /env
 /dl
+/.build
 /.config
 /.config.old
 /.toolchain_build_ver
