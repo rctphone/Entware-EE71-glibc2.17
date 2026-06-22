@@ -60,15 +60,19 @@
                         '<colgroup><col class="storage-col-mount"><col class="storage-col-size">' +
                         '<col class="storage-col-used"><col class="storage-col-avail"><col class="storage-col-use"></colgroup>' +
                         '<thead><tr>' +
-                        '<th>Mount</th><th>Size</th><th>Used</th><th>Avail</th><th>Use</th>' +
+                        '<th class="storage-cell-mount">Mount</th>' +
+                        '<th class="storage-cell-num">Size</th>' +
+                        '<th class="storage-cell-num">Used</th>' +
+                        '<th class="storage-cell-num">Avail</th>' +
+                        '<th class="storage-cell-num">Use</th>' +
                         '</tr></thead><tbody>' +
                         fsList.map(function(fs) {
                             var pct = parseInt(fs.pct || fs.use_pct || 0, 10);
-                            return '<tr><td>' + escHtml(fs.mount || fs.mounted_on || '') + '</td>' +
-                                '<td class="text-right">' + fmtMB(fs.size) + '</td>' +
-                                '<td class="text-right">' + fmtMB(fs.used) + '</td>' +
-                                '<td class="text-right">' + fmtMB(fs.avail || fs.available) + '</td>' +
-                                '<td class="text-right">' + (pct ? pct + '%' : '\u2014') + '</td></tr>';
+                            return '<tr><td class="storage-cell-mount">' + escHtml(fs.mount || fs.mounted_on || '') + '</td>' +
+                                '<td class="storage-cell-num">' + fmtMB(fs.size) + '</td>' +
+                                '<td class="storage-cell-num">' + fmtMB(fs.used) + '</td>' +
+                                '<td class="storage-cell-num">' + fmtMB(fs.avail || fs.available) + '</td>' +
+                                '<td class="storage-cell-num">' + (pct ? pct + '%' : '\u2014') + '</td></tr>';
                         }).join('') +
                         '</tbody></table>';
                 }

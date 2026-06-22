@@ -828,33 +828,33 @@ h3 { font-size: 1rem; }
 }
 
 .storage-table {
+    width: 100%;
     table-layout: fixed;
+    border-spacing: 0;
     font-variant-numeric: tabular-nums;
 }
 
-.storage-table col.storage-col-mount { width: 28%; }
+.storage-table col.storage-col-mount { width: 30%; }
 .storage-table col.storage-col-size,
 .storage-table col.storage-col-used,
-.storage-table col.storage-col-avail { width: 20%; }
-.storage-table col.storage-col-use { width: 12%; }
+.storage-table col.storage-col-avail { width: 19%; }
+.storage-table col.storage-col-use { width: 13%; }
 
-.storage-table th:first-child,
-.storage-table td:first-child {
+.storage-table th,
+.storage-table td {
+    box-sizing: border-box;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.storage-table .storage-cell-mount {
     text-align: left;
+    white-space: nowrap;
 }
 
-.storage-table th:nth-child(2),
-.storage-table td:nth-child(2),
-.storage-table th:nth-child(3),
-.storage-table td:nth-child(3),
-.storage-table th:nth-child(4),
-.storage-table td:nth-child(4) {
+.storage-table .storage-cell-num {
     text-align: right;
-}
-
-.storage-table th:last-child,
-.storage-table td:last-child {
-    text-align: right;
+    white-space: nowrap;
 }
 
 /* --- Client table (Keenetic-style) --- */
