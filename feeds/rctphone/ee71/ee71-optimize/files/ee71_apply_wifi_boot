@@ -15,7 +15,6 @@
 DB="/jrd-resource/resource/sqlite3/user_info.db3"
 XML="/etc/mobileap_cfg.xml"
 QCMAP_WIFI_CTL="/usr/bin/qcmap_wifi_ctl"
-QCMAP_CLI="/usr/bin/QCMAP_CLI"
 LOG="/tmp/ee71_apply_wifi_boot.log"
 MAX_WAIT=60
 
@@ -29,12 +28,8 @@ log() {
 GUEST5G=$(sqlite3 "$DB" "SELECT value FROM wifi_info WHERE items='Guest5GAPStatus';" 2>/dev/null)
 AP2G=$(sqlite3 "$DB" "SELECT value FROM wifi_info WHERE items='2GAPStatus';" 2>/dev/null)
 AP5G=$(sqlite3 "$DB" "SELECT value FROM wifi_info WHERE items='5GAPStatus';" 2>/dev/null)
-CONN_MODE=$(sqlite3 "$DB" "SELECT value FROM Connection WHERE items='ConnMode';" 2>/dev/null)
-JRD_AUTOCONNECT=$(sqlite3 "$DB" "SELECT value FROM Connection WHERE items='jrdautoconnect';" 2>/dev/null)
-ROAMING_CONNECT=$(sqlite3 "$DB" "SELECT value FROM Connection WHERE items='RoaminConnMode';" 2>/dev/null)
 
 log "DB: 2GAPStatus=$AP2G 5GAPStatus=$AP5G Guest5GAPStatus=$GUEST5G"
-log "DB: ConnMode=$CONN_MODE jrdautoconnect=$JRD_AUTOCONNECT RoaminConnMode=$ROAMING_CONNECT"
 
 # Determine desired mode:
 #   dual (AP-AP):   2GAPStatus=1 AND Guest5GAPStatus=1  — wlan0 2.4G + wlan1 5G
@@ -69,104 +64,12 @@ fi
 # Give QCMAP extra time to finish QMI init
 sleep 10
 
-qcmap_cli_run() {
-    name="$1"
-    input="$2"
-    expect="$3"
-
-    [ -x "$QCMAP_CLI" ] || { log "$name: QCMAP_CLI missing, skip"; return 1; }
-    out=$(printf "%b" "$input" | /bin/timeout 12 "$QCMAP_CLI" 2>&1)
-    rc=$?
-    log "$name: rc=$rc"
-    echo "$out" >> "$LOG"
-    if [ $rc -ne 0 ]; then
-        return 1
-    fi
-    if [ -n "$expect" ] && ! echo "$out" | grep -q "$expect"; then
-        log "$name: expected text not found: $expect"
-        return 1
-    fi
-    return 0
-}
-
-qcmap_cli_capture() {
-    name="$1"
-    input="$2"
-
-    [ -x "$QCMAP_CLI" ] || { log "$name: QCMAP_CLI missing, skip"; return 1; }
-    out=$(printf "%b" "$input" | /bin/timeout 12 "$QCMAP_CLI" 2>&1)
-    rc=$?
-    log "$name: rc=$rc"
-    echo "$out" >> "$LOG"
-    [ $rc -eq 0 ] || return 1
-    printf "%s\n" "$out"
-    return 0
-}
-
-parse_enabled_disabled() {
-    case "$1" in
-        *Enabled*) printf "1" ;;
-        *Disabled*) printf "0" ;;
-        *) printf "" ;;
-    esac
-}
-
-sync_qcmap_connection_policy() {
-    autoconnect=""
-    roaming=""
-    wlan_boot=0
-
-    if [ "$CONN_MODE" = "1" ] || [ "$JRD_AUTOCONNECT" = "1" ]; then
-        autoconnect=1
-    elif [ "$CONN_MODE" = "0" ] || [ "$JRD_AUTOCONNECT" = "0" ]; then
-        autoconnect=0
-    fi
-    if [ "$ROAMING_CONNECT" = "1" ]; then
-        roaming=1
-    elif [ "$ROAMING_CONNECT" = "0" ]; then
-        roaming=0
-    fi
-    if [ "$AP2G" = "1" ] || [ "$AP5G" = "1" ] || [ "$GUEST5G" = "1" ]; then
-        wlan_boot=1
-    fi
-
-    log "QCMAP policy: autoconnect=$autoconnect roaming=$roaming wlan_boot=$wlan_boot"
-
-    if [ -n "$autoconnect" ]; then
-        auto_out=$(qcmap_cli_capture "Get autoconnect" "17\n96\n")
-        current_auto=$(parse_enabled_disabled "$auto_out")
-        if [ "$current_auto" != "$autoconnect" ]; then
-            if [ "$autoconnect" = "1" ]; then
-                qcmap_cli_run "Enable MobileAP" "30\n1\n96\n" ""
-                if [ "$wlan_boot" = "1" ]; then
-                    qcmap_cli_run "Enable WLAN" "31\n1\n96\n" ""
-                fi
-            fi
-            qcmap_cli_run "Set autoconnect" "16\n$autoconnect\n96\n" "Auto Connect config set succeeds"
-        else
-            log "Autoconnect already $autoconnect"
-        fi
-    else
-        log "Autoconnect DB value is not valid, skip"
-    fi
-
-    if [ -n "$roaming" ]; then
-        roaming_out=$(qcmap_cli_capture "Get roaming" "6\n96\n")
-        current_roaming=$(parse_enabled_disabled "$roaming_out")
-        if [ "$current_roaming" != "$roaming" ]; then
-            qcmap_cli_run "Set roaming" "5\n$roaming\n96\n" "Roaming set config succeeds"
-        else
-            log "Roaming already $roaming"
-        fi
-    else
-        log "Roaming DB value is not valid, skip"
-    fi
-}
-
-sync_qcmap_connection_policy
+# Connection auto-mode belongs to JRD core_app (Connection table + Connect
+# webapi path). QCMAP AutoConnect/Roaming are a separate Qualcomm policy and
+# must not be synchronized from this WiFi repair hook.
 
 # Only fix dual — single-band modes work correctly out of the box
-[ "$MODE" = "dual" ] || { log "not dual, connection policy applied"; exit 0; }
+[ "$MODE" = "dual" ] || { log "not dual, nothing to fix"; exit 0; }
 
 [ -x "$QCMAP_WIFI_CTL" ] || { log "qcmap_wifi_ctl missing, skip wifi repair"; exit 0; }
 
