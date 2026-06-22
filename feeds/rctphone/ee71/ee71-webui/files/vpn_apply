@@ -43,6 +43,11 @@ dnsmasq_reload() {
     [ -n "$pid" ] && kill -HUP "$pid" 2>/dev/null
 }
 
+refresh_dnsmasq_ipv6_filter() {
+    [ -x /usr/sbin/dnsmasq_ipv6_filter ] || return 0
+    DEBOUNCE_SEC=0 INITIAL_WAIT_SEC=0 /usr/sbin/dnsmasq_ipv6_filter >/dev/null 2>&1 &
+}
+
 clean_legacy_speedtest_dns() {
     if [ -f /etc/dnsmasq.d/speedtest.conf ]; then
         rm -f /etc/dnsmasq.d/speedtest.conf 2>/dev/null
@@ -163,6 +168,7 @@ apply_tun_dns() {
     dns_redirect_prepare
     iptables -t nat -A "$DNS_CHAIN" -j DNAT --to-destination "$_DNS" 2>/dev/null
     dnsmasq_reload
+    refresh_dnsmasq_ipv6_filter
 }
 
 apply_ss_dns() {
@@ -174,12 +180,14 @@ apply_ss_dns() {
     iptables -t nat -A "$DNS_CHAIN" -p udp -j REDIRECT --to-ports "$((SS_PORT + 1))" 2>/dev/null
     iptables -t nat -A "$DNS_CHAIN" -p tcp -j DNAT --to-destination "$_DNS" 2>/dev/null
     dnsmasq_reload
+    refresh_dnsmasq_ipv6_filter
 }
 
 restore_main_dns() {
     clean_legacy_speedtest_dns
     dns_redirect_clean
     dnsmasq_reload
+    refresh_dnsmasq_ipv6_filter
 }
 
 # --- IPv6 safety helpers ---

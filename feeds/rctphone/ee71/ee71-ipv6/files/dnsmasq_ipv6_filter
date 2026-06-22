@@ -7,9 +7,14 @@
 # - Some options (including filter-AAAA) may require full restart to apply.
 #   In that case we only mark "pending restart" and avoid DHCP/DNS downtime.
 
-DNSMASQ_CONF="/etc/dnsmasq.conf"
-WAN_IFACE="rmnet_data0"
-FILTER_MARKER="# AUTO: filter-AAAA (no IPv6 WAN)"
+DNSMASQ_CONF="${DNSMASQ_CONF:-/etc/dnsmasq.conf}"
+WAN_IFACE="${WAN_IFACE:-rmnet_data0}"
+VPN_CONF="${VPN_CONF:-/etc/vpn.conf}"
+WG_CONF="${WG_CONF:-/etc/wireguard/wg0.conf}"
+AWG_CONF="${AWG_CONF:-/etc/amneziawg/awg0.conf}"
+WG_IFACE="${WG_IFACE:-wg0}"
+AWG_IFACE="${AWG_IFACE:-awg0}"
+FILTER_MARKER="# AUTO: filter-AAAA (no routed IPv6)"
 
 LOCK_DIR="/var/run/dnsmasq_ipv6_filter.lock"
 STATE_FILE="/var/run/dnsmasq_ipv6_filter.state"
@@ -26,6 +31,40 @@ log_msg() {
 
 has_global_ipv6() {
     ifconfig "$WAN_IFACE" 2>/dev/null | grep "inet6 addr:" | grep -qv "Scope:Link"
+}
+
+vpn_mode() {
+    VPN="off"
+    [ -f "$VPN_CONF" ] && . "$VPN_CONF" 2>/dev/null
+    echo "$VPN"
+}
+
+iface_has_global_ipv6() {
+    ip -6 addr show dev "$1" scope global 2>/dev/null | grep -q 'inet6'
+}
+
+conf_allows_ipv6_default() {
+    sed -n 's/^AllowedIPs[[:space:]]*=[[:space:]]*//p' "$1" 2>/dev/null |
+        tr ',' '\n' |
+        sed 's/^[[:space:]]*//;s/[[:space:]]*$//' |
+        grep -qx '::/0'
+}
+
+vpn_has_routed_ipv6() {
+    case "$(vpn_mode)" in
+        wg)
+            iface_has_global_ipv6 "$WG_IFACE" && conf_allows_ipv6_default "$WG_CONF"
+            ;;
+        awg)
+            iface_has_global_ipv6 "$AWG_IFACE" && conf_allows_ipv6_default "$AWG_CONF"
+            ;;
+        ss)
+            return 1
+            ;;
+        *)
+            return 2
+            ;;
+    esac
 }
 
 has_filter() {
@@ -82,13 +121,26 @@ fi
 # Debounce rmnet flaps/events
 sleep "$DEBOUNCE_SEC"
 
-if has_global_ipv6; then
-    desired_state="ipv6_up"
-    want_filter=0
-else
-    desired_state="ipv6_down"
-    want_filter=1
-fi
+case "$(vpn_mode)" in
+    wg|awg|ss)
+        if vpn_has_routed_ipv6; then
+            desired_state="vpn_ipv6_up"
+            want_filter=0
+        else
+            desired_state="vpn_ipv6_down"
+            want_filter=1
+        fi
+        ;;
+    *)
+        if has_global_ipv6; then
+            desired_state="wan_ipv6_up"
+            want_filter=0
+        else
+            desired_state="wan_ipv6_down"
+            want_filter=1
+        fi
+        ;;
+esac
 
 prev_state="$(cat "$STATE_FILE" 2>/dev/null || echo "unknown")"
 changed="$(set_filter_on_disk "$want_filter")"
