@@ -15,8 +15,25 @@ BIN=/usr/sbin/sms_forward
 PID_FILE=/var/run/sms_forward.pid
 CONF=/etc/sms_forward.conf
 
+read_pid() {
+    [ -f "$PID_FILE" ] || return 1
+    PID="$(cat "$PID_FILE" 2>/dev/null)"
+    case "$PID" in
+        ''|*[!0-9]*)
+            rm -f "$PID_FILE"
+            return 1
+            ;;
+    esac
+    return 0
+}
+
 is_running() {
-    [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE" 2>/dev/null)" 2>/dev/null
+    read_pid || return 1
+    if kill -0 "$PID" 2>/dev/null; then
+        return 0
+    fi
+    rm -f "$PID_FILE"
+    return 1
 }
 
 case "$1" in
@@ -41,9 +58,11 @@ case "$1" in
         ;;
     stop)
         if is_running; then
-            kill "$(cat "$PID_FILE")" 2>/dev/null
+            kill "$PID" 2>/dev/null
             rm -f "$PID_FILE"
             echo "$NAME stopped"
+        else
+            rm -f "$PID_FILE"
         fi
         ;;
     restart)
@@ -53,7 +72,7 @@ case "$1" in
         ;;
     reload)
         if is_running; then
-            kill -HUP "$(cat "$PID_FILE")" 2>/dev/null
+            kill -HUP "$PID" 2>/dev/null
             echo "$NAME config reloaded"
         else
             $0 start

@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=ee71-webs-csp
-PKG_VERSION:=1.0.0
+PKG_VERSION:=1.0.1
 PKG_RELEASE:=1
 
 include $(INCLUDE_DIR)/package.mk
@@ -9,14 +9,14 @@ include $(INCLUDE_DIR)/package.mk
 define Package/ee71-webs-csp
   SECTION:=ee71
   CATEGORY:=EE71
-  TITLE:=Patch webs binary CSP header for iframe support
+  TITLE:=Patch stock webs binary for webui compatibility
   DEPENDS:=+libc
 endef
 
 define Package/ee71-webs-csp/description
-  Patches the GoAhead webs binary Content-Security-Policy string
-  in-place to allow iframe embedding and inline scripts/styles.
-  Original CSP is very restrictive; replaced with permissive policy.
+  Patches the GoAhead webs binary in-place for EE71 webui compatibility.
+  The package relaxes the stock CSP header and fixes the stock TestRequest
+  watchdog JSON literal so core_app can parse it reliably.
   Backs up original binary before patching.
 endef
 

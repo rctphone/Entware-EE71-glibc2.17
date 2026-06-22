@@ -31,7 +31,11 @@ telegram_error() {
 
 telegram_get() {
     _url="$1"
-    curl -sS --connect-timeout 3 --max-time 5 "$_url" 2>&1
+    curl -sS --connect-timeout 3 --max-time 5 --speed-limit 1 --speed-time 3 "$_url" 2>&1
+}
+
+json_sh_quote() {
+    jq -Rn --arg v "$1" '$v|@sh'
 }
 
 # --- Parse action ---
@@ -88,8 +92,8 @@ save)
     FILTER=$(echo "$BODY" | jq -r '.filter_numbers // empty')
 
     # Defaults
-    TG_EN="${TG_EN:-0}"
-    PH_EN="${PH_EN:-0}"
+    [ "$TG_EN" = "1" ] || TG_EN=0
+    [ "$PH_EN" = "1" ] || PH_EN=0
 
     # If token is empty, keep existing one from config
     if [ -z "$TG_TOKEN" ] && [ -f "$CONF_FILE" ]; then
@@ -109,20 +113,33 @@ save)
         esac
     fi
 
+    if [ -n "$TG_CHAT" ]; then
+        CLEAN_CHAT=$(printf '%s' "$TG_CHAT" | tr -cd '0-9-')
+        if [ "$CLEAN_CHAT" != "$TG_CHAT" ]; then
+            echo '{"error":"Chat ID contains invalid characters"}'; exit 0
+        fi
+    fi
+
     # Validate phone target (digits, +, spaces only)
     if [ -n "$PH_TARGET" ]; then
         CLEAN=$(printf '%s' "$PH_TARGET" | tr -cd '0-9+ ')
         PH_TARGET="$CLEAN"
     fi
 
+    FILTER=$(printf '%s' "$FILTER" | tr -cd '0-9+ ,_-')
+
     # Write config
+    QT_TOKEN=$(json_sh_quote "$TG_TOKEN")
+    QT_CHAT=$(json_sh_quote "$TG_CHAT")
+    QT_PHONE=$(json_sh_quote "$PH_TARGET")
+    QT_FILTER=$(json_sh_quote "$FILTER")
     cat > "$CONF_FILE" <<EOF
 TELEGRAM_ENABLED=$TG_EN
-TELEGRAM_BOT_TOKEN="$TG_TOKEN"
-TELEGRAM_CHAT_ID="$TG_CHAT"
+TELEGRAM_BOT_TOKEN=$QT_TOKEN
+TELEGRAM_CHAT_ID=$QT_CHAT
 PHONE_ENABLED=$PH_EN
-PHONE_TARGET="$PH_TARGET"
-FILTER_NUMBERS="$FILTER"
+PHONE_TARGET=$QT_PHONE
+FILTER_NUMBERS=$QT_FILTER
 EOF
     chmod 0600 "$CONF_FILE"
 
@@ -158,6 +175,7 @@ test_telegram)
     # Send test message
     MSG="EE71 SMS Forward test message. If you see this, forwarding is configured correctly."
     RESULT=$(curl -sS --connect-timeout 3 --max-time 5 \
+        --speed-limit 1 --speed-time 3 \
         "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
         -d "chat_id=${TG_CHAT}" \
         -d "text=${MSG}" \
