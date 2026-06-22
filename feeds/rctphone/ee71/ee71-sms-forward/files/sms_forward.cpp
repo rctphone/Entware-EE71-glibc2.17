@@ -345,8 +345,18 @@ static bool send_telegram(const config &cfg,
     CURL *curl = curl_easy_init();
     if (!curl) return false;
 
+    char errbuf[CURL_ERROR_SIZE];
+    errbuf[0] = '\0';
+
     char *escaped_msg = curl_easy_escape(curl, msg, 0);
     char *escaped_chat = curl_easy_escape(curl, cfg.chat_id, 0);
+    if (!escaped_msg || !escaped_chat) {
+        logmsg(LOG_ERR, "Telegram curl escape failed");
+        curl_free(escaped_msg);
+        curl_free(escaped_chat);
+        curl_easy_cleanup(curl);
+        return false;
+    }
 
     char postdata[8192];
     snprintf(postdata, sizeof(postdata),
@@ -358,7 +368,9 @@ static bool send_telegram(const config &cfg,
 
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, postdata);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
+    curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, errbuf);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_discard);
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
 
@@ -368,7 +380,10 @@ static bool send_telegram(const config &cfg,
     curl_easy_cleanup(curl);
 
     if (res != CURLE_OK) {
-        logmsg(LOG_ERR, "Telegram curl error: %s", curl_easy_strerror(res));
+        logmsg(LOG_ERR, "Telegram curl error: %s%s%s",
+               curl_easy_strerror(res),
+               errbuf[0] ? ": " : "",
+               errbuf[0] ? errbuf : "");
         return false;
     }
     if (http_code != 200) {

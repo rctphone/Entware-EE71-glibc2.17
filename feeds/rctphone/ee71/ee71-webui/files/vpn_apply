@@ -20,19 +20,180 @@ SS_REDIR="/usr/bin/ss-redir"
 SS_TUNNEL="/usr/bin/ss-tunnel"
 SS_REDIR_PID="/tmp/ss-redir.pid"
 SS_TUNNEL_PID="/tmp/ss-tunnel.pid"
+DNS_CHAIN="EE71_VPN_DNS"
+FALLBACK_DNS="1.1.1.1"
+SS_IPV6_TABLE="53"
 # Detect LAN subnet from bridge0 (e.g. 192.168.1.0/24)
 LAN_IP=$(ifconfig bridge0 2>/dev/null | sed -n 's/.*inet addr:\([^ ]*\).*/\1/p')
 LAN_IP="${LAN_IP:-192.168.1.1}"
 LAN_NET=$(echo "$LAN_IP" | sed 's/\.[0-9]*$/.0\/24/')
+LAN_IFACE="bridge0"
+LAN6_NET=$(ip -6 route show dev "$LAN_IFACE" 2>/dev/null | awk '/scope global/ {print $1; exit}')
 
 # --- Read config ---
 VPN="off"
 [ -f "$VPN_CONF" ] && . "$VPN_CONF"
 
+# --- DNS overlay helpers ---
+# QCMAP owns /etc/resolv.conf and updates it on carrier/backhaul events.
+# Keep that file untouched. When a VPN is active, redirect only router-originated
+# DNS at runtime so dnsmasq uses the VPN path without fighting QCMAP.
+dnsmasq_reload() {
+    pid="$(pidof dnsmasq 2>/dev/null | awk '{print $1}')"
+    [ -n "$pid" ] && kill -HUP "$pid" 2>/dev/null
+}
+
+clean_legacy_speedtest_dns() {
+    rm -f /etc/dnsmasq.d/speedtest.conf 2>/dev/null
+    [ -f /etc/dnsmasq.conf ] && sed -i \
+        -e '/address=\/speedtest\.net\/127\.0\.0\.1/d' \
+        -e '/address=\/c\.speedtest\.net\/127\.0\.0\.1/d' \
+        /etc/dnsmasq.conf 2>/dev/null
+}
+
+conf_dns_servers() {
+    _CONF="$1"
+    sed -n 's/^DNS[[:space:]]*=[[:space:]]*//p' "$_CONF" 2>/dev/null | head -1 | tr ',' ' '
+}
+
+conf_addresses() {
+    _CONF="$1"
+    sed -n 's/^Address[[:space:]]*=[[:space:]]*//p' "$_CONF" 2>/dev/null | head -1 | tr ',' ' '
+}
+
+is_ipv4() {
+    _IP="$1"
+    case "$_IP" in
+        *[!0-9.]* | *.*.*.*.* | .* | *. | *..*) return 1 ;;
+    esac
+    _OLD_IFS="$IFS"
+    IFS=.
+    set -- $_IP
+    IFS="$_OLD_IFS"
+    [ "$#" -eq 4 ] || return 1
+    for _OCTET in "$@"; do
+        [ -n "$_OCTET" ] || return 1
+        [ "$_OCTET" -ge 0 ] 2>/dev/null || return 1
+        [ "$_OCTET" -le 255 ] 2>/dev/null || return 1
+    done
+    return 0
+}
+
+conf_dns_ipv4() {
+    _CONF="$1"
+    for _NS in $(conf_dns_servers "$_CONF"); do
+        if is_ipv4 "$_NS"; then
+            echo "$_NS"
+            return
+        fi
+    done
+    echo "$FALLBACK_DNS"
+}
+
+dns_redirect_clean() {
+    while iptables -t nat -D OUTPUT -p udp --dport 53 -j "$DNS_CHAIN" 2>/dev/null; do :; done
+    while iptables -t nat -D OUTPUT -p tcp --dport 53 -j "$DNS_CHAIN" 2>/dev/null; do :; done
+    iptables -t nat -F "$DNS_CHAIN" 2>/dev/null
+    iptables -t nat -X "$DNS_CHAIN" 2>/dev/null
+}
+
+dns_redirect_prepare() {
+    dns_redirect_clean
+    iptables -t nat -N "$DNS_CHAIN" 2>/dev/null
+    iptables -t nat -I OUTPUT 1 -p udp --dport 53 -j "$DNS_CHAIN" 2>/dev/null
+    iptables -t nat -I OUTPUT 1 -p tcp --dport 53 -j "$DNS_CHAIN" 2>/dev/null
+    iptables -t nat -A "$DNS_CHAIN" -d 127.0.0.0/8 -j RETURN 2>/dev/null
+    iptables -t nat -A "$DNS_CHAIN" -d "$LAN_NET" -j RETURN 2>/dev/null
+}
+
+apply_tun_dns() {
+    _DNS="$(conf_dns_ipv4 "$1")"
+    clean_legacy_speedtest_dns
+    dns_redirect_prepare
+    iptables -t nat -A "$DNS_CHAIN" -j DNAT --to-destination "$_DNS" 2>/dev/null
+    dnsmasq_reload
+}
+
+apply_ss_dns() {
+    _DNS="$(conf_dns_ipv4 "$SS_CONF")"
+    SS_PORT=$(sed -n 's/.*"local_port"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' "$SS_CONF" 2>/dev/null)
+    SS_PORT="${SS_PORT:-1080}"
+    clean_legacy_speedtest_dns
+    dns_redirect_prepare
+    iptables -t nat -A "$DNS_CHAIN" -p udp -j REDIRECT --to-ports "$((SS_PORT + 1))" 2>/dev/null
+    iptables -t nat -A "$DNS_CHAIN" -p tcp -j DNAT --to-destination "$_DNS" 2>/dev/null
+    dnsmasq_reload
+}
+
+restore_main_dns() {
+    clean_legacy_speedtest_dns
+    dns_redirect_clean
+    dnsmasq_reload
+}
+
+# --- IPv6 safety helpers ---
+tun_has_ipv6() {
+    ip -6 addr show dev "$1" scope global 2>/dev/null | grep -q 'inet6'
+}
+
+clean_tun_routes_v6() {
+    _IFACE="$1" _TABLE="$2"
+    while ip -6 rule del to fe80::/10 lookup main pref 100 2>/dev/null; do :; done
+    [ -n "$LAN6_NET" ] && while ip -6 rule del to "$LAN6_NET" lookup main pref 100 2>/dev/null; do :; done
+    [ -n "$LAN6_NET" ] && while ip -6 rule del from "$LAN6_NET" lookup "$_TABLE" pref 200 2>/dev/null; do :; done
+    while ip -6 rule del lookup "$_TABLE" pref 201 2>/dev/null; do :; done
+    ip -6 route del default dev "$_IFACE" table "$_TABLE" 2>/dev/null
+    ip -6 route del blackhole default table "$_TABLE" 2>/dev/null
+    ip -6 route del unreachable default table "$_TABLE" 2>/dev/null
+    while ip6tables -t nat -D POSTROUTING -o "$_IFACE" -j MASQUERADE 2>/dev/null; do :; done
+    while ip6tables -D FORWARD -i "$_IFACE" -j ACCEPT 2>/dev/null; do :; done
+    while ip6tables -D FORWARD -o "$_IFACE" -j ACCEPT 2>/dev/null; do :; done
+    while ip6tables -D FORWARD -i "$LAN_IFACE" ! -o "$_IFACE" -j DROP 2>/dev/null; do :; done
+    while ip6tables -D FORWARD -i "$LAN_IFACE" -j DROP 2>/dev/null; do :; done
+}
+
+route_all_tun_v6() {
+    _IFACE="$1" _TABLE="$2"
+    clean_tun_routes_v6 "$_IFACE" "$_TABLE"
+    ip -6 rule add to fe80::/10 lookup main pref 100 2>/dev/null
+    [ -n "$LAN6_NET" ] && ip -6 rule add to "$LAN6_NET" lookup main pref 100 2>/dev/null
+
+    if tun_has_ipv6 "$_IFACE"; then
+        ip -6 route add default dev "$_IFACE" table "$_TABLE" 2>/dev/null
+        [ -n "$LAN6_NET" ] && ip -6 rule add from "$LAN6_NET" lookup "$_TABLE" pref 200 2>/dev/null
+        ip -6 rule add lookup "$_TABLE" pref 201 2>/dev/null
+        ip6tables -t nat -A POSTROUTING -o "$_IFACE" -j MASQUERADE 2>/dev/null
+        ip6tables -A FORWARD -i "$_IFACE" -j ACCEPT 2>/dev/null
+        ip6tables -A FORWARD -o "$_IFACE" -j ACCEPT 2>/dev/null
+        ip6tables -I FORWARD 1 -i "$LAN_IFACE" ! -o "$_IFACE" -j DROP 2>/dev/null
+    else
+        ip -6 route add blackhole default table "$_TABLE" 2>/dev/null ||
+            ip -6 route add unreachable default table "$_TABLE" 2>/dev/null
+        ip -6 rule add lookup "$_TABLE" pref 201 2>/dev/null
+        ip6tables -I FORWARD 1 -i "$LAN_IFACE" -j DROP 2>/dev/null
+    fi
+}
+
+clean_ss_v6_guard() {
+    while ip -6 rule del lookup "$SS_IPV6_TABLE" pref 202 2>/dev/null; do :; done
+    ip -6 route del blackhole default table "$SS_IPV6_TABLE" 2>/dev/null
+    ip -6 route del unreachable default table "$SS_IPV6_TABLE" 2>/dev/null
+    while ip6tables -D FORWARD -i "$LAN_IFACE" -j DROP 2>/dev/null; do :; done
+}
+
+apply_ss_v6_guard() {
+    clean_ss_v6_guard
+    ip -6 route add blackhole default table "$SS_IPV6_TABLE" 2>/dev/null ||
+        ip -6 route add unreachable default table "$SS_IPV6_TABLE" 2>/dev/null
+    ip -6 rule add lookup "$SS_IPV6_TABLE" pref 202 2>/dev/null
+    ip6tables -I FORWARD 1 -i "$LAN_IFACE" -j DROP 2>/dev/null
+}
+
 # --- Shared tunnel route cleanup ---
 # Usage: clean_tun_routes <iface> <conf_file> <rt_table>
 clean_tun_routes() {
     _IFACE="$1" _CONF="$2" _TABLE="$3"
+    clean_tun_routes_v6 "$_IFACE" "$_TABLE"
     iptables -t nat -D POSTROUTING -o "$_IFACE" -j MASQUERADE 2>/dev/null
     iptables -D FORWARD -i "$_IFACE" -j ACCEPT 2>/dev/null
     iptables -D FORWARD -o "$_IFACE" -j ACCEPT 2>/dev/null
@@ -76,8 +237,9 @@ wg_start() {
         grep -vi '^\(Address\|DNS\|MTU\|Table\|PreUp\|PostUp\|PreDown\|PostDown\|SaveConfig\)[[:space:]]*=' "$WG_CONF" > /tmp/.wg_stripped
             "$WG_BIN" setconf "$WG_IFACE" /tmp/.wg_stripped 2>/dev/null
         rm -f /tmp/.wg_stripped
-        ADDR=$(sed -n 's/^Address[[:space:]]*=[[:space:]]*//p' "$WG_CONF" | head -1)
-        [ -n "$ADDR" ] && ip addr add "$ADDR" dev "$WG_IFACE" 2>/dev/null
+        for ADDR in $(conf_addresses "$WG_CONF"); do
+            ip addr add "$ADDR" dev "$WG_IFACE" 2>/dev/null
+        done
         ip link set "$WG_IFACE" up 2>/dev/null
     fi
     wg_is_up
@@ -115,8 +277,9 @@ awg_start() {
         grep -vi '^\(Address\|DNS\|MTU\|Table\|PreUp\|PostUp\|PreDown\|PostDown\|SaveConfig\)[[:space:]]*=' "$AWG_CONF" > /tmp/.awg_stripped
         "$AWG_BIN" setconf "$AWG_IFACE" /tmp/.awg_stripped 2>/dev/null
         rm -f /tmp/.awg_stripped
-        ADDR=$(sed -n 's/^Address[[:space:]]*=[[:space:]]*//p' "$AWG_CONF" | head -1)
-        [ -n "$ADDR" ] && ip addr add "$ADDR" dev "$AWG_IFACE" 2>/dev/null
+        for ADDR in $(conf_addresses "$AWG_CONF"); do
+            ip addr add "$ADDR" dev "$AWG_IFACE" 2>/dev/null
+        done
         ip link set "$AWG_IFACE" up 2>/dev/null
     fi
     awg_is_up
@@ -147,6 +310,8 @@ ss_stop() {
     iptables -t nat -D OUTPUT -p tcp -j REDIRECT --to-ports "$SS_PORT" 2>/dev/null
     [ -n "$SS_SERVER" ] && iptables -t nat -D PREROUTING -d "$SS_SERVER" -j RETURN 2>/dev/null
     iptables -t nat -D PREROUTING -d "$LAN_NET" -j RETURN 2>/dev/null
+    dns_redirect_clean
+    clean_ss_v6_guard
 }
 
 ss_start() {
@@ -190,6 +355,7 @@ route_all_tun() {
     iptables -t nat -A POSTROUTING -o "$_IFACE" -j MASQUERADE 2>/dev/null
     iptables -A FORWARD -i "$_IFACE" -j ACCEPT 2>/dev/null
     iptables -A FORWARD -o "$_IFACE" -j ACCEPT 2>/dev/null
+    route_all_tun_v6 "$_IFACE" "$_TABLE"
 }
 
 route_all_ss() {
@@ -214,15 +380,36 @@ route_all_ss() {
     iptables -t nat -I OUTPUT 2 -d "$LAN_NET" -j RETURN 2>/dev/null
     [ -n "$SS_SERVER" ] && iptables -t nat -I OUTPUT 3 -d "$SS_SERVER" -j RETURN 2>/dev/null
     iptables -t nat -A OUTPUT -p tcp -j REDIRECT --to-ports "$SS_PORT" 2>/dev/null
+    apply_ss_v6_guard
 }
+
+clean_legacy_speedtest_dns
 
 # --- Apply ---
 # Stop whatever shouldn't be running
 case "$VPN" in
-    wg)  awg_is_up && awg_stop; ss_is_up && ss_stop ;;
-    awg) wg_is_up && wg_stop; ss_is_up && ss_stop ;;
-    ss)  wg_is_up && wg_stop; awg_is_up && awg_stop ;;
-    *)   ss_is_up && ss_stop; wg_is_up && wg_stop; awg_is_up && awg_stop ;;
+    wg)
+        clean_tun_routes "$AWG_IFACE" "$AWG_CONF" 52
+        awg_is_up && awg_stop
+        ss_is_up && ss_stop
+        ;;
+    awg)
+        clean_tun_routes "$WG_IFACE" "$WG_CONF" 51
+        wg_is_up && wg_stop
+        ss_is_up && ss_stop
+        ;;
+    ss)
+        clean_tun_routes "$WG_IFACE" "$WG_CONF" 51
+        clean_tun_routes "$AWG_IFACE" "$AWG_CONF" 52
+        wg_is_up && wg_stop
+        awg_is_up && awg_stop
+        ;;
+    *)
+        ss_stop
+        wg_stop
+        awg_stop
+        restore_main_dns
+        ;;
 esac
 
 # Start what should be running + always route all traffic
@@ -235,7 +422,13 @@ case "$VPN" in
             "$WG_BIN" syncconf "$WG_IFACE" /tmp/.wg_stripped 2>/dev/null
             rm -f /tmp/.wg_stripped
         fi
-        wg_is_up && route_all_tun "$WG_IFACE" "$WG_CONF" 51
+        if wg_is_up; then
+            route_all_tun "$WG_IFACE" "$WG_CONF" 51
+            apply_tun_dns "$WG_CONF"
+        else
+            wg_stop
+            restore_main_dns
+        fi
         ;;
     awg)
         awg_is_up || awg_start
@@ -244,11 +437,23 @@ case "$VPN" in
             "$AWG_BIN" syncconf "$AWG_IFACE" /tmp/.awg_stripped 2>/dev/null
             rm -f /tmp/.awg_stripped
         fi
-        awg_is_up && route_all_tun "$AWG_IFACE" "$AWG_CONF" 52
+        if awg_is_up; then
+            route_all_tun "$AWG_IFACE" "$AWG_CONF" 52
+            apply_tun_dns "$AWG_CONF"
+        else
+            awg_stop
+            restore_main_dns
+        fi
         ;;
     ss)
         ss_is_up || ss_start
-        ss_is_up && route_all_ss
+        if ss_is_up; then
+            route_all_ss
+            apply_ss_dns
+        else
+            ss_stop
+            restore_main_dns
+        fi
         ;;
 esac
 

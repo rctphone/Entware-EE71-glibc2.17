@@ -827,6 +827,33 @@ h3 { font-size: 1rem; }
     background: var(--bg-surface-secondary);
 }
 
+.storage-table {
+    table-layout: fixed;
+    font-variant-numeric: tabular-nums;
+}
+
+.storage-table th:first-child,
+.storage-table td:first-child {
+    width: 28%;
+    text-align: left;
+}
+
+.storage-table th:nth-child(2),
+.storage-table td:nth-child(2),
+.storage-table th:nth-child(3),
+.storage-table td:nth-child(3),
+.storage-table th:nth-child(4),
+.storage-table td:nth-child(4) {
+    width: 20%;
+    text-align: right;
+}
+
+.storage-table th:last-child,
+.storage-table td:last-child {
+    width: 12%;
+    text-align: right;
+}
+
 /* --- Client table (Keenetic-style) --- */
 
 .cl-table,
@@ -1282,15 +1309,20 @@ input[type="submit"]:hover {
 }
 .chat-item-fg:hover { background: var(--bg-surface-secondary); }
 .chat-item-action-bg {
-    flex: 0 0 80px;
+    flex: 0 0 76px;
     scroll-snap-align: end;
-    background: var(--color-danger, #c0392b);
+    background: color-mix(in srgb, var(--color-danger) 10%, var(--bg-surface));
     display: flex; align-items: center; justify-content: center;
     flex-direction: column; gap: 2px;
-    color: #fff; font-size: 0.7rem; font-weight: 600;
-    cursor: pointer; border: none; padding: 0;
+    color: var(--color-danger); font-size: 0.7rem; font-weight: 600;
+    cursor: pointer; border: none; border-left: 1px solid var(--border-color);
+    padding: 0;
 }
-.chat-item-action-bg svg { width: 18px; height: 18px; fill: #fff; }
+.chat-item-action-bg:hover,
+.chat-item-action-bg:focus-visible {
+    background: color-mix(in srgb, var(--color-danger) 16%, var(--bg-surface));
+}
+.chat-item-action-bg svg { width: 18px; height: 18px; fill: currentColor; }
 
 .chat-avatar {
     width: 50px; height: 50px; border-radius: 50%;

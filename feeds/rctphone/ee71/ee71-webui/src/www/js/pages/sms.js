@@ -91,6 +91,100 @@
         return parts[1] + '.' + parts[2] + '.' + parts[3];
     }
 
+    function _smsPhone(raw) {
+        if (Array.isArray(raw)) return raw[0] || '';
+        return raw || '';
+    }
+
+    function _smsPhoneKey(phone) {
+        return (phone || '').replace(/[\s\-()]/g, '').toLowerCase();
+    }
+
+    function _flatSmsToContacts(list) {
+        var groups = {};
+        (list || []).forEach(function(m) {
+            if (String(m.SMSType) === '4') return;
+            var phone = _smsPhone(m.PhoneNumber);
+            var key = _smsPhoneKey(phone);
+            if (!key) return;
+            if (!groups[key]) {
+                groups[key] = {
+                    ContactId: 0,
+                    PhoneNumber: phone,
+                    LatestContent: m.SMSContent || '',
+                    LatestTime: m.SMSTime || '',
+                    SMSIds: [],
+                    TotalNum: 0
+                };
+            }
+            groups[key].TotalNum++;
+            if (m.SMSId != null) groups[key].SMSIds.push(m.SMSId);
+            if (!groups[key].LatestTime || (m.SMSTime || '') > groups[key].LatestTime) {
+                groups[key].LatestContent = m.SMSContent || '';
+                groups[key].LatestTime = m.SMSTime || '';
+            }
+        });
+        return Object.keys(groups).map(function(k) { return groups[k]; });
+    }
+
+    function _loadFlatSmsList() {
+        return API.webapi('GetSMSListByContactNum', { Page: 1, key: 'inbox' }).then(function(r) {
+            return (r && r.SMSList) || [];
+        });
+    }
+
+    function _renderSmsInbox(el, storage, contactList) {
+        var used = parseInt(storage.TUseCount || storage.UsedNum || 0, 10);
+        var left = parseInt(storage.LeftCount || 0, 10);
+        var total = parseInt(storage.MaxCount || storage.TotalNum || 0, 10) || (used + left);
+        var pct = total ? Math.round(used / total * 100) : 0;
+        var html = '<div class="sms-storage-row">' +
+            '<span class="sms-storage-label">Storage ' + used + '/' + total + '</span>' +
+            '<div class="sms-storage-track"><div class="sms-storage-fill" style="width:' + pct + '%"></div></div>' +
+            '<button class="sms-compose-btn" ' + actionAttr('smsTab', ['compose']) + ' title="New message">' +
+                icon('ic-edit') +
+            '</button>' +
+            '</div>';
+
+        if (!contactList || contactList.length === 0) {
+            html += '<p class="text-muted" style="text-align:center;padding:2rem 0">No messages</p>';
+        } else {
+            html += '<div class="chat-list">';
+            contactList.forEach(function(c) {
+                var phoneStr = _smsPhone(c.PhoneNumber);
+                var preview = ((c.LatestContent || c.SMSContent || '') + '').substring(0, 50);
+                var unreadCount = parseInt(c.UnreadCount || 0, 10);
+                var totalCount = parseInt(c.TotalNum || c.TSMSCount || 0, 10);
+                var smsIds = Array.isArray(c.SMSIds) ? c.SMSIds.join(',') : '';
+                var letter = _avatarLetters(phoneStr);
+
+                html += '<div class="chat-item">' +
+                    '<div class="chat-item-fg" ' + actionAttr('openSmsThread', [phoneStr, c.ContactId || 0]) + '>' +
+                        '<div class="chat-avatar">' + escHtml(letter) + '</div>' +
+                        '<div class="chat-item-body">' +
+                            '<div class="chat-item-top">' +
+                                '<span class="chat-item-name">' + escHtml(phoneStr) + '</span>' +
+                                '<span class="chat-item-time">' + escHtml(_timeAgoShort(c.LatestTime || c.SMSTime || '')) + '</span>' +
+                            '</div>' +
+                            '<div class="chat-item-bottom">' +
+                                '<span class="chat-item-preview">' + escHtml(preview) + '</span>' +
+                                (unreadCount > 0
+                                    ? '<span class="badge-unread">' + unreadCount + '</span>'
+                                    : (totalCount > 0 ? '<span class="badge-unread muted">' + totalCount + '</span>' : '')) +
+                            '</div>' +
+                        '</div>' +
+                    '</div>' +
+                    '<button class="chat-item-action-bg" data-stop ' + actionAttr('deleteSmsThread', [c.ContactId || 0, phoneStr, smsIds]) + '>' +
+                        icon('ic-delete') + 'Delete' +
+                    '</button>' +
+                '</div>';
+            });
+            html += '</div>';
+        }
+
+        el.innerHTML = html;
+    }
+
     function _loadSmsInbox() {
         var el = document.getElementById('sms-inbox');
         if (!el) return;
@@ -102,56 +196,15 @@
         ]).then(function(results) {
             var storage = results[0], contacts = results[1];
             var used = parseInt(storage.TUseCount || storage.UsedNum || 0, 10);
-            var left = parseInt(storage.LeftCount || 0, 10);
-            var total = parseInt(storage.MaxCount || storage.TotalNum || 0, 10) || (used + left);
             var contactList = contacts.SMSContactList || [];
-
-            var pct = total ? Math.round(used / total * 100) : 0;
-            var html = '<div class="sms-storage-row">' +
-                '<span class="sms-storage-label">Storage ' + used + '/' + total + '</span>' +
-                '<div class="sms-storage-track"><div class="sms-storage-fill" style="width:' + pct + '%"></div></div>' +
-                '<button class="sms-compose-btn" ' + actionAttr('smsTab', ['compose']) + ' title="New message">' +
-                    icon('ic-edit') +
-                '</button>' +
-                '</div>';
-
-            if (contactList.length === 0) {
-                html += '<p class="text-muted" style="text-align:center;padding:2rem 0">No messages</p>';
-            } else {
-                html += '<div class="chat-list">';
-                contactList.forEach(function(c) {
-                    var rawPhone = c.PhoneNumber;
-                    var phoneStr = Array.isArray(rawPhone) ? (rawPhone[0] || '') : (rawPhone || '');
-                    var preview = ((c.LatestContent || c.SMSContent || '') + '').substring(0, 50);
-                    var unreadCount = parseInt(c.UnreadCount || 0, 10);
-                    var totalCount = parseInt(c.TotalNum || c.TSMSCount || 0, 10);
-                    var letter = _avatarLetters(phoneStr);
-
-                    html += '<div class="chat-item">' +
-                        '<div class="chat-item-fg" ' + actionAttr('openSmsThread', [phoneStr, c.ContactId]) + '>' +
-                            '<div class="chat-avatar">' + escHtml(letter) + '</div>' +
-                            '<div class="chat-item-body">' +
-                                '<div class="chat-item-top">' +
-                                    '<span class="chat-item-name">' + escHtml(phoneStr) + '</span>' +
-                                    '<span class="chat-item-time">' + escHtml(_timeAgoShort(c.LatestTime || c.SMSTime || '')) + '</span>' +
-                                '</div>' +
-                                '<div class="chat-item-bottom">' +
-                                    '<span class="chat-item-preview">' + escHtml(preview) + '</span>' +
-                                    (unreadCount > 0
-                                        ? '<span class="badge-unread">' + unreadCount + '</span>'
-                                        : (totalCount > 0 ? '<span class="badge-unread muted">' + totalCount + '</span>' : '')) +
-                                '</div>' +
-                            '</div>' +
-                        '</div>' +
-                        '<button class="chat-item-action-bg" data-stop ' + actionAttr('deleteSmsThread', [c.ContactId || '']) + '>' +
-                            icon('ic-delete') + 'Delete' +
-                        '</button>' +
-                    '</div>';
+            if (contactList.length === 0 && used > 0) {
+                return _loadFlatSmsList().then(function(list) {
+                    _renderSmsInbox(el, storage, _flatSmsToContacts(list));
+                }).catch(function() {
+                    _renderSmsInbox(el, storage, contactList);
                 });
-                html += '</div>';
             }
-
-            el.innerHTML = html;
+            _renderSmsInbox(el, storage, contactList);
         }).catch(function(e) {
             el.innerHTML = '<div class="card"><p class="text-danger">Error: ' + escHtml(e.message) + '</p></div>';
         });
@@ -162,11 +215,39 @@
         var el = document.getElementById('sms-inbox');
         if (!el) return;
         el.innerHTML = '<div class="page-loading"><div class="spinner"></div> Loading thread...</div>';
+        contactId = parseInt(contactId, 10) || 0;
+
+        if (!contactId) return _openFlatSmsThread(phone);
 
         return API.webapi('GetSMSContentList', {
-            ContactId: parseInt(contactId, 10) || 0, Page: 0, PhoneNumber: phone
+            ContactId: contactId, Page: 0, PhoneNumber: phone
         }).then(function(msgs) {
             var list = (msgs.SMSContentList || []).slice().reverse();
+            _renderSmsThread(el, phone, contactId, list);
+        }).catch(function(e) {
+            var msg = (e && (e.apiMessage || e.message)) || '';
+            if (/Get SMS content list failed/i.test(msg)) {
+                return _openFlatSmsThread(phone);
+            }
+            el.innerHTML = '<div class="card"><p class="text-danger">Error: ' + escHtml(msg || e) + '</p></div>';
+        });
+    }
+
+    function _openFlatSmsThread(phone) {
+        var el = document.getElementById('sms-inbox');
+        if (!el) return;
+        return _loadFlatSmsList().then(function(list) {
+            var key = _smsPhoneKey(phone);
+            var filtered = list.filter(function(m) {
+                return String(m.SMSType) !== '4' && _smsPhoneKey(_smsPhone(m.PhoneNumber)) === key;
+            }).reverse();
+            _renderSmsThread(el, phone, 0, filtered);
+        }).catch(function(e) {
+            el.innerHTML = '<div class="card"><p class="text-danger">Error: ' + escHtml(e.message || e) + '</p></div>';
+        });
+    }
+
+    function _renderSmsThread(el, phone, contactId, list) {
             var letter = _avatarLetters(phone);
 
             var html = '<div class="chat-wrap">' +
@@ -198,7 +279,7 @@
                     html += '<div class="chat-msg-text">' + escHtml(m.SMSContent || '') + '</div>';
                     html += '<div class="chat-msg-meta">';
                     if (smsId) {
-                        html += '<button type="button" ' + actionAttr('deleteSingleSms', [smsId, phone]) +
+                        html += '<button type="button" ' + actionAttr('deleteSingleSms', [smsId, phone, contactId || 0]) +
                             ' class="chat-msg-del" title="Delete message" aria-label="Delete message">' +
                             icon('ic-delete') +
                         '</button>';
@@ -239,14 +320,6 @@
             }
 
             API.webapi('SetNewSMSFlag').catch(function() {});
-        }).catch(function(e) {
-            var msg = (e && (e.apiMessage || e.message)) || '';
-            if (/Get SMS content list failed/i.test(msg)) {
-                _renderEmptySmsThread(el, phone);
-                return;
-            }
-            el.innerHTML = '<div class="card"><p class="text-danger">Error: ' + escHtml(msg || e) + '</p></div>';
-        });
     }
 
     function _renderEmptySmsThread(el, phone) {
@@ -441,21 +514,23 @@
                ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
     }
 
-    function _retryOpenThread(phone, attempts, delay) {
+    function _retryOpenThread(phone, contactId, attempts, delay) {
+        contactId = parseInt(contactId, 10) || 0;
+        if (!contactId) return _openFlatSmsThread(phone);
         var el = document.getElementById('sms-inbox');
         if (el) el.innerHTML = '<div class="page-loading"><div class="spinner"></div> Loading thread...</div>';
         // Test API readiness without rendering, then render on success
         return API.webapi('GetSMSContentList', {
-            ContactId: 0, Page: 0, PhoneNumber: phone
+            ContactId: contactId, Page: 0, PhoneNumber: phone
         }).then(function() {
-            return _openSmsThread(phone);
+            return _openSmsThread(phone, contactId);
         }).catch(function(e) {
             if (attempts <= 1) {
                 if (el) el.innerHTML = '<div class="card"><p class="text-danger">Error: ' + escHtml(e.message) + '</p></div>';
                 return;
             }
             return new Promise(function(r) { setTimeout(r, delay); }).then(function() {
-                return _retryOpenThread(phone, attempts - 1, delay);
+                return _retryOpenThread(phone, contactId, attempts - 1, delay);
             });
         });
     }
@@ -518,7 +593,7 @@
             btn = null; textEl = null;
             return new Promise(function(r) { setTimeout(r, 5000); });
         }).then(function() {
-            return _retryOpenThread(phone, 3, 3000);
+            return _retryOpenThread(phone, 0, 3, 3000);
         }).catch(function(e) {
             if (bar) {
                 var msg = (e.apiMessage || e.message || 'Send failed');
@@ -558,7 +633,7 @@
             _smsTab('inbox');
             return new Promise(function(r) { setTimeout(r, 5000); });
         }).then(function() {
-            return _retryOpenThread(phone, 3, 3000);
+            return _retryOpenThread(phone, 0, 3, 3000);
         }).catch(function(e) {
             var msg = (e.apiMessage || e.message || 'Send failed');
             if (e.code) msg += ' [' + e.code + ']';
@@ -569,16 +644,35 @@
         });
     }
 
-    function _deleteSingleSms(smsId, phone) {
+    function _deleteSingleSms(smsId, phone, contactId) {
         if (!confirm('Delete this message?')) return;
-        API.webapi('DeleteSMS', { DelFlag: 0, SMSId: parseInt(smsId, 10) }).then(function() {
-            _openSmsThread(phone, 0);
+        API.webapi('DeleteSMS', { DelFlag: 3, SMSArray: [parseInt(smsId, 10)] }).then(function() {
+            _loadSmsInbox();
         }).catch(function(e) { alert('Delete failed: ' + (e.message || e)); });
     }
 
-    function _deleteSmsThread(contactId) {
+    function _deleteSmsThread(contactId, phone, smsIds) {
         if (!confirm('Delete all messages in this thread?')) return;
-        API.webapi('DeleteSMS', { DelFlag: 1, ContactId: parseInt(contactId, 10) }).then(function() {
+        contactId = parseInt(contactId, 10) || 0;
+        var ids = (smsIds || '').split(',').map(function(v) { return parseInt(v, 10); }).filter(function(v) { return !isNaN(v); });
+        var req = contactId
+            ? { DelFlag: 1, ContactId: contactId }
+            : { DelFlag: 3, SMSArray: ids };
+        if (!contactId && ids.length === 0) {
+            _loadFlatSmsList().then(function(list) {
+                var key = _smsPhoneKey(phone);
+                var fallbackIds = list.filter(function(m) {
+                    return String(m.SMSType) !== '4' && _smsPhoneKey(_smsPhone(m.PhoneNumber)) === key && m.SMSId != null;
+                }).map(function(m) { return parseInt(m.SMSId, 10); }).filter(function(v) { return !isNaN(v); });
+                return fallbackIds.length
+                    ? API.webapi('DeleteSMS', { DelFlag: 3, SMSArray: fallbackIds })
+                    : null;
+            }).then(function() {
+                _loadSmsInbox();
+            }).catch(function() { _loadSmsInbox(); });
+            return;
+        }
+        API.webapi('DeleteSMS', req).then(function() {
             _loadSmsInbox();
         }).catch(function() { _loadSmsInbox(); });
     }
