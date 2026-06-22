@@ -1,12 +1,12 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=sqlite3
-PKG_VERSION:=3.44.2
+PKG_VERSION:=3.53.2
 PKG_RELEASE:=1
 
-PKG_SOURCE:=sqlite-autoconf-3440200.tar.gz
-PKG_SOURCE_URL:=https://www.sqlite.org/2023/
-PKG_HASH:=skip
+PKG_SOURCE:=sqlite-autoconf-3530200.tar.gz
+PKG_SOURCE_URL:=https://www.sqlite.org/2026/
+PKG_HASH:=588ad51949419a56ebe81fe56193d510c559eb94c9a57748387860b5d3069316
 
 PKG_LICENSE:=Public-Domain
 PKG_INSTALL:=1
@@ -14,7 +14,7 @@ PKG_BUILD_PARALLEL:=1
 PKG_BUILD_FLAGS:=lto gc-sections
 PKG_FLAGS:=essential
 
-PKG_BUILD_DIR:=$(BUILD_DIR)/sqlite-autoconf-3440200
+PKG_BUILD_DIR:=$(BUILD_DIR)/sqlite-autoconf-3530200
 
 include $(INCLUDE_DIR)/package.mk
 
@@ -40,10 +40,18 @@ TARGET_CFLAGS += \
 	-DSQLITE_OMIT_LOAD_EXTENSION \
 	-DSQLITE_THREADSAFE=1
 
-CONFIGURE_ARGS += \
+CONFIGURE_ARGS = \
+	--host=$(GNU_TARGET_NAME) \
+	--build=$(GNU_HOST_NAME) \
+	--prefix=$(CONFIGURE_PREFIX) \
 	--disable-static \
-	--disable-editline \
-	--disable-readline
+	--disable-readline \
+	--disable-rpath \
+	--soname=legacy \
+	--fts4 \
+	--fts5 \
+	--rtree \
+	--geopoly
 
 define Build/InstallDev
 	$(INSTALL_DIR) $(1)/usr/include
