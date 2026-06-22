@@ -56,7 +56,10 @@
             if (fsList.length > 0) {
                 var elSt = el('a-storage');
                 if (elSt) {
-                    elSt.innerHTML = '<table class="data-table storage-table"><thead><tr>' +
+                    elSt.innerHTML = '<table class="data-table storage-table">' +
+                        '<colgroup><col class="storage-col-mount"><col class="storage-col-size">' +
+                        '<col class="storage-col-used"><col class="storage-col-avail"><col class="storage-col-use"></colgroup>' +
+                        '<thead><tr>' +
                         '<th>Mount</th><th>Size</th><th>Used</th><th>Avail</th><th>Use</th>' +
                         '</tr></thead><tbody>' +
                         fsList.map(function(fs) {

@@ -192,11 +192,11 @@
 
         Promise.all([
             API.webapi('GetSMSStorageState'),
-            API.webapi('GetSMSContactList', { Page: 0, ContactNum: 50 })
+            API.webapi('GetSMSContactList', { Page: 0, ContactNum: 50 }).catch(function() { return null; })
         ]).then(function(results) {
             var storage = results[0], contacts = results[1];
             var used = parseInt(storage.TUseCount || storage.UsedNum || 0, 10);
-            var contactList = contacts.SMSContactList || [];
+            var contactList = contacts && contacts.SMSContactList || [];
             if (contactList.length === 0 && used > 0) {
                 return _loadFlatSmsList().then(function(list) {
                     _renderSmsInbox(el, storage, _flatSmsToContacts(list));
@@ -644,37 +644,49 @@
         });
     }
 
+    function _reloadSmsInboxSoon() {
+        setTimeout(_loadSmsInbox, 800);
+    }
+
     function _deleteSingleSms(smsId, phone, contactId) {
         if (!confirm('Delete this message?')) return;
         API.webapi('DeleteSMS', { DelFlag: 3, SMSArray: [parseInt(smsId, 10)] }).then(function() {
-            _loadSmsInbox();
+            _reloadSmsInboxSoon();
         }).catch(function(e) { alert('Delete failed: ' + (e.message || e)); });
+    }
+
+    function _resolveThreadSmsIds(phone, smsIds) {
+        var ids = (smsIds || '').split(',').map(function(v) {
+            return parseInt(v, 10);
+        }).filter(function(v) {
+            return !isNaN(v);
+        });
+        if (ids.length > 0) return Promise.resolve(ids);
+
+        return _loadFlatSmsList().then(function(list) {
+            var key = _smsPhoneKey(phone);
+            return list.filter(function(m) {
+                return String(m.SMSType) !== '4' &&
+                    _smsPhoneKey(_smsPhone(m.PhoneNumber)) === key &&
+                    m.SMSId != null;
+            }).map(function(m) {
+                return parseInt(m.SMSId, 10);
+            }).filter(function(v) {
+                return !isNaN(v);
+            });
+        });
     }
 
     function _deleteSmsThread(contactId, phone, smsIds) {
         if (!confirm('Delete all messages in this thread?')) return;
-        contactId = parseInt(contactId, 10) || 0;
-        var ids = (smsIds || '').split(',').map(function(v) { return parseInt(v, 10); }).filter(function(v) { return !isNaN(v); });
-        var req = contactId
-            ? { DelFlag: 1, ContactId: contactId }
-            : { DelFlag: 3, SMSArray: ids };
-        if (!contactId && ids.length === 0) {
-            _loadFlatSmsList().then(function(list) {
-                var key = _smsPhoneKey(phone);
-                var fallbackIds = list.filter(function(m) {
-                    return String(m.SMSType) !== '4' && _smsPhoneKey(_smsPhone(m.PhoneNumber)) === key && m.SMSId != null;
-                }).map(function(m) { return parseInt(m.SMSId, 10); }).filter(function(v) { return !isNaN(v); });
-                return fallbackIds.length
-                    ? API.webapi('DeleteSMS', { DelFlag: 3, SMSArray: fallbackIds })
-                    : null;
-            }).then(function() {
-                _loadSmsInbox();
-            }).catch(function() { _loadSmsInbox(); });
-            return;
-        }
-        API.webapi('DeleteSMS', req).then(function() {
-            _loadSmsInbox();
-        }).catch(function() { _loadSmsInbox(); });
+        _resolveThreadSmsIds(phone, smsIds).then(function(ids) {
+            if (!ids.length) return null;
+            return API.webapi('DeleteSMS', { DelFlag: 3, SMSArray: ids });
+        }).then(function() {
+            _reloadSmsInboxSoon();
+        }).catch(function() {
+            _reloadSmsInboxSoon();
+        });
     }
 
     function _loadSmsForward() {

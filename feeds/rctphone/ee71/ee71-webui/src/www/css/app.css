@@ -832,9 +832,14 @@ h3 { font-size: 1rem; }
     font-variant-numeric: tabular-nums;
 }
 
+.storage-table col.storage-col-mount { width: 28%; }
+.storage-table col.storage-col-size,
+.storage-table col.storage-col-used,
+.storage-table col.storage-col-avail { width: 20%; }
+.storage-table col.storage-col-use { width: 12%; }
+
 .storage-table th:first-child,
 .storage-table td:first-child {
-    width: 28%;
     text-align: left;
 }
 
@@ -844,13 +849,11 @@ h3 { font-size: 1rem; }
 .storage-table td:nth-child(3),
 .storage-table th:nth-child(4),
 .storage-table td:nth-child(4) {
-    width: 20%;
     text-align: right;
 }
 
 .storage-table th:last-child,
 .storage-table td:last-child {
-    width: 12%;
     text-align: right;
 }
 
