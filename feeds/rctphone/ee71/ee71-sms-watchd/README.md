@@ -81,7 +81,7 @@ Managed via web UI (SMS → Forward tab) or `sms_fwd.cgi`.
 Started by `/etc/init.d/ee71_webui`:
 
 ```bash
-/etc/init.d/ee71_webui start    # starts traffic_stats + sms_watchd + speedtest_httpd
+/etc/init.d/ee71_webui start    # starts web UI helper daemons
 /etc/init.d/ee71_webui status   # shows daemon PIDs
 ```
 

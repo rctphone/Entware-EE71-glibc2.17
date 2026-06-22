@@ -27,8 +27,9 @@ const API = (() => {
     let _heartbeatTimer = null;
 
     // --- Client-side inactivity timeout ---
-    const INACTIVITY_MS = 900000; // 15 minutes (stock was 5 min — too aggressive)
+    const INACTIVITY_MS = 3600000; // 60 minutes (stock was 5 min — too aggressive)
     let _inactivityTimer = null;
+    let _heartbeatInFlight = false;
 
     // --- API error class ---
 
@@ -477,18 +478,13 @@ const API = (() => {
 
             const resp = await fetch(url, { redirect: 'manual' });
 
-            // Detect GoAhead auth redirect (302 → /index.html)
-            // Reload page — restoreSession() will re-validate on reload
-            if (resp.status === 0 || resp.type === 'opaqueredirect') {
-                location.reload();
-                return new Promise(function() {}); // never resolves (page reloading)
-            }
-
-            // Also check if we got HTML instead of JSON (redirect followed by browser)
+            // Detect GoAhead auth redirect (302 -> /index.html). Do not reload here:
+            // status bar and page background polling catch CGI failures and should not
+            // tear down a still-valid stock /jrd/webapi session.
             const ct = resp.headers.get('Content-Type') || '';
-            if (ct.includes('text/html')) {
-                location.reload();
-                return new Promise(function() {});
+            if (resp.status === 0 || resp.type === 'opaqueredirect' ||
+                (resp.status >= 300 && resp.status < 400) || ct.includes('text/html')) {
+                throw new ApiError('CGI_AUTH_REDIRECT', 'CGI authentication required', path);
             }
 
             return resp.json();
@@ -507,15 +503,10 @@ const API = (() => {
                 body: JSON.stringify(data)
             });
 
-            if (resp.status === 0 || resp.type === 'opaqueredirect') {
-                location.reload();
-                return new Promise(function() {});
-            }
-
             const ct = resp.headers.get('Content-Type') || '';
-            if (ct.includes('text/html')) {
-                location.reload();
-                return new Promise(function() {});
+            if (resp.status === 0 || resp.type === 'opaqueredirect' ||
+                (resp.status >= 300 && resp.status < 400) || ct.includes('text/html')) {
+                throw new ApiError('CGI_AUTH_REDIRECT', 'CGI authentication required', path);
             }
 
             const result = await resp.json();
@@ -581,6 +572,8 @@ const API = (() => {
     function _startHeartbeat() {
         _stopHeartbeat();
         _heartbeatTimer = setInterval(async () => {
+            if (_heartbeatInFlight) return;
+            _heartbeatInFlight = true;
             try {
                 // HeartBeat is the stock keepalive — resets server session timer
                 await webapi('HeartBeat');
@@ -589,6 +582,8 @@ const API = (() => {
                 if (e instanceof ApiError && ERR_SESSION_EXPIRED.indexOf(e.code) !== -1) {
                     _handleSessionExpired();
                 }
+            } finally {
+                _heartbeatInFlight = false;
             }
         }, HEARTBEAT_MS);
         _startInactivityTimer();
@@ -599,6 +594,7 @@ const API = (() => {
             clearInterval(_heartbeatTimer);
             _heartbeatTimer = null;
         }
+        _heartbeatInFlight = false;
         _stopInactivityTimer();
     }
 
@@ -676,7 +672,17 @@ const API = (() => {
                 _startHeartbeat();
                 return true;
             }
-        } catch (e) { /* ignore */ }
+        } catch (e) {
+            if (e instanceof ApiError && ERR_SESSION_EXPIRED.indexOf(e.code) !== -1) {
+                _verificationToken = '';
+                clearCookie();
+                return false;
+            }
+            // A transient webapi/token/network failure during page load should not
+            // destroy the browser cookie. The heartbeat will re-check once running.
+            _startHeartbeat();
+            return true;
+        }
         // Server says not logged in — clear stale cookie
         _verificationToken = '';
         clearCookie();

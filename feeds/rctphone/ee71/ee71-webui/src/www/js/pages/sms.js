@@ -197,7 +197,12 @@
                     html += '<div class="chat-msg ' + dir + (grouped ? ' grouped' : '') + '">';
                     html += '<div class="chat-msg-text">' + escHtml(m.SMSContent || '') + '</div>';
                     html += '<div class="chat-msg-meta">';
-                    if (smsId) html += '<a href="#" ' + actionAttr('deleteSingleSms', [smsId, phone]) + ' class="chat-msg-del">delete</a>';
+                    if (smsId) {
+                        html += '<button type="button" ' + actionAttr('deleteSingleSms', [smsId, phone]) +
+                            ' class="chat-msg-del" title="Delete message" aria-label="Delete message">' +
+                            icon('ic-delete') +
+                        '</button>';
+                    }
                     html += '<span class="chat-msg-time">' + escHtml(_formatTime(m.SMSTime || '')) + '</span>';
                     if (isSent) {
                         html += '<svg class="icon-xs' + (hasReport ? ' read' : '') + '"><use href="#' + (hasReport ? 'ic-check-all' : 'ic-check') + '"/></svg>';
@@ -235,8 +240,33 @@
 
             API.webapi('SetNewSMSFlag').catch(function() {});
         }).catch(function(e) {
-            el.innerHTML = '<div class="card"><p class="text-danger">Error: ' + escHtml(e.message) + '</p></div>';
+            var msg = (e && (e.apiMessage || e.message)) || '';
+            if (/Get SMS content list failed/i.test(msg)) {
+                _renderEmptySmsThread(el, phone);
+                return;
+            }
+            el.innerHTML = '<div class="card"><p class="text-danger">Error: ' + escHtml(msg || e) + '</p></div>';
         });
+    }
+
+    function _renderEmptySmsThread(el, phone) {
+        var letter = _avatarLetters(phone);
+        el.innerHTML = '<div class="chat-wrap">' +
+            '<div class="chat-header">' +
+                '<button ' + actionAttr('smsTab', ['inbox']) + ' class="chat-back">\u2190</button>' +
+                '<div class="chat-avatar sm">' + escHtml(letter) + '</div>' +
+                '<span class="chat-header-name">' + escHtml(phone || '') + '</span>' +
+            '</div>' +
+            '<p class="text-muted" style="text-align:center;padding:2rem 0">No messages in thread</p>' +
+            '<div class="chat-input-bar">' +
+                '<textarea id="sms-reply-text" rows="1" placeholder="Message"></textarea>' +
+                '<button ' + actionAttr('sendSms', [phone]) + ' class="chat-send-btn">' +
+                    '<svg class="icon"><use href="#ic-send"/></svg>' +
+                '</button>' +
+            '</div>' +
+        '</div>';
+        var pc = document.getElementById('page-content');
+        if (pc) pc.classList.add('chat-active');
     }
 
     function _loadSmsCompose() {
@@ -542,7 +572,7 @@
     function _deleteSingleSms(smsId, phone) {
         if (!confirm('Delete this message?')) return;
         API.webapi('DeleteSMS', { DelFlag: 0, SMSId: parseInt(smsId, 10) }).then(function() {
-            _openSmsThread(phone);
+            _openSmsThread(phone, 0);
         }).catch(function(e) { alert('Delete failed: ' + (e.message || e)); });
     }
 

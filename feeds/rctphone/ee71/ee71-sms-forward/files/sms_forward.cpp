@@ -541,26 +541,40 @@ static void read_and_forward(send_fn_t send_fn, const config &cfg)
         return;
     }
 
-    /* First run: find max SMSId and seed — don't forward old messages */
-    if (first_run) {
-        int max_id = 0;
-        int count = cJSON_GetArraySize(contacts);
-        for (int i = 0; i < count; i++) {
-            cJSON *c = cJSON_GetArrayItem(contacts, i);
-            cJSON *sid = cJSON_GetObjectItem(c, "SMSId");
-            if (sid) {
-                int id = (int)cJSON_GetNumberValue(sid);
-                if (id > max_id) max_id = id;
-            }
+    int count = cJSON_GetArraySize(contacts);
+    int current_max_id = 0;
+    for (int i = 0; i < count; i++) {
+        cJSON *c = cJSON_GetArrayItem(contacts, i);
+        cJSON *sid = cJSON_GetObjectItem(c, "SMSId");
+        if (sid) {
+            int id = (int)cJSON_GetNumberValue(sid);
+            if (id > current_max_id) current_max_id = id;
         }
-        write_last_id(max_id);
-        logmsg(LOG_INFO, "first run: seeded last_id=%d", max_id);
+    }
+
+    /* First run: seed from current max — don't forward old messages */
+    if (first_run) {
+        write_last_id(current_max_id);
+        logmsg(LOG_INFO, "first run: seeded last_id=%d", current_max_id);
         cJSON_Delete(root);
         return;
     }
 
-    int max_id = last_id;
-    int count = cJSON_GetArraySize(contacts);
+    if (current_max_id == 0 && last_id > 0) {
+        logmsg(LOG_INFO, "SMS storage empty: reset last_id from %d to 0", last_id);
+        write_last_id(0);
+        cJSON_Delete(root);
+        return;
+    }
+
+    int effective_last_id = last_id;
+    if (current_max_id > 0 && current_max_id < last_id) {
+        logmsg(LOG_WARNING, "SMS id rollover detected: current max %d < last_id %d",
+               current_max_id, last_id);
+        effective_last_id = 0;
+    }
+
+    int max_id = effective_last_id;
 
     for (int i = 0; i < count; i++) {
         cJSON *c = cJSON_GetArrayItem(contacts, i);
@@ -568,7 +582,7 @@ static void read_and_forward(send_fn_t send_fn, const config &cfg)
         if (!sid_item) continue;
 
         int top_sid = (int)cJSON_GetNumberValue(sid_item);
-        if (top_sid <= last_id) continue;
+        if (top_sid <= effective_last_id) continue;
 
         /* This contact has new messages */
         cJSON *phone_item = cJSON_GetObjectItem(c, "PhoneNumber");
@@ -625,7 +639,8 @@ static void read_and_forward(send_fn_t send_fn, const config &cfg)
             cJSON *msid = cJSON_GetObjectItem(m, "SMSId");
             if (!msid) continue;
             int mid = (int)cJSON_GetNumberValue(msid);
-            if (mid <= last_id) continue;
+            if (mid <= effective_last_id) continue;
+            if (mid > max_id) max_id = mid;
 
             /* Filter by number */
             if (!number_matches_filter(phone, cfg.filter_numbers))
@@ -642,14 +657,13 @@ static void read_and_forward(send_fn_t send_fn, const config &cfg)
             else
                 logmsg(LOG_ERR, "Telegram failed for SMS #%d from %s", mid, phone);
 
-            if (mid > max_id) max_id = mid;
         }
         cJSON_Delete(msg_root);
     }
 
     cJSON_Delete(root);
 
-    if (max_id > last_id)
+    if (max_id != last_id)
         write_last_id(max_id);
 }
 

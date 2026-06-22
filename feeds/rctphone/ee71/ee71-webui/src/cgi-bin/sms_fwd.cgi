@@ -6,7 +6,7 @@ echo "Content-Type: application/json"
 echo ""
 
 CONF_FILE="/etc/sms_forward.conf"
-DAEMON_PID="/var/run/sms_watchd.pid"
+DAEMON_PID="/var/run/sms_forward.pid"
 
 . /jrd-resource/resource/webrc/www/cgi-bin/lib/cgi-common.sh
 
@@ -21,6 +21,17 @@ read_conf() {
     if [ -f "$CONF_FILE" ]; then
         . "$CONF_FILE"
     fi
+}
+
+telegram_error() {
+    _msg="$1"
+    [ -n "$_msg" ] || _msg="api.telegram.org is unreachable or timed out"
+    jq -n --arg err "Telegram API: $_msg" '{error:$err}'
+}
+
+telegram_get() {
+    _url="$1"
+    curl -sS --connect-timeout 3 --max-time 5 "$_url" 2>&1
 }
 
 # --- Parse action ---
@@ -115,17 +126,9 @@ FILTER_NUMBERS="$FILTER"
 EOF
     chmod 0600 "$CONF_FILE"
 
-    # Restart daemon if running
-    if [ -f "$DAEMON_PID" ]; then
-        PID=$(cat "$DAEMON_PID" 2>/dev/null)
-        if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
-            kill "$PID" 2>/dev/null
-            sleep 1
-            # Daemon should auto-restart via init script or we start it
-            if [ -x "/etc/init.d/ee71_webui" ]; then
-                /etc/init.d/ee71_webui start >/dev/null 2>&1
-            fi
-        fi
+    # Restart/reload the actual forwarding daemon after config changes.
+    if [ -x "/etc/init.d/sms_forward" ]; then
+        /etc/init.d/sms_forward restart >/dev/null 2>&1
     fi
 
     printf '{"ok":true}'
@@ -135,6 +138,11 @@ test_telegram)
     # Extract token and chat_id from POST body
     TG_TOKEN=$(echo "$BODY" | jq -r '.telegram_bot_token // empty')
     TG_CHAT=$(echo "$BODY" | jq -r '.telegram_chat_id // empty')
+
+    if [ -z "$TG_TOKEN" ] && [ -f "$CONF_FILE" ]; then
+        . "$CONF_FILE" 2>/dev/null
+        TG_TOKEN="$TELEGRAM_BOT_TOKEN"
+    fi
 
     if [ -z "$TG_TOKEN" ] || [ -z "$TG_CHAT" ]; then
         echo '{"error":"Bot token and chat ID required"}'
@@ -149,17 +157,22 @@ test_telegram)
 
     # Send test message
     MSG="EE71 SMS Forward test message. If you see this, forwarding is configured correctly."
-    RESULT=$(curl -s -m 10 \
+    RESULT=$(curl -sS --connect-timeout 3 --max-time 5 \
         "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
         -d "chat_id=${TG_CHAT}" \
         -d "text=${MSG}" \
         -d "parse_mode=HTML" 2>&1)
+    CURL_RC=$?
+    if [ "$CURL_RC" -ne 0 ]; then
+        telegram_error "$RESULT"
+        exit 0
+    fi
 
     if echo "$RESULT" | jq -e '.ok == true' >/dev/null 2>&1; then
         printf '{"ok":true,"message":"Test message sent successfully"}'
     else
         ERR=$(echo "$RESULT" | jq -r '.description // "Unknown error"')
-        jq -n --arg err "Telegram API: $ERR" '{error:$err}'
+        telegram_error "$ERR"
     fi
     ;;
 
@@ -179,7 +192,12 @@ bot_info)
         exit 0
     fi
 
-    RESULT=$(curl -s -m 10 "https://api.telegram.org/bot${TOKEN}/getMe" 2>&1)
+    RESULT=$(telegram_get "https://api.telegram.org/bot${TOKEN}/getMe")
+    CURL_RC=$?
+    if [ "$CURL_RC" -ne 0 ]; then
+        telegram_error "$RESULT"
+        exit 0
+    fi
     if echo "$RESULT" | jq -e '.ok == true' >/dev/null 2>&1; then
         USERNAME=$(echo "$RESULT" | jq -r '.result.username // empty')
         FIRST=$(echo "$RESULT" | jq -r '.result.first_name // empty')
@@ -190,7 +208,7 @@ bot_info)
             '{ok:true,username:$username,first_name:$first_name,link:$link}'
     else
         ERR=$(echo "$RESULT" | jq -r '.description // "Unknown error"')
-        jq -n --arg err "Telegram API: $ERR" '{error:$err}'
+        telegram_error "$ERR"
     fi
     ;;
 
@@ -208,12 +226,17 @@ recent_chats)
         exit 0
     fi
 
-    RESULT=$(curl -s -m 10 "https://api.telegram.org/bot${TOKEN}/getUpdates?limit=50" 2>&1)
+    RESULT=$(telegram_get "https://api.telegram.org/bot${TOKEN}/getUpdates?limit=50")
+    CURL_RC=$?
+    if [ "$CURL_RC" -ne 0 ]; then
+        telegram_error "$RESULT"
+        exit 0
+    fi
     if echo "$RESULT" | jq -e '.ok == true' >/dev/null 2>&1; then
         echo "$RESULT" | jq '{ok:true,chats:[.result[].message.chat // empty | {id:(.id|tostring),title:(.first_name // .title // "Unknown"),type:.type}] | unique_by(.id)}'
     else
         ERR=$(echo "$RESULT" | jq -r '.description // "Unknown error"')
-        jq -n --arg err "Telegram API: $ERR" '{error:$err}'
+        telegram_error "$ERR"
     fi
     ;;
 

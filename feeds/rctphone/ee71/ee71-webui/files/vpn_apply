@@ -37,6 +37,7 @@ clean_tun_routes() {
     iptables -D FORWARD -i "$_IFACE" -j ACCEPT 2>/dev/null
     iptables -D FORWARD -o "$_IFACE" -j ACCEPT 2>/dev/null
     ip rule del from "$LAN_NET" lookup "$_TABLE" 2>/dev/null
+    ip rule del lookup "$_TABLE" pref 201 2>/dev/null
     ip route del default dev "$_IFACE" table "$_TABLE" 2>/dev/null
     ENDPOINT_IP=$(sed -n 's/^Endpoint[[:space:]]*=[[:space:]]*\([^:]*\).*/\1/p' "$_CONF" 2>/dev/null | head -1)
     [ -n "$ENDPOINT_IP" ] && ip rule del to "$ENDPOINT_IP" lookup main 2>/dev/null
@@ -140,6 +141,10 @@ ss_stop() {
     SS_SERVER=$(sed -n 's/.*"server"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$SS_CONF" 2>/dev/null)
     iptables -t nat -D PREROUTING -p tcp -s "$LAN_NET" -j REDIRECT --to-ports "$SS_PORT" 2>/dev/null
     iptables -t nat -D PREROUTING -p udp --dport 53 -s "$LAN_NET" -j REDIRECT --to-ports "$((SS_PORT + 1))" 2>/dev/null
+    iptables -t nat -D OUTPUT -d 127.0.0.0/8 -j RETURN 2>/dev/null
+    iptables -t nat -D OUTPUT -d "$LAN_NET" -j RETURN 2>/dev/null
+    [ -n "$SS_SERVER" ] && iptables -t nat -D OUTPUT -d "$SS_SERVER" -j RETURN 2>/dev/null
+    iptables -t nat -D OUTPUT -p tcp -j REDIRECT --to-ports "$SS_PORT" 2>/dev/null
     [ -n "$SS_SERVER" ] && iptables -t nat -D PREROUTING -d "$SS_SERVER" -j RETURN 2>/dev/null
     iptables -t nat -D PREROUTING -d "$LAN_NET" -j RETURN 2>/dev/null
 }
@@ -172,6 +177,7 @@ route_all_tun() {
     iptables -D FORWARD -i "$_IFACE" -j ACCEPT 2>/dev/null
     iptables -D FORWARD -o "$_IFACE" -j ACCEPT 2>/dev/null
     ip rule del from "$LAN_NET" lookup "$_TABLE" 2>/dev/null
+    ip rule del lookup "$_TABLE" pref 201 2>/dev/null
     ip route del default dev "$_IFACE" table "$_TABLE" 2>/dev/null
     [ -n "$ENDPOINT_IP" ] && ip rule del to "$ENDPOINT_IP" lookup main 2>/dev/null
     ip rule del to "$LAN_NET" lookup main 2>/dev/null
@@ -180,6 +186,7 @@ route_all_tun() {
     [ -n "$ENDPOINT_IP" ] && ip rule add to "$ENDPOINT_IP" lookup main pref 101 2>/dev/null
     ip route add default dev "$_IFACE" table "$_TABLE" 2>/dev/null
     ip rule add from "$LAN_NET" lookup "$_TABLE" pref 200 2>/dev/null
+    ip rule add lookup "$_TABLE" pref 201 2>/dev/null
     iptables -t nat -A POSTROUTING -o "$_IFACE" -j MASQUERADE 2>/dev/null
     iptables -A FORWARD -i "$_IFACE" -j ACCEPT 2>/dev/null
     iptables -A FORWARD -o "$_IFACE" -j ACCEPT 2>/dev/null
@@ -194,11 +201,19 @@ route_all_ss() {
     [ -n "$SS_SERVER" ] && iptables -t nat -D PREROUTING -d "$SS_SERVER" -j RETURN 2>/dev/null
     iptables -t nat -D PREROUTING -p tcp -s "$LAN_NET" -j REDIRECT --to-ports "$SS_PORT" 2>/dev/null
     iptables -t nat -D PREROUTING -p udp --dport 53 -s "$LAN_NET" -j REDIRECT --to-ports "$((SS_PORT + 1))" 2>/dev/null
+    iptables -t nat -D OUTPUT -d 127.0.0.0/8 -j RETURN 2>/dev/null
+    iptables -t nat -D OUTPUT -d "$LAN_NET" -j RETURN 2>/dev/null
+    [ -n "$SS_SERVER" ] && iptables -t nat -D OUTPUT -d "$SS_SERVER" -j RETURN 2>/dev/null
+    iptables -t nat -D OUTPUT -p tcp -j REDIRECT --to-ports "$SS_PORT" 2>/dev/null
     # Add fresh
     iptables -t nat -I PREROUTING 1 -d "$LAN_NET" -j RETURN 2>/dev/null
     [ -n "$SS_SERVER" ] && iptables -t nat -I PREROUTING 2 -d "$SS_SERVER" -j RETURN 2>/dev/null
     iptables -t nat -A PREROUTING -p tcp -s "$LAN_NET" -j REDIRECT --to-ports "$SS_PORT" 2>/dev/null
     iptables -t nat -A PREROUTING -p udp --dport 53 -s "$LAN_NET" -j REDIRECT --to-ports "$((SS_PORT + 1))" 2>/dev/null
+    iptables -t nat -I OUTPUT 1 -d 127.0.0.0/8 -j RETURN 2>/dev/null
+    iptables -t nat -I OUTPUT 2 -d "$LAN_NET" -j RETURN 2>/dev/null
+    [ -n "$SS_SERVER" ] && iptables -t nat -I OUTPUT 3 -d "$SS_SERVER" -j RETURN 2>/dev/null
+    iptables -t nat -A OUTPUT -p tcp -j REDIRECT --to-ports "$SS_PORT" 2>/dev/null
 }
 
 # --- Apply ---

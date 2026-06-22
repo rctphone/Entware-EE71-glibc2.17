@@ -5,7 +5,7 @@
 # Required-Stop:     $remote_fs $syslog
 # Default-Start:     2 3 4 5
 # Default-Stop:      1
-# Short-Description: EE71 custom web UI daemons (traffic_stats + speedtest httpd)
+# Short-Description: EE71 custom web UI daemons
 ### END INIT INFO
 
 PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
@@ -14,12 +14,6 @@ DESC="EE71 Web UI daemons"
 
 TRAFFIC_BIN=/usr/sbin/traffic_stats
 TRAFFIC_PID=/var/run/traffic_stats.pid
-
-SPEEDTEST_ROOT=/jrd-resource/speedtest
-SPEEDTEST_PID=/var/run/speedtest_httpd.pid
-SPEEDTEST_PORT=8877
-SPEEDTEST_DOMAIN=ee71.speedtestcustom.com
-DNSMASQ_CONF=/etc/dnsmasq.conf
 
 is_running() {
     [ -f "$1" ] && kill -0 "$(cat "$1" 2>/dev/null)" 2>/dev/null
@@ -50,62 +44,14 @@ stop_traffic() {
     fi
 }
 
-start_speedtest() {
-    if is_running "$SPEEDTEST_PID"; then
-        echo "speedtest_httpd already running"
-        return 0
-    fi
-    if [ ! -d "$SPEEDTEST_ROOT" ]; then
-        return 0  # speedtest assets not deployed
-    fi
-    # Get LAN IP
-    LAN_IP=$(ifconfig bridge0 2>/dev/null | sed -n 's/.*inet addr:\([^ ]*\).*/\1/p')
-    LAN_IP="${LAN_IP:-192.168.1.1}"
-    # Ensure dnsmasq resolves our custom domain to the router.
-    # Use /etc/hosts (universally read by dnsmasq, even QCMAP-launched).
-    if ! grep -qF "$SPEEDTEST_DOMAIN" /etc/hosts 2>/dev/null; then
-        echo "$LAN_IP $SPEEDTEST_DOMAIN" >> /etc/hosts
-    fi
-    # Block native Ookla domains (force custom widget)
-    for BLK in speedtest.net c.speedtest.net; do
-        grep -qF "$BLK" /etc/hosts 2>/dev/null || echo "127.0.0.1 $BLK" >> /etc/hosts
-    done
-    # Reload dnsmasq to pick up /etc/hosts changes
-    kill -HUP "$(pidof dnsmasq)" 2>/dev/null && echo "dnsmasq: $SPEEDTEST_DOMAIN -> $LAN_IP"
-    # Open firewall port for speedtest httpd
-    iptables -C INPUT -i bridge0 -p tcp --dport "$SPEEDTEST_PORT" -j ACCEPT 2>/dev/null || \
-        iptables -I INPUT 1 -i bridge0 -p tcp --dport "$SPEEDTEST_PORT" -j ACCEPT 2>/dev/null
-    # Start BusyBox httpd
-    busybox httpd -p "${LAN_IP}:${SPEEDTEST_PORT}" -h "$SPEEDTEST_ROOT"
-    sleep 0.2
-    # Find PID by listening port
-    NEW_PID=$(busybox netstat -tlnp 2>/dev/null | sed -n "s/.*${LAN_IP}:${SPEEDTEST_PORT} .* \([0-9]*\)\/.*/\1/p")
-    if [ -n "$NEW_PID" ]; then
-        echo "$NEW_PID" > "$SPEEDTEST_PID"
-        echo "speedtest_httpd started on ${LAN_IP}:${SPEEDTEST_PORT}"
-    else
-        echo "speedtest_httpd failed to start"
-    fi
-}
-
-stop_speedtest() {
-    if is_running "$SPEEDTEST_PID"; then
-        kill "$(cat "$SPEEDTEST_PID")" 2>/dev/null
-        rm -f "$SPEEDTEST_PID"
-        echo "speedtest_httpd stopped"
-    fi
-}
-
 case "$1" in
     start)
         echo "Starting $DESC..."
         start_traffic
-        start_speedtest
         ;;
     stop)
         echo "Stopping $DESC..."
         stop_traffic
-        stop_speedtest
         ;;
     restart)
         $0 stop
@@ -117,11 +63,6 @@ case "$1" in
             echo "traffic_stats: running (pid $(cat "$TRAFFIC_PID"))"
         else
             echo "traffic_stats: stopped"
-        fi
-        if is_running "$SPEEDTEST_PID"; then
-            echo "speedtest_httpd: running (pid $(cat "$SPEEDTEST_PID")) on port $SPEEDTEST_PORT"
-        else
-            echo "speedtest_httpd: stopped"
         fi
         ;;
     *)
