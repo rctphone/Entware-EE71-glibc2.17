@@ -644,7 +644,6 @@ static int generate_hostapd_wlan1(const char *guest_json)
 
     fprintf(f,
         "interface=wlan1\n"
-        "bridge=%s\n"
         "driver=nl80211\n"
         "ieee80211d=1\n"
         "ctrl_interface=/var/run/hostapd\n"
@@ -659,7 +658,7 @@ static int generate_hostapd_wlan1(const char *guest_json)
         "ieee80211ac=1\n"
         "channel=%d\n"
         "country_code=GB\n",
-        BRIDGE, ssid, hidden, max_numsta, channel);
+        ssid, hidden, max_numsta, channel);
 
     if (ht_capab[0])
         fprintf(f, "ht_capab=%s\n", ht_capab);

@@ -36,6 +36,38 @@ is_running() {
     return 1
 }
 
+wait_for_core_app() {
+    i=0
+    last_pid=""
+    stable=0
+
+    while [ "$i" -lt 90 ]; do
+        core_pid="$(pidof core_app 2>/dev/null)"
+        if [ -n "$core_pid" ] &&
+           dmesg | grep -q "QCMAP:Init Complete" &&
+           grep -q "jrd_nw_thread" /core_app_thread_pid 2>/dev/null &&
+           grep -q "jrd_oem_connection_thread" /core_app_thread_pid 2>/dev/null; then
+            if [ "$core_pid" = "$last_pid" ]; then
+                stable=$((stable + 1))
+            else
+                last_pid="$core_pid"
+                stable=0
+            fi
+            if [ "$stable" -ge 10 ]; then
+                return 0
+            fi
+        else
+            last_pid=""
+            stable=0
+        fi
+        sleep 1
+        i=$((i + 1))
+    done
+
+    echo "$NAME: core_app IPC not ready"
+    return 1
+}
+
 case "$1" in
     start)
         if is_running; then
@@ -53,6 +85,7 @@ case "$1" in
         if [ "$TELEGRAM_ENABLED" != "1" ] || [ -z "$TELEGRAM_BOT_TOKEN" ]; then
             exit 0
         fi
+        wait_for_core_app || exit 1
         "$BIN"
         echo "$NAME started"
         ;;

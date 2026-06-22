@@ -48,6 +48,7 @@ clean_legacy_speedtest_dns() {
     [ -f /etc/dnsmasq.conf ] && sed -i \
         -e '/address=\/speedtest\.net\/127\.0\.0\.1/d' \
         -e '/address=\/c\.speedtest\.net\/127\.0\.0\.1/d' \
+        -e '/address=\/ee71\.speedtestcustom\.com\/192\.168\.88\.1/d' \
         /etc/dnsmasq.conf 2>/dev/null
 }
 

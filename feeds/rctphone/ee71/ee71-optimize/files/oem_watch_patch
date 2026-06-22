@@ -12,6 +12,11 @@
 # - echo m > /proc/sysrq-trigger — useless memory dumps to dmesg
 # - sqlite3_integrity_check.sh on boot — 3-5s delay
 # - sleep 15 in main loop — excessive CPU wakeups
+# - leaves stale /core_app_thread_pid across reboots, confusing first core_app start
+# - starts core_app before QCMAP finishes init, which can crash the first
+#   core_app in the early QMI callback path
+# - starts webs 5s after core_app even when QCMAP/core_app are not ready yet,
+#   which can trigger the stock webs watchdog to restart both processes
 #
 # This script patches oem_watch in-place on boot before it's started (S65).
 # Must run early in rcS.d (before S65start_coreapp_le which launches oem_watch).
@@ -26,10 +31,8 @@ case "$1" in
         exit 0
     fi
 
-    # Already patched?
     if [ -f "$MARKER" ]; then
-        echo "oem_watch_patch: already patched"
-        exit 0
+        echo "oem_watch_patch: marker present, verifying patches"
     fi
 
     # Backup original
@@ -63,6 +66,157 @@ case "$1" in
         sed -i 's|sleep 15$|#PERF: increased from 15s to 60s (reduce CPU wakeups)\n    sleep 60|' "$OEM_WATCH"
         CHANGED=1
         echo "oem_watch_patch: sleep 15 → 60"
+    fi
+
+    # Remove stale thread PIDs before first core_app launch, but force the
+    # non-first-start path. The first-start connection path can run before
+    # QCMAP is fully initialized and crash on a NULL callback/state pointer;
+    # the non-first path still initializes IPC/SMS/network and avoids the
+    # sacrificial crash seen during boot.
+    if ! grep -q 'prepare core_app boot markers' "$OEM_WATCH" 2>/dev/null; then
+        sed -i '1,/^rm -rf \/cache\/core_app_log$/s|^rm -rf /cache/core_app_log$|#BOOT: prepare core_app boot markers\nrm -f /core_app_thread_pid\ntouch /tmp/core_app_started\n\nrm -rf /cache/core_app_log|' "$OEM_WATCH"
+        CHANGED=1
+        echo "oem_watch_patch: prepares core_app boot markers"
+    elif grep -q 'rm -f /core_app_thread_pid /tmp/core_app_started' "$OEM_WATCH" 2>/dev/null; then
+        sed -i 's|rm -f /core_app_thread_pid /tmp/core_app_started|rm -f /core_app_thread_pid\n touch /tmp/core_app_started|' "$OEM_WATCH"
+        CHANGED=1
+        echo "oem_watch_patch: keeps core_app non-first-start marker"
+    fi
+    if grep -q 'remove stale core_app runtime thread marker' "$OEM_WATCH" 2>/dev/null; then
+        sed -i '/#BOOT: remove stale core_app runtime thread marker/{N;d;}' "$OEM_WATCH"
+        CHANGED=1
+        echo "oem_watch_patch: removed obsolete core_app marker cleanup"
+    fi
+    if grep -q 'rm -f /core_app_thread_pid /tmp/core_app_started' "$OEM_WATCH" 2>/dev/null; then
+        sed -i 's|rm -f /core_app_thread_pid /tmp/core_app_started|rm -f /core_app_thread_pid\n    touch /tmp/core_app_started|' "$OEM_WATCH"
+        CHANGED=1
+        echo "oem_watch_patch: fixed core_app retry marker handling"
+    fi
+
+    # The stock captive redirect path makes webs listen on UDP/54 and adds a
+    # PREROUTING redirect from client UDP/53 to that socket. That causes every
+    # client DNS query to resolve to the router IP instead of dnsmasq. Keep web
+    # UI redirects out of DNS and let dnsmasq answer clients normally.
+    if [ -f /jrd-resource/bin/add_redirect_rules.sh ] && ! grep -q 'EE71: DNS redirect disabled' /jrd-resource/bin/add_redirect_rules.sh 2>/dev/null; then
+        sed -i \
+            -e '1a# EE71: DNS redirect disabled; client DNS must go to dnsmasq:53' \
+            -e 's|^iptables -t nat -A PREROUTING -p udp --dport 53 -j REDIRECT --to-port 54|#EE71_DISABLED: &|' \
+            -e 's|^iptables -t nat -A PREROUTING -p udp --dport 53 -j REDIRECT --to-ports 54|#EE71_DISABLED: &|' \
+            /jrd-resource/bin/add_redirect_rules.sh
+        CHANGED=1
+        echo "oem_watch_patch: disabled webs DNS redirect add rule"
+    fi
+    if [ -f /jrd-resource/bin/add_connect_redirect_rules.sh ] && ! grep -q 'EE71: DNS redirect disabled' /jrd-resource/bin/add_connect_redirect_rules.sh 2>/dev/null; then
+        sed -i '1a# EE71: DNS redirect disabled; client DNS must go to dnsmasq:53' /jrd-resource/bin/add_connect_redirect_rules.sh
+        CHANGED=1
+        echo "oem_watch_patch: marked connect redirect DNS disabled"
+    fi
+    while iptables -t nat -D PREROUTING -p udp --dport 53 -j REDIRECT --to-port 54 2>/dev/null; do CHANGED=1; done
+    while iptables -t nat -D PREROUTING -p udp --dport 53 -j REDIRECT --to-ports 54 2>/dev/null; do CHANGED=1; done
+    if [ -f /etc/dnsmasq.conf ] && grep -q 'address=/ee71\.speedtestcustom\.com/192\.168\.88\.1' /etc/dnsmasq.conf 2>/dev/null; then
+        sed -i '/address=\/ee71\.speedtestcustom\.com\/192\.168\.88\.1/d' /etc/dnsmasq.conf
+        pid="$(pidof dnsmasq 2>/dev/null | awk '{print $1}')"
+        [ -n "$pid" ] && kill -HUP "$pid" 2>/dev/null
+        CHANGED=1
+        echo "oem_watch_patch: removed legacy speedtestcustom DNS override"
+    fi
+
+    # Start core_app only after QCMAP has finished init. On this firmware the
+    # first core_app can dereference a NULL QMI/QCMAP callback state if it is
+    # launched while QCMAP is still bringing up WLAN/backhaul. Keep a bounded
+    # timeout so a missing kernel log line does not brick web access.
+    if ! grep -q 'wait for QCMAP init before first core_app start' "$OEM_WATCH" 2>/dev/null; then
+        TMP="${OEM_WATCH}.tmp.$$"
+        awk '
+            /^#start-stop-daemon -S -b -o -a \/usr\/oem\/core_app$/ && done == 0 {
+                print "#BOOT: wait for QCMAP init before first core_app start"
+                print "qcmap_ready_wait=0"
+                print "while [ \"$qcmap_ready_wait\" -lt 45 ]; do"
+                print "  if dmesg | grep -q \"QCMAP:Init Complete\"; then"
+                print "    echo \"oem_watch: QCMAP ready before core_app\" > /dev/kmsg"
+                print "    break"
+                print "  fi"
+                print "  sleep 1"
+                print "  qcmap_ready_wait=`expr $qcmap_ready_wait + 1`"
+                print "done"
+                print "if [ \"$qcmap_ready_wait\" -ge 45 ]; then"
+                print "  echo \"oem_watch: QCMAP readiness timeout before core_app\" > /dev/kmsg"
+                print "fi"
+                print ""
+                done = 1
+            }
+            { print }
+        ' "$OEM_WATCH" > "$TMP" && cat "$TMP" > "$OEM_WATCH" && rm -f "$TMP"
+        chmod 755 "$OEM_WATCH"
+        CHANGED=1
+        echo "oem_watch_patch: gated first core_app start on QCMAP init"
+    fi
+
+    # Undo the earlier conservative delay if present. With stale marker cleanup
+    # and patched TestRequest JSON, keeping stock 5s gets the web UI up faster.
+    if grep -q 'wait longer for core_app IPC before starting webs' "$OEM_WATCH" 2>/dev/null; then
+        sed -i '/#BOOT: wait longer for core_app IPC before starting webs/{N;s|#BOOT: wait longer for core_app IPC before starting webs\nsleep 20|sleep 5|;}' "$OEM_WATCH"
+        CHANGED=1
+        echo "oem_watch_patch: restored stock webs start delay"
+    fi
+
+    # Replace the blind 5s delay before webs with a readiness gate. webs has a
+    # built-in TestRequest watchdog and can restart core_app if it starts while
+    # QCMAP/core_app are still initializing. Waiting for QCMAP init plus core
+    # worker thread markers avoids the sacrificial first restart without
+    # reordering the modem stack.
+    if ! grep -q 'wait for QCMAP/core_app readiness before starting webs' "$OEM_WATCH" 2>/dev/null; then
+        TMP="${OEM_WATCH}.tmp.$$"
+        awk '
+            /^[[:space:]]*sleep 5$/ && done == 0 {
+                print "#BOOT: wait for QCMAP/core_app readiness before starting webs"
+                print "core_ready_wait=0"
+                print "core_ready_last_pid=\"\""
+                print "core_ready_stable=0"
+                print "while [ \"$core_ready_wait\" -lt 45 ]; do"
+                print "  core_ready_pid=`pidof core_app 2>/dev/null`"
+                print "  if [ -z \"$core_ready_pid\" ]; then"
+                print "    echo \"oem_watch: core_app exited before webs start, restarting\" > /dev/kmsg"
+                print "    core_app_index=`expr $core_app_index + 1`"
+                print "    rm -f /core_app_thread_pid"
+                print "    touch /tmp/core_app_started"
+                print "    if [ -f $print_core_app_log_to_cache_flag ]; then"
+                print "      /usr/oem/core_app 1> /cache/core_app_log/core_app_$core_app_index 2>&1 &"
+                print "    else"
+                print "      start-stop-daemon -S -b -o -a /usr/oem/core_app"
+                print "    fi"
+                print "    core_ready_last_pid=\"\""
+                print "    core_ready_stable=0"
+                print "  elif dmesg | grep -q \"QCMAP:Init Complete\" && grep -q \"jrd_nw_thread\" /core_app_thread_pid 2>/dev/null && grep -q \"jrd_oem_connection_thread\" /core_app_thread_pid 2>/dev/null; then"
+                print "    if [ \"$core_ready_pid\" = \"$core_ready_last_pid\" ]; then"
+                print "      core_ready_stable=`expr $core_ready_stable + 1`"
+                print "    else"
+                print "      core_ready_last_pid=\"$core_ready_pid\""
+                print "      core_ready_stable=0"
+                print "    fi"
+                print "    if [ \"$core_ready_stable\" -ge 3 ]; then"
+                print "      echo \"oem_watch: core_app ready for webs\" > /dev/kmsg"
+                print "      break"
+                print "    fi"
+                print "  else"
+                print "    core_ready_last_pid=\"$core_ready_pid\""
+                print "    core_ready_stable=0"
+                print "  fi"
+                print "  sleep 1"
+                print "  core_ready_wait=`expr $core_ready_wait + 1`"
+                print "done"
+                print "if [ \"$core_ready_wait\" -ge 45 ]; then"
+                print "  echo \"oem_watch: core_app readiness timeout, starting webs\" > /dev/kmsg"
+                print "fi"
+                print "sleep 1"
+                done = 1
+                next
+            }
+            { print }
+        ' "$OEM_WATCH" > "$TMP" && cat "$TMP" > "$OEM_WATCH" && rm -f "$TMP"
+        chmod 755 "$OEM_WATCH"
+        CHANGED=1
+        echo "oem_watch_patch: gated webs start on QCMAP/core_app readiness"
     fi
 
     if [ "$CHANGED" = "1" ]; then
