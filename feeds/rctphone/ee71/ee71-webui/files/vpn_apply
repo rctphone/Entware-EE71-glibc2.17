@@ -144,6 +144,17 @@ tun_has_ipv6() {
     ip -6 addr show dev "$1" scope global 2>/dev/null | grep -q 'inet6'
 }
 
+tun_allows_ipv6_default() {
+    sed -n 's/^AllowedIPs[[:space:]]*=[[:space:]]*//p' "$1" 2>/dev/null |
+        tr ',' '\n' |
+        sed 's/^[[:space:]]*//;s/[[:space:]]*$//' |
+        grep -qx '::/0'
+}
+
+ip6_nat_available() {
+    ip6tables -t nat -L -n >/dev/null 2>&1
+}
+
 clean_tun_routes_v6() {
     _IFACE="$1" _TABLE="$2"
     while ip -6 rule del to fe80::/10 lookup main pref 100 2>/dev/null; do :; done
@@ -161,19 +172,23 @@ clean_tun_routes_v6() {
 }
 
 route_all_tun_v6() {
-    _IFACE="$1" _TABLE="$2"
+    _IFACE="$1" _TABLE="$2" _CONF="$3"
     clean_tun_routes_v6 "$_IFACE" "$_TABLE"
     ip -6 rule add to fe80::/10 lookup main pref 100 2>/dev/null
     [ -n "$LAN6_NET" ] && ip -6 rule add to "$LAN6_NET" lookup main pref 100 2>/dev/null
 
-    if tun_has_ipv6 "$_IFACE"; then
+    if tun_has_ipv6 "$_IFACE" && tun_allows_ipv6_default "$_CONF"; then
         ip -6 route add default dev "$_IFACE" table "$_TABLE" 2>/dev/null
-        [ -n "$LAN6_NET" ] && ip -6 rule add from "$LAN6_NET" lookup "$_TABLE" pref 200 2>/dev/null
         ip -6 rule add lookup "$_TABLE" pref 201 2>/dev/null
-        ip6tables -t nat -A POSTROUTING -o "$_IFACE" -j MASQUERADE 2>/dev/null
-        ip6tables -A FORWARD -i "$_IFACE" -j ACCEPT 2>/dev/null
-        ip6tables -A FORWARD -o "$_IFACE" -j ACCEPT 2>/dev/null
-        ip6tables -I FORWARD 1 -i "$LAN_IFACE" ! -o "$_IFACE" -j DROP 2>/dev/null
+        if [ -n "$LAN6_NET" ] && ip6_nat_available; then
+            ip -6 rule add from "$LAN6_NET" lookup "$_TABLE" pref 200 2>/dev/null
+            ip6tables -t nat -A POSTROUTING -o "$_IFACE" -j MASQUERADE 2>/dev/null
+            ip6tables -A FORWARD -i "$_IFACE" -j ACCEPT 2>/dev/null
+            ip6tables -A FORWARD -o "$_IFACE" -j ACCEPT 2>/dev/null
+            ip6tables -I FORWARD 1 -i "$LAN_IFACE" ! -o "$_IFACE" -j DROP 2>/dev/null
+        else
+            ip6tables -I FORWARD 1 -i "$LAN_IFACE" -j DROP 2>/dev/null
+        fi
     else
         ip -6 route add blackhole default table "$_TABLE" 2>/dev/null ||
             ip -6 route add unreachable default table "$_TABLE" 2>/dev/null
@@ -363,7 +378,7 @@ route_all_tun() {
     iptables -t nat -A POSTROUTING -o "$_IFACE" -j MASQUERADE 2>/dev/null
     iptables -A FORWARD -i "$_IFACE" -j ACCEPT 2>/dev/null
     iptables -A FORWARD -o "$_IFACE" -j ACCEPT 2>/dev/null
-    route_all_tun_v6 "$_IFACE" "$_TABLE"
+    route_all_tun_v6 "$_IFACE" "$_TABLE" "$_CONF"
 }
 
 route_all_ss() {
