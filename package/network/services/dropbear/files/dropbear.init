@@ -26,8 +26,15 @@ DROPBEAR_KEYTYPES="ed25519 rsa"
 # Host key directory
 DROPBEAR_KEYDIR="/etc/dropbear"
 
-# Interfaces on which to allow SSH traffic via iptables/ip6tables
-ALLOW_SSH_INTERFACES="bridge0 ecm0 wlan0"
+# Interfaces on which to allow SSH traffic via iptables/ip6tables.
+#
+# wlan1 (5 GHz) must be here even though it is a bridge0 member, and so must
+# wlan0 and ecm0: net.bridge.bridge-nf-call-iptables is 1 on this device, so a
+# bridged frame is filtered with the *member port* as indev, never bridge0.
+# Without wlan1 a client on the 5 GHz network hits the unbound DROP below the
+# ACCEPTs and cannot reach SSH at all, while the same client on 2.4 GHz can --
+# which was the state until 2026-09-04 and reads as "SSH randomly refuses me".
+ALLOW_SSH_INTERFACES="bridge0 ecm0 wlan0 wlan1"
 
 # Firewalls to program. dropbear binds :: as well as 0.0.0.0, so both families
 # need the same rules; up to 2026.91-4 this script touched iptables only, and
