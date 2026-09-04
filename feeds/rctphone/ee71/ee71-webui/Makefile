@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=ee71-webui
-PKG_VERSION:=1.9.1
+PKG_VERSION:=1.9.2
 PKG_RELEASE:=1
 
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)
@@ -111,9 +111,8 @@ define Package/ee71-webui/install
 	# Internetometer gauge mirror (real yandex.ru/internet UI, calls our CLI)
 	$(INSTALL_DIR) $(1)/jrd-resource/resource/webrc/www/internetometer
 	$(CP) $(PKG_BUILD_DIR)/internetometer/index.html $(1)/jrd-resource/resource/webrc/www/internetometer/
-	# Icons + PWA
-	$(INSTALL_DIR) $(1)/jrd-resource/resource/webrc/www/icons
-	$(CP) $(PKG_BUILD_DIR)/www/icons/* $(1)/jrd-resource/resource/webrc/www/icons/ 2>/dev/null || true
+	# PWA icons + manifest. The SVG icon sprite is inlined in index.html, so
+	# there is no icons/ directory to install.
 	for F in favicon.png apple-touch-icon.png icon-192.png manifest.json; do \
 		[ -f $(PKG_BUILD_DIR)/www/$$$$F ] && $(CP) $(PKG_BUILD_DIR)/www/$$$$F $(1)/jrd-resource/resource/webrc/www/ || true; \
 	done
