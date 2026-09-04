@@ -84,9 +84,14 @@ case "$1" in
         if [ "$TELEGRAM_ENABLED" != "1" ] || [ -z "$TELEGRAM_BOT_TOKEN" ]; then
             exit 0
         fi
-        wait_for_core_app || exit 1
-        "$BIN"
-        echo "$NAME started"
+        # Boot: wait_for_core_app polls core_app IPC for up to 45 s. Run it
+        # detached so it does not hold up the rest of the init chain — it
+        # measured 10.5 s of the boot on a normal start.
+        # The waiter has no PID file until it execs $BIN, so `is_running`
+        # cannot see it — re-check inside the subshell, or a `restart`
+        # during the wait window starts a second daemon.
+        ( wait_for_core_app && ! is_running && "$BIN" ) >/dev/null 2>&1 &
+        echo "$NAME start deferred to background"
         ;;
     stop)
         if is_running; then

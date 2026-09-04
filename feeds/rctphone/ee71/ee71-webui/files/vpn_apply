@@ -56,11 +56,6 @@ dnsmasq_reload() {
     [ -n "$pid" ] && kill -HUP "$pid" 2>/dev/null
 }
 
-refresh_dnsmasq_ipv6_filter() {
-    [ -x /usr/sbin/dnsmasq_ipv6_filter ] || return 0
-    DEBOUNCE_SEC=0 INITIAL_WAIT_SEC=0 /usr/sbin/dnsmasq_ipv6_filter >/dev/null 2>&1 &
-}
-
 clean_legacy_speedtest_dns() {
     if [ -f /etc/dnsmasq.d/speedtest.conf ]; then
         rm -f /etc/dnsmasq.d/speedtest.conf 2>/dev/null
@@ -181,7 +176,6 @@ apply_tun_dns() {
     dns_redirect_prepare
     iptables -t nat -A "$DNS_CHAIN" -j DNAT --to-destination "$_DNS" 2>/dev/null
     dnsmasq_reload
-    refresh_dnsmasq_ipv6_filter
 }
 
 apply_ss_dns() {
@@ -193,14 +187,12 @@ apply_ss_dns() {
     iptables -t nat -A "$DNS_CHAIN" -p udp -j REDIRECT --to-ports "$((SS_PORT + 1))" 2>/dev/null
     iptables -t nat -A "$DNS_CHAIN" -p tcp -j DNAT --to-destination "$_DNS" 2>/dev/null
     dnsmasq_reload
-    refresh_dnsmasq_ipv6_filter
 }
 
 restore_main_dns() {
     clean_legacy_speedtest_dns
     dns_redirect_clean
     dnsmasq_reload
-    refresh_dnsmasq_ipv6_filter
 }
 
 # --- IPv6 safety helpers ---
@@ -249,7 +241,27 @@ wait_tun_handshake() {
     return 1
 }
 
+# The stock 3.10.49 kernel has no CONFIG_NF_NAT_IPV6, so the ip6tables nat
+# table only exists once ee71-kmod-nat66 is loaded. Load it here rather than
+# at boot: this is the only code path that needs it, and it is reached only
+# when a tunnel actually carries IPv6 — which no current tunnel does. Same
+# shape as WG_MODULE/AWG_MODULE below. Nothing rmmods these again; the two
+# that matter are 13 KB together, and unloading them under a live tunnel
+# would strip the NAT while leaving the policy route, leaking untranslated
+# LAN IPv6 into it.
+NAT66_DIR="/usr/lib/modules/$(uname -r)/kernel/net/ipv6/netfilter"
+
+# NOTE: this is a predicate WITH A SIDE EFFECT — it insmods on the miss path.
+# Safe today because the single caller is route_all_tun_v6, reached at most
+# once per vpn_apply run. Do NOT call it from a status/query endpoint.
+
 ip6_nat_available() {
+    ip6tables -t nat -L -n >/dev/null 2>&1 && return 0
+    for _m in nf_nat_ipv6 ip6table_nat ip6t_MASQUERADE; do
+        [ -d "/sys/module/$_m" ] && continue
+        [ -f "$NAT66_DIR/$_m.ko" ] || return 1
+        insmod "$NAT66_DIR/$_m.ko" 2>/dev/null || return 1
+    done
     ip6tables -t nat -L -n >/dev/null 2>&1
 }
 
@@ -265,6 +277,10 @@ clean_tun_routes_v6() {
     while ip6tables -t nat -D POSTROUTING -o "$_IFACE" -j MASQUERADE 2>/dev/null; do :; done
     while ip6tables -D FORWARD -i "$_IFACE" -j ACCEPT 2>/dev/null; do :; done
     while ip6tables -D FORWARD -o "$_IFACE" -j ACCEPT 2>/dev/null; do :; done
+    while ip6tables -D FORWARD -i "$LAN_IFACE" ! -o "$_IFACE" -j REJECT --reject-with icmp6-adm-prohibited 2>/dev/null; do :; done
+    while ip6tables -D FORWARD -i "$LAN_IFACE" -j REJECT --reject-with icmp6-adm-prohibited 2>/dev/null; do :; done
+    # Also drop the pre-2.0 DROP form, so upgrading over a running guard
+    # does not leave stale rules behind.
     while ip6tables -D FORWARD -i "$LAN_IFACE" ! -o "$_IFACE" -j DROP 2>/dev/null; do :; done
     while ip6tables -D FORWARD -i "$LAN_IFACE" -j DROP 2>/dev/null; do :; done
 }
@@ -283,15 +299,19 @@ route_all_tun_v6() {
             ip6tables -t nat -A POSTROUTING -o "$_IFACE" -j MASQUERADE 2>/dev/null
             ip6tables -A FORWARD -i "$_IFACE" -j ACCEPT 2>/dev/null
             ip6tables -A FORWARD -o "$_IFACE" -j ACCEPT 2>/dev/null
-            ip6tables -I FORWARD 1 -i "$LAN_IFACE" ! -o "$_IFACE" -j DROP 2>/dev/null
+            ip6tables -I FORWARD 1 -i "$LAN_IFACE" ! -o "$_IFACE" -j REJECT --reject-with icmp6-adm-prohibited 2>/dev/null
         else
-            ip6tables -I FORWARD 1 -i "$LAN_IFACE" -j DROP 2>/dev/null
+            ip6tables -I FORWARD 1 -i "$LAN_IFACE" -j REJECT --reject-with icmp6-adm-prohibited 2>/dev/null
         fi
     else
-        ip -6 route add blackhole default table "$_TABLE" 2>/dev/null ||
-            ip -6 route add unreachable default table "$_TABLE" 2>/dev/null
+        # The tunnel carries no IPv6, so LAN IPv6 has nowhere to go. Reject it
+        # audibly rather than blackholing it: a silent drop leaves clients in
+        # SYN_SENT until they time out (tens of seconds to minutes), while an
+        # ICMPv6 unreachable aborts the connect immediately and Happy-Eyeballs
+        # falls back to IPv4 within its 250 ms race.
+        ip -6 route add unreachable default table "$_TABLE" 2>/dev/null
         ip -6 rule add lookup "$_TABLE" pref 201 2>/dev/null
-        ip6tables -I FORWARD 1 -i "$LAN_IFACE" -j DROP 2>/dev/null
+        ip6tables -I FORWARD 1 -i "$LAN_IFACE" -j REJECT --reject-with icmp6-adm-prohibited 2>/dev/null
     fi
 }
 
@@ -299,15 +319,16 @@ clean_ss_v6_guard() {
     while ip -6 rule del lookup "$SS_IPV6_TABLE" pref 202 2>/dev/null; do :; done
     ip -6 route del blackhole default table "$SS_IPV6_TABLE" 2>/dev/null
     ip -6 route del unreachable default table "$SS_IPV6_TABLE" 2>/dev/null
+    while ip6tables -D FORWARD -i "$LAN_IFACE" -j REJECT --reject-with icmp6-adm-prohibited 2>/dev/null; do :; done
     while ip6tables -D FORWARD -i "$LAN_IFACE" -j DROP 2>/dev/null; do :; done
 }
 
 apply_ss_v6_guard() {
     clean_ss_v6_guard
-    ip -6 route add blackhole default table "$SS_IPV6_TABLE" 2>/dev/null ||
-        ip -6 route add unreachable default table "$SS_IPV6_TABLE" 2>/dev/null
+    # Reject rather than blackhole — see route_all_tun_v6 for why.
+    ip -6 route add unreachable default table "$SS_IPV6_TABLE" 2>/dev/null
     ip -6 rule add lookup "$SS_IPV6_TABLE" pref 202 2>/dev/null
-    ip6tables -I FORWARD 1 -i "$LAN_IFACE" -j DROP 2>/dev/null
+    ip6tables -I FORWARD 1 -i "$LAN_IFACE" -j REJECT --reject-with icmp6-adm-prohibited 2>/dev/null
 }
 
 # --- Shared tunnel route cleanup ---

@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=ee71-ipv6
-PKG_VERSION:=2.0.1
+PKG_VERSION:=2.1.0
 PKG_RELEASE:=1
 
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)
@@ -28,7 +28,13 @@ define Package/ee71-ipv6/description
 
   IPv6 infrastructure:
   - ip6tables INPUT DROP firewall (S38, before QCMAP)
-  - dnsmasq AAAA filter when routed IPv6 is unavailable
+  The boot-time dnsmasq AAAA filter was removed in 2.1.0: it blocked the
+  init chain for 42 s, and its SIGHUP could never apply filter-AAAA anyway
+  (dnsmasq re-reads hosts and leases on SIGHUP, never its config file).
+  LAN IPv6 is now rejected audibly rather than blackholed while a VPN is up
+  (see vpn_apply in ee71-webui), so clients fall back to IPv4 immediately
+  and no DNS-level filter is needed.
+  Analysis: docs/plans/s95-dnsmasq-ipv6-filter-analysis.md
 
   Binary at /usr/libexec/radish, wrapper at /usr/sbin/radish.
   Links against stock device libs.
@@ -107,14 +113,39 @@ define Package/ee71-ipv6/install
 	$(INSTALL_DIR) $(1)/usr/libexec
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/radish $(1)/usr/libexec/radish
 	$(INSTALL_BIN) ./files/radish $(1)/usr/sbin/radish
-	$(INSTALL_BIN) ./files/dnsmasq_ipv6_filter $(1)/usr/sbin/dnsmasq_ipv6_filter
 	# IPv6 firewall init script
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./files/ip6tables_firewall $(1)/etc/init.d/
 	$(INSTALL_DIR) $(1)/etc/rcS.d
 	$(LN) ../init.d/ip6tables_firewall $(1)/etc/rcS.d/S38ip6tables_firewall
-	$(INSTALL_DIR) $(1)/etc/rc5.d
-	$(LN) ../../usr/sbin/dnsmasq_ipv6_filter $(1)/etc/rc5.d/S95dnsmasq_ipv6_filter
+endef
+
+# 2.0.1 and earlier shipped /usr/sbin/dnsmasq_ipv6_filter plus an
+# /etc/rc5.d/S95dnsmasq_ipv6_filter symlink. opkg removes files it owns on
+# upgrade, but the filter also appended lines to /etc/dnsmasq.conf (a conffile
+# it does not own) and left runtime state behind. Clean both up.
+define Package/ee71-ipv6/postinst
+#!/bin/sh
+[ -n "$${IPKG_INSTROOT}" ] && exit 0
+# The 2.0.x filter sleeps up to 42 s after boot and keeps running after its
+# file is unlinked; stop it first or it re-appends filter-AAAA after cleanup.
+pkill -f /usr/sbin/dnsmasq_ipv6_filter 2>/dev/null
+rm -f /etc/rc5.d/S95dnsmasq_ipv6_filter \
+      /etc/rc5.d/S95dnsmasq_ipv6_filter.old \
+      /usr/sbin/dnsmasq_ipv6_filter \
+      /var/run/dnsmasq_ipv6_filter.state \
+      /var/run/dnsmasq_ipv6_filter.pending_restart
+rmdir /var/run/dnsmasq_ipv6_filter.lock 2>/dev/null
+if grep -q '^filter-AAAA$$' /etc/dnsmasq.conf 2>/dev/null; then
+    sed -i '/^# AUTO: filter-AAAA (no routed IPv6)$$/d; /^filter-AAAA$$/d' /etc/dnsmasq.conf
+    if dnsmasq --test -C /etc/dnsmasq.conf >/dev/null 2>&1; then
+        echo "ee71-ipv6: removed filter-AAAA from /etc/dnsmasq.conf"
+        echo "ee71-ipv6: restart dnsmasq or reboot for it to take effect"
+    else
+        echo "[ERR] ee71-ipv6: /etc/dnsmasq.conf failed dnsmasq --test after edit"
+    fi
+fi
+exit 0
 endef
 
 $(eval $(call BuildPackage,ee71-ipv6))

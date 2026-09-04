@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=ee71-webui
-PKG_VERSION:=1.8.27
+PKG_VERSION:=1.8.28
 PKG_RELEASE:=1
 
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)
@@ -23,6 +23,7 @@ define Package/ee71-webui
 	+ee71-optimize \
 	+ee71-usb-adb \
 	+ee71-kmod-wireguard \
+	+ee71-kmod-nat66 \
 	+ee71-kmod-amneziawg \
 	+ee71-kmod-tun \
 	+wireguard-tools \
