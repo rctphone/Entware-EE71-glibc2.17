@@ -1,50 +1,39 @@
 ;(function() {
     'use strict';
-    var $ = App.$, $$ = App.$$, icon = App.icon, escHtml = App.escHtml, actionAttr = App.actionAttr;
+    var $$ = App.$$, icon = App.icon, actionAttr = App.actionAttr;
 
     var _connTimer = null;
     var _signalChart = null;
     var _signalHistory = { t: [], rsrp: [], sinr: [] };
 
+    // This page used to carry a second tab, "Network", that was a verbatim copy
+    // of Mobile > Settings > Network — same controls, same API calls, two
+    // independent copies of the same bugs (the browser audit caught them
+    // disagreeing with each other because only one copy had been rebuilt).
+    // Settings is the canonical home for network mode, operator selection,
+    // connection settings and the data plan: those are settings, and Settings
+    // is also where APN and the AT terminal already live, so all the
+    // modem-configuration controls are in one place. The Connection page keeps
+    // what its name promises — the live state of the mobile link — and no
+    // longer mixes a 5-second polling view with forms the user is typing into.
     function renderConnection(container) {
         container.innerHTML =
             '<h2>Connection</h2>' +
-            '<div class="tabs" id="conn-tabs">' +
-                '<button class="active" data-tab="signal">Signal</button>' +
-                '<button data-tab="network">Network</button>' +
-            '</div>' +
-            '<div class="tab-content active" id="conn-tab-signal">' +
-                _renderSignalTab() +
-            '</div>' +
-            '<div class="tab-content" id="conn-tab-network">' +
-                '<div class="card"><div class="page-loading"><div class="spinner"></div> Loading...</div></div>' +
-            '</div>';
-
-        $$('#conn-tabs button').forEach(function(btn) {
-            btn.addEventListener('click', function() {
-                $$('#conn-tabs button').forEach(function(b) { b.classList.remove('active'); });
-                btn.classList.add('active');
-                $$('#conn-tabs ~ .tab-content').forEach(function(tc) { tc.classList.remove('active'); });
-                var target = document.getElementById('conn-tab-' + btn.dataset.tab);
-                if (target) target.classList.add('active');
-            });
-        });
+            _renderSignalCards();
 
         _refreshSignal();
-        _loadNetwork();
         _connTimer = setInterval(_refreshSignal, 5000);
 
         App.setCleanup(function() {
             if (_connTimer) { clearInterval(_connTimer); _connTimer = null; }
-            if (_netSearchTimer) { clearTimeout(_netSearchTimer); _netSearchTimer = null; }
             if (_signalChart) { _signalChart.destroy(); _signalChart = null; }
             _signalHistory = { t: [], rsrp: [], sinr: [] };
         });
     }
 
-    // --- Signal tab HTML ---
+    // --- Page HTML ---
 
-    function _renderSignalTab() {
+    function _renderSignalCards() {
         return '<div class="cards-grid">' +
             '<div class="card" id="conn-connection">' +
                 '<h3>' + icon('ic-mobile') + ' Connection</h3>' +
@@ -108,7 +97,7 @@
                 if (el('m-operator')) el('m-operator').textContent = netInfo.NetworkName || netInfo.Domestic || '\u2014';
                 if (el('m-tech')) el('m-tech').textContent = App.techLabel(netInfo.NetworkType) || '\u2014';
                 // Band + EARFCN — prefer CA data, fallback to GetNetworkInfo
-                var fallbackBand = App.formatBand(netInfo.Band) || App.formatBand(sigData && sigData.band) || '\u2014';
+                var fallbackBand = App.formatBand(netInfo.Band) || App.formatBand(sigData && sigData.Band) || '\u2014';
                 API.cgiGet('signal.cgi', { action: 'ca' }).then(function(ca) {
                     if (!el('m-band')) return;
                     if (ca && ca.ca && ca.bands && ca.bands.length > 1) {
@@ -134,13 +123,25 @@
                 if (el('m-ip6-row')) el('m-ip6-row').style.display = ipv6 ? '' : 'none';
             }
 
-            var rsrp = (sigData && sigData.rsrp) || (netInfo && netInfo.RSRP);
-            var rsrq = (sigData && sigData.rsrq) || (netInfo && netInfo.RSRQ);
-            var sinr = (sigData && sigData.sinr) || (netInfo && netInfo.SINR);
-            var rssi = (sigData && sigData.rssi) || (netInfo && netInfo.SignalStrength);
-            var earfcn = (sigData && sigData.earfcn) || (netInfo && netInfo.DL_channel) || '';
-            var cellid = (sigData && sigData.cell_id) || (netInfo && netInfo.CellId) || '';
-            var tac = (sigData && sigData.tac) || (netInfo && netInfo.LAC) || '';
+            // signal.cgi?action=current is a passthrough of the KEY=VALUE file
+            // traffic_stats writes, and it keeps the firmware's own spelling:
+            // RSRP, RSRQ, SINR, RSSI, Band, EARFCN, CellId, eNBID, TAC, TxPWR
+            // (ee71-traffic-stats/src/traffic_stats.c, write_signal_current()).
+            // Reading them lower-cased made every one of these undefined, so
+            // every value silently came from the GetNetworkInfo fallback — and
+            // the RSSI fallback was SignalStrength, the 0-5 bar count, which is
+            // what rendered as "5 dBm" next to a real RSSI of -55.
+            // GetNetworkInfo carries a proper RSSI string of its own; that is
+            // the correct fallback, and SignalStrength is not a dBm value at
+            // all (stock mock, build.formatted.js:41006 — SignalStrength: 3
+            // alongside RSSI: "").
+            var rsrp = (sigData && sigData.RSRP) || (netInfo && netInfo.RSRP);
+            var rsrq = (sigData && sigData.RSRQ) || (netInfo && netInfo.RSRQ);
+            var sinr = (sigData && sigData.SINR) || (netInfo && netInfo.SINR);
+            var rssi = (sigData && sigData.RSSI) || (netInfo && netInfo.RSSI);
+            var earfcn = (sigData && sigData.EARFCN) || (netInfo && netInfo.DL_channel) || '';
+            var cellid = (sigData && sigData.CellId) || (netInfo && netInfo.CellId) || '';
+            var tac = (sigData && sigData.TAC) || (netInfo && netInfo.LAC) || '';
 
             if (el('m-earfcn')) el('m-earfcn').textContent = earfcn || '\u2014';
             if (el('m-cellid')) el('m-cellid').textContent = cellid || '\u2014';
@@ -259,323 +260,7 @@
         }).catch(function() {});
     }
 
-    // --- Network tab ---
-
-    var _netSearchTimer = null;
-    // NetworkMode enum, from the EE-specific override the stock SPA applies to
-    // this device (build.formatted.js:32211 —  the same block that sets
-    // titleName = "4GEE WiFi Mini"). The generic table is
-    // [0 auto, 1 2G, 2 3G, 3 4G]; on the EE71 the override cuts it to the two
-    // values below, so 2G-only and 3G-only are not offered. The previous option
-    // list used strings ('auto', '0302', '03', ...) that match nothing the API
-    // returns, which is why a 4G-only device always rendered as "Auto".
-    var NETWORK_MODES = [
-        ['0', 'Auto'],
-        ['3', '4G only (LTE)']
-    ];
-    var NETWORK_MODE_VALUES = NETWORK_MODES.map(function(m) { return m[0]; });
-
-    var _connPdpType = '3'; // cached from GetConnectionSettings
-
-    function _loadNetwork() {
-        var tab = $('#conn-tab-network');
-        if (!tab) return Promise.resolve();
-
-        return Promise.all([
-            API.webapi('GetConnectionSettings').catch(function() { return null; }),
-            API.webapi('GetNetworkSettings').catch(function() { return null; }),
-            API.webapi('GetNetworkInfo').catch(function() { return null; }),
-            API.webapi('GetConnectionState').catch(function() { return null; }),
-            API.webapi('GetUsageSettings').catch(function() { return null; }),
-        ]).then(function(results) {
-            var connSettings = results[0], networkSettings = results[1], netInfo = results[2], connSt = results[3], usage = results[4];
-            var cs = connSettings || {};
-            var ns = networkSettings || {};
-            var us = usage || {};
-
-            var currentMode = ns.NetworkMode != null ? String(ns.NetworkMode) : '0';
-            var netSelMode = ns.NetselectionMode != null ? String(ns.NetselectionMode) : '0';
-            var connMode = cs.ConnectMode != null ? String(cs.ConnectMode) : '1';
-            var roaming = cs.RoamingConnect || '0';
-            var pdpType = String(cs.PdpType != null ? cs.PdpType : '3');
-            _connPdpType = pdpType;
-            var connected = connSt && (connSt.ConnectionStatus === 2 || connSt.ConnectionStatus === '2');
-
-            tab.innerHTML =
-                '<div class="card">' +
-                    '<h3>Network Mode</h3>' +
-                    '<div class="form-group">' +
-                        '<label>Preferred Mode</label>' +
-                        '<select id="m-netmode">' +
-                            NETWORK_MODES.map(function(m) {
-                                return '<option value="' + m[0] + '"' +
-                                    (currentMode === m[0] ? ' selected' : '') + '>' + m[1] + '</option>';
-                            }).join('') +
-                            (NETWORK_MODE_VALUES.indexOf(currentMode) === -1 ?
-                                '<option value="' + escHtml(currentMode) + '" selected>Unknown (' + escHtml(currentMode) + ')</option>' : '') +
-                        '</select>' +
-                    '</div>' +
-                '</div>' +
-
-                // Operator Selection
-                '<div class="card mt-2">' +
-                    '<h3>Operator Selection</h3>' +
-                    '<div class="form-group">' +
-                        '<label><input type="radio" name="netsel" id="m-netsel-auto" value="0"' + (netSelMode !== '1' ? ' checked' : '') + '> Automatic</label>' +
-                        '<label><input type="radio" name="netsel" id="m-netsel-manual" value="1"' + (netSelMode === '1' ? ' checked' : '') + '> Manual</label>' +
-                    '</div>' +
-                    '<div class="form-actions">' +
-                        '<button ' + actionAttr('connSetMode') + ' id="m-save-netmode">Apply</button>' +
-                        '<button class="btn-outline" ' + actionAttr('connSearchNet') + '>Search Networks</button>' +
-                    '</div>' +
-                    '<div id="m-netsearch"></div>' +
-                '</div>' +
-
-                // Connection Settings (Feature 5)
-                '<div class="card mt-2">' +
-                    '<h3>Connection</h3>' +
-                    '<div class="form-group">' +
-                        '<label>Connect Mode</label>' +
-                        '<select id="m-connmode">' +
-                            '<option value="1"' + (connMode === '1' || connMode === 1 ? ' selected' : '') + '>Auto</option>' +
-                            '<option value="0"' + (connMode === '0' || connMode === 0 ? ' selected' : '') + '>Manual</option>' +
-                        '</select>' +
-                    '</div>' +
-                    '<div class="form-group">' +
-                        '<label>IP Type</label>' +
-                        '<select id="m-pdptype">' +
-                            '<option value="3"' + (pdpType === '3' || pdpType === 3 ? ' selected' : '') + '>IPv4v6</option>' +
-                            '<option value="0"' + (pdpType === '0' || pdpType === 0 ? ' selected' : '') + '>IPv4</option>' +
-                            '<option value="2"' + (pdpType === '2' || pdpType === 2 ? ' selected' : '') + '>IPv6</option>' +
-                        '</select>' +
-                    '</div>' +
-                    '<div class="form-group">' +
-                        '<label><input type="checkbox" id="m-roaming"' + (roaming === '1' || roaming === 1 ? ' checked' : '') + '> Connect while roaming</label>' +
-                    '</div>' +
-                    '<div class="form-actions">' +
-                        '<button ' + actionAttr('connSaveConn') + ' id="m-save-conn">Save</button>' +
-                        (connected ?
-                            '<button class="btn-outline" ' + actionAttr('connDisconnect') + ' id="m-disconnect">Disconnect</button>' :
-                            '<button class="btn-outline" ' + actionAttr('connConnect') + ' id="m-connect">Connect</button>') +
-                    '</div>' +
-                '</div>' +
-
-                // Data Plan (Feature 4)
-                '<div class="card mt-2">' +
-                    '<h3>Data Plan</h3>' +
-                    '<div class="stat-row"><span class="label">Used</span><span class="value">' +
-                        App.formatBytes(us.UsedData || 0) + ' / ' + App.formatBytes((us.MonthlyPlan || 0) * 1048576) +
-                    '</span></div>' +
-                    '<div class="form-group">' +
-                        '<label>Monthly Limit (MB)</label>' +
-                        '<input type="number" id="m-planlimit" value="' + (parseInt(us.MonthlyPlan, 10) || 0) + '" min="0" max="999999">' +
-                    '</div>' +
-                    '<div class="form-group">' +
-                        '<label>Billing Day (1-31)</label>' +
-                        '<input type="number" id="m-billday" value="' + (parseInt(us.BillingDay, 10) || 1) + '" min="1" max="31">' +
-                    '</div>' +
-                    '<div class="form-group">' +
-                        '<label><input type="checkbox" id="m-autodisconn"' + (us.AutoDisconnFlag === '1' || us.AutoDisconnFlag === 1 ? ' checked' : '') + '> Auto-disconnect at limit</label>' +
-                    '</div>' +
-                    '<div class="form-actions">' +
-                        '<button ' + actionAttr('connSavePlan') + ' id="m-save-plan">Save Plan</button>' +
-                        '<button class="btn-outline" ' + actionAttr('connResetCounters') + ' id="m-reset-counters">Reset Counters</button>' +
-                    '</div>' +
-                '</div>' +
-
-                '<div class="card mt-2">' +
-                    '<h3>IP Addresses</h3>' +
-                    '<div class="stat-row"><span class="label">IPv4</span><span class="value" id="m-ipv4">' + escHtml((connSt && (connSt.IPv4Adrress || connSt.IPAddress)) || '\u2014') + '</span></div>' +
-                    '<div class="stat-row"><span class="label">IPv6</span><span class="value text-mono text-small" id="m-ipv6">' + escHtml((connSt && connSt.IPv6Adrress) || '\u2014') + '</span></div>' +
-                '</div>' +
-                '<div class="card mt-2">' +
-                    '<h3>Data Counters</h3>' +
-                    '<div class="stat-row"><span class="label">Session RX</span><span class="value" id="m-rx">' + App.formatBytes((connSt && connSt.DlBytes) || 0) + '</span></div>' +
-                    '<div class="stat-row"><span class="label">Session TX</span><span class="value" id="m-tx">' + App.formatBytes((connSt && connSt.UlBytes) || 0) + '</span></div>' +
-                    '<div class="stat-row"><span class="label">Duration</span><span class="value" id="m-dur">' + App.formatUptime((connSt && connSt.ConnectionTime) || 0) + '</span></div>' +
-                '</div>';
-        }).catch(function() {
-            tab.innerHTML = '<div class="card"><p class="text-muted">Failed to load network info</p></div>';
-        });
-    }
-
-    // Feature 3: Network search
-    function _connSearchNet() {
-        var el = $('#m-netsearch');
-        if (!el) return;
-        el.innerHTML = '<div class="page-loading"><div class="spinner"></div> Searching (up to 60s)...</div>';
-
-        // Set manual mode first
-        API.webapi('SetNetworkSettings', { NetselectionMode: 1 }).then(function() {
-            return API.webapi('SearchNetwork', { NetworkID: '' });
-        }).then(function() {
-            _pollNetSearch(0);
-        }).catch(function(e) {
-            el.innerHTML = '<p class="text-danger">Search failed: ' + escHtml(e.message) + '</p>';
-        });
-    }
-
-    function _pollNetSearch(attempt) {
-        if (attempt > 30) {
-            var el = $('#m-netsearch');
-            if (el) el.innerHTML = '<p class="text-muted">Search timeout</p>';
-            return;
-        }
-        _netSearchTimer = setTimeout(function() {
-            API.webapi('SearchNetworkResult').then(function(r) {
-                if (!r || (r.SearchState !== 2 && r.SearchState !== '2')) {
-                    _pollNetSearch(attempt + 1);
-                    return;
-                }
-                var list = r.ListNetworkItem || [];
-                var el = $('#m-netsearch');
-                if (!el) return;
-                if (!list.length) {
-                    el.innerHTML = '<p class="text-muted">No operators found</p>';
-                    return;
-                }
-                var RAT_MAP = { '0': '2G', '2': '3G', '7': '4G' };
-                var STATE_MAP = { '0': 'Unknown', '1': 'Available', '2': 'Current', '3': 'Forbidden' };
-                var html = '<table class="data-table mt-1"><thead><tr><th>Operator</th><th>MCC/MNC</th><th>RAT</th><th>State</th><th></th></tr></thead><tbody>';
-                list.forEach(function(op, i) {
-                    var rat = RAT_MAP[String(op.Rat)] || String(op.Rat || '');
-                    var state = STATE_MAP[String(op.State)] || String(op.State || '');
-                    var netId = (op.mcc || '') + (op.mnc || '');
-                    html += '<tr>' +
-                        '<td>' + escHtml(op.NetworkName || op.Name || '') + '</td>' +
-                        '<td class="text-mono">' + escHtml(op.mcc || '') + '/' + escHtml(op.mnc || '') + '</td>' +
-                        '<td>' + escHtml(rat) + '</td>' +
-                        '<td>' + escHtml(state) + '</td>' +
-                        '<td><button class="btn-small" ' + actionAttr('connRegNet', [netId]) + '>Register</button></td>' +
-                        '</tr>';
-                });
-                html += '</tbody></table>' +
-                    '<div class="form-actions mt-1"><button class="btn-outline" ' + actionAttr('connAutoNet') + ' id="m-auto-net">Back to Auto</button></div>';
-                el.innerHTML = html;
-            }).catch(function() {
-                _pollNetSearch(attempt + 1);
-            });
-        }, 2000);
-    }
-
-    // Several operations only take effect after the modem settles; wait, then
-    // reload, so the success toast is not shown before the state is real.
-    function _reloadAfter(ms) {
-        return new Promise(function(r) { setTimeout(r, ms); }).then(_loadNetwork);
-    }
-
-    function _connRegNet(networkId) {
-        var el = $('#m-netsearch');
-        if (el) el.innerHTML += '<div class="page-loading"><div class="spinner"></div> Registering...</div>';
-        App.wrapFormSubmit(null, function() {
-            return API.webapi('RegisterNetwork', { NetworkID: networkId }).then(function() {
-                return _reloadAfter(3000);
-            });
-        }, {
-            key: 'conn-register',
-            success: 'Registered on the network - reconnecting'
-        });
-    }
-
-    function _connAutoNet() {
-        App.wrapFormSubmit('#m-auto-net', function() {
-            return API.webapi('SetNetworkSettings', { NetselectionMode: 0 }).then(function() {
-                return _reloadAfter(3000);
-            });
-        }, { pending: 'Switching\u2026', success: 'Switched to automatic network selection' });
-    }
-
-    // Feature 5: Connection settings
-    // "IdleTime" is not a parameter this firmware has. The string occurs in no
-    // device binary — not core_app, not webs, not config_manager, not any
-    // library under /usr/lib — so GetConnectionSettings can never return it and
-    // SetConnectionSettings can never store it. The field therefore always
-    // displayed 0 whatever was entered, and the stock SPA has no idle-timeout
-    // control either. Removed rather than left to lie; add it back only with a
-    // firmware that names the parameter.
-    function _connSaveConn() {
-        var pdp = parseInt($('#m-pdptype').value, 10);
-        var params = {
-            ConnectMode: parseInt($('#m-connmode').value, 10),
-            RoamingConnect: $('#m-roaming').checked ? 1 : 0,
-            PdpType: isNaN(pdp) ? 3 : pdp
-        };
-        App.wrapFormSubmit('#m-save-conn', function() {
-            return API.webapi('SetConnectionSettings', params);
-        }, { success: 'Connection settings saved' });
-    }
-
-    function _connConnect() {
-        App.wrapFormSubmit('#m-connect', function() {
-            return API.webapi('Connect').then(function() { return _reloadAfter(3000); });
-        }, { pending: 'Connecting\u2026', success: 'Connecting to the mobile network' });
-    }
-
-    function _connDisconnect() {
-        App.wrapFormSubmit('#m-disconnect', function() {
-            return API.webapi('DisConnect').then(function() { return _reloadAfter(2000); });
-        }, { pending: 'Disconnecting\u2026', success: 'Disconnected from the mobile network' });
-    }
-
-    // Feature 4: Data plan
-    function _connSavePlan() {
-        var params = {
-            MonthlyPlan: $('#m-planlimit').value || '0',
-            BillingDay: $('#m-billday').value || '1',
-            AutoDisconnFlag: $('#m-autodisconn').checked ? '1' : '0'
-        };
-        App.wrapFormSubmit('#m-save-plan', function() {
-            return API.webapi('SetUsageSettings', params);
-        }, { success: 'Data plan saved' });
-    }
-
-    function _connResetCounters() {
-        App.confirmDialog(
-            'Reset the data usage counters to zero? The recorded history is discarded.',
-            function() {
-                App.wrapFormSubmit('#m-reset-counters', function() {
-                    return API.webapi('SetUsageRecordClear').then(function() { return _reloadAfter(1000); });
-                }, { success: 'Data usage counters reset' });
-            }, null,
-            { title: 'Reset counters', confirmText: 'Reset', danger: true });
-    }
-
-    // Stock sends NetworkMode and NetselectionMode together in one
-    // SetNetworkSettings call (build.formatted.js:53087-53094), and follows a
-    // switch to manual with a network search. The operator radios previously had
-    // no handler at all: NetselectionMode only ever moved as a side effect of
-    // "Search Networks" and "Back to Auto".
-    function _connSetMode() {
-        var mode = ($('#m-netmode') || {}).value || '0';
-        var sel = '0';
-        var radios = document.querySelectorAll('input[name="netsel"]');
-        for (var i = 0; i < radios.length; i++) {
-            if (radios[i].checked) { sel = radios[i].value; break; }
-        }
-
-        App.wrapFormSubmit('#m-save-netmode', function() {
-            return API.webapi('SetNetworkSettings', {
-                NetworkMode: parseInt(mode, 10) || 0,
-                NetselectionMode: parseInt(sel, 10) || 0
-            }).then(function() {
-                // Manual selection is only meaningful once a scan has produced a
-                // list to pick from, which is what stock does here too.
-                if (sel === '1') return _connSearchNet();
-                return _loadNetwork();
-            });
-        }, { pending: 'Applying\u2026', success: 'Network settings applied' });
-    }
-
 
     App.registerPage('connection', renderConnection);
-    App._connSetMode = _connSetMode;
     App._connSignalZoom = _connSignalZoom;
-    App._connSearchNet = _connSearchNet;
-    App._connRegNet = _connRegNet;
-    App._connAutoNet = _connAutoNet;
-    App._connSaveConn = _connSaveConn;
-    App._connConnect = _connConnect;
-    App._connDisconnect = _connDisconnect;
-    App._connSavePlan = _connSavePlan;
-    App._connResetCounters = _connResetCounters;
 })();

@@ -265,10 +265,19 @@
     }
 
     // --- SIM tab ---
+    // Verbatim from the stock SPA's own constant block (build.formatted.js:5628
+    // SIM_STATE_*, consumed by the GetSimStatus Response transform at :57101).
+    // The map this replaced was invented — it had 5 as Ready, so a perfectly
+    // healthy SIM rendered as the fallback "State 7", and 1/2/4/6 were all
+    // shifted as well. Values not in this list are firmware states with no
+    // stock label; they fall through to "State N" rather than being guessed at.
     var SIM_STATE_MAP = {
-        '0': 'No SIM', '1': 'PIN required', '2': 'PIN verified',
-        '3': 'PUK required', '4': 'SIM error', '5': 'Ready',
-        '6': 'SIM locked', '255': 'Unknown'
+        '0': 'No SIM', '1': 'Initializing', '2': 'PIN required',
+        '3': 'PUK required', '4': 'SIM locked', '5': 'PUK attempts exhausted',
+        '6': 'Invalid SIM', '7': 'Ready', '11': 'Initializing',
+        // Not a firmware state — the placeholder this page substitutes when
+        // GetSimStatus came back without a SIMState at all.
+        '255': 'Unknown'
     };
 
     function _loadSIM() {
@@ -277,14 +286,20 @@
         tab.innerHTML = '<div class="card"><div class="page-loading"><div class="spinner"></div> Loading...</div></div>';
 
         return API.webapi('GetSimStatus').then(function(sim) {
-            var simState = String(sim.SIMState || '255');
-            var pinState = String(sim.PinState || '0');
-            var pinEnabled = pinState === '1';
+            var simState = String(sim.SIMState != null ? sim.SIMState : '255');
+            var pinState = String(sim.PinState != null ? sim.PinState : '');
+            // PinState is a two-value flag in this firmware, not a 0/1 boolean:
+            // stock reads exactly 2 as "PIN on" and 3 as "PIN off" and leaves
+            // its own flag untouched for anything else (build.formatted.js
+            // :54030). Testing for '1' matched neither, so the row always read
+            // "No" whatever the SIM was doing.
+            var pinEnabled = pinState === '2';
             var pinRemain = sim.PinRemainingTimes || '3';
             var pukRemain = sim.PukRemainingTimes || '10';
             var stateLabel = SIM_STATE_MAP[simState] || ('State ' + simState);
-            var needsPin = simState === '1';
-            var needsPuk = simState === '3';
+            var needsPin = simState === '2';   // SIM_STATE_PIN
+            var needsPuk = simState === '3';   // SIM_STATE_PUK
+            var simReady = simState === '7';   // SIM_STATE_READY
 
             var html = '<div class="card">' +
                 '<h3>SIM Status</h3>' +
@@ -326,8 +341,11 @@
                 '</div>';
             }
 
-            // Enable/Disable PIN + Change PIN (only when SIM is ready)
-            if (!needsPin && !needsPuk && simState !== '0' && simState !== '4') {
+            // Enable/Disable PIN + Change PIN (only when SIM is ready). The old
+            // guard listed the states to exclude, which with the corrected enum
+            // would have let "PUK attempts exhausted" and "invalid SIM" through;
+            // READY is the only state in which these commands can succeed.
+            if (simReady) {
                 html += '<div class="card mt-2">' +
                     '<h3>' + (pinEnabled ? 'Disable' : 'Enable') + ' PIN</h3>' +
                     '<div class="form-group">' +

@@ -14,6 +14,33 @@
 #     with_lock vpn 30 /usr/bin/vpn_apply
 #     json_err "something went wrong"
 
+# --- PATH ---
+# webs spawns CGIs with NO PATH in the environment (verified on device with a
+# throw-away CGI that dumped `env`). Two different defaults then apply, and the
+# gap between them is a real bug, not a tidiness issue:
+#   - ash resolving a command itself falls back to its own built-in default,
+#     which does include /usr/sbin, so `hostapd_cli ...` typed directly works;
+#   - any program that execvp()s on our behalf — BusyBox `timeout`, i.e. every
+#     run_timeout/with_lock call — uses the libc default from confstr(_CS_PATH),
+#     which is "/bin:/usr/bin". /usr/sbin is not on it.
+# So `run_timeout 5 hostapd_cli ...` failed with "can't execute 'hostapd_cli':
+# No such file or directory" while the identical line run over SSH (where a
+# login PATH exists) worked — which is exactly why WiFi clients never showed an
+# RSSI and diag.cgi always counted 0 stations.
+#
+# The value starts with BusyBox ash's own default, "/sbin:/usr/sbin:/bin:/usr/bin"
+# (the PATH= string in the device's busybox binary), and only appends to it. That
+# is deliberate: a strict prefix means every command name that resolves today
+# resolves to exactly the same binary afterwards, so this cannot silently swap
+# one iptables or one hostapd for another. All it adds is reachability — for the
+# execvp'd cases that were failing, and for /usr/local/* and /usr/oem, which are
+# on root's login PATH (/etc/profile) but not on ash's default.
+#
+# Set unconditionally rather than defaulting: a half-populated inherited PATH is
+# the bug, so the CGIs should not inherit one.
+PATH=/sbin:/usr/sbin:/bin:/usr/bin:/usr/local/sbin:/usr/local/bin:/usr/oem
+export PATH
+
 # Default DB path (overridable by the caller before sourcing)
 DB="${DB:-/jrd-resource/resource/sqlite3/user_info.db3}"
 

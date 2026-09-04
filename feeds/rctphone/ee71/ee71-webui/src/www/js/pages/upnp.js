@@ -17,7 +17,16 @@
             API.cgiGet('system.cgi', { action: 'iptables' }).catch(function() { return null; }),
         ]).then(function(results) {
             var data = results[0], iptData = results[1];
-            var enabled = data && (data.UpnpEnable === 1 || data.UpnpEnable === '1');
+            // The field is upnp_switch, an int, not "UpnpEnable" — that name is
+            // in no device binary. core_app's parameter table has upnp_switch
+            // as type 3 (int) id 45 at 0x2caac0, and json_req_config_file wires
+            // GetUpnpSettings to exactly {"module":8,"act":15,"id":[45]}; the
+            // stock SPA reads and writes upnp_switch too (build.formatted.js
+            // :41319, :53288). So the page read undefined and always rendered
+            // "Disabled", and the toggle posted a key core_app ignores — the
+            // request succeeded and changed nothing, which is the worst of the
+            // three possible outcomes.
+            var enabled = data && (data.upnp_switch === 1 || data.upnp_switch === '1');
 
             var mappingsHtml = '';
             if (iptData && iptData.nat) {
@@ -51,7 +60,9 @@
             $('#upnp-toggle').addEventListener('change', function() {
                 var enable = !enabled;
                 App.wrapFormSubmit(this, function() {
-                    return API.webapi('SetUpnpSettings', { UpnpEnable: enable ? '1' : '0' })
+                    // Stock posts a number here, not a string
+                    // (build.formatted.js:53292).
+                    return API.webapi('SetUpnpSettings', { upnp_switch: enable ? 1 : 0 })
                         .then(function() {
                             // miniupnpd needs a moment before its chain reflects the change.
                             return new Promise(function(r) { setTimeout(r, 1000); });

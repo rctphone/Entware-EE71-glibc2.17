@@ -36,25 +36,43 @@
         if (!tab) return;
         tab.innerHTML = '<div class="card"><div class="page-loading"><div class="spinner"></div> Loading...</div></div>';
 
+        // Three of the six rows on this card were blank because they read
+        // fields GetSystemInfo does not have. Checked against core_app's device
+        // parameter table (0x2ce824) and the request map in
+        // jrdcfg/json_req_config_file:
+        //   - IMEI is spelled IMEI (id 7). "Imei" is in no device binary.
+        //   - the model lives at id 14 of the same table, but GetSystemInfo
+        //     asks for ids 0,1,2,3,17 and 6,7,8 only. GetFeatureList is the
+        //     request that asks for it ({"module":9,"act":1,"id":[6,7,8,12,14]}
+        //     -> DeviceName, IMEI, sn, manufacturer, model), so the model comes
+        //     from there. "DeviceModel"/"ProductName" are in no device binary.
+        //   - no usage-module or device-module parameter is an uptime, in any
+        //     spelling; system.cgi?action=uptime reads /proc/uptime and is what
+        //     the rest of this page already uses.
         Promise.all([
             API.webapi('GetSystemInfo').catch(function() { return null; }),
             API.cgiGet('system.cgi', { action: 'memory' }).catch(function() { return null; }),
             API.cgiGet('system.cgi', { action: 'cpu' }).catch(function() { return null; }),
             API.cgiGet('system.cgi', { action: 'storage' }).catch(function() { return null; }),
+            API.cgiGet('system.cgi', { action: 'uptime' }).catch(function() { return null; }),
+            API.webapi('GetFeatureList').catch(function() { return null; }),
         ]).then(function(results) {
             var info = results[0] || {};
             var mem = results[1] || {};
             var cpu = results[2] || {};
             var storage = results[3] || {};
+            var up = results[4] || {};
+            var feat = results[5] || {};
 
             var html = '<div class="card">' +
                 '<h3>Hardware &amp; Firmware</h3>' +
                 '<div class="stat-row"><span class="label">Device Name</span><span class="value">' + escHtml(info.DeviceName || '') + '</span></div>' +
-                '<div class="stat-row"><span class="label">Model</span><span class="value">' + escHtml(info.DeviceModel || info.ProductName || '') + '</span></div>' +
-                '<div class="stat-row"><span class="label">IMEI</span><span class="value text-mono">' + escHtml(info.Imei || '') + '</span></div>' +
-                '<div class="stat-row"><span class="label">Firmware</span><span class="value">' + escHtml((info.SwVersion || info.SWversion || info.FWversion || '').replace(/\n/g, '')) + '</span></div>' +
-                '<div class="stat-row"><span class="label">Hardware Rev</span><span class="value">' + escHtml(info.HwVersion || info.HWversion || '') + '</span></div>' +
-                '<div class="stat-row"><span class="label">Uptime</span><span class="value">' + App.formatUptime(info.UpTime || info.Uptime) + '</span></div>' +
+                '<div class="stat-row"><span class="label">Model</span><span class="value">' + escHtml(feat.model || '') + '</span></div>' +
+                '<div class="stat-row"><span class="label">Manufacturer</span><span class="value">' + escHtml(feat.manufacturer || '') + '</span></div>' +
+                '<div class="stat-row"><span class="label">IMEI</span><span class="value text-mono">' + escHtml(info.IMEI || '') + '</span></div>' +
+                '<div class="stat-row"><span class="label">Firmware</span><span class="value">' + escHtml((info.SwVersion || '').replace(/\n/g, '')) + '</span></div>' +
+                '<div class="stat-row"><span class="label">Hardware Rev</span><span class="value">' + escHtml(info.HwVersion || '') + '</span></div>' +
+                '<div class="stat-row"><span class="label">Uptime</span><span class="value">' + App.formatUptime(up.seconds) + '</span></div>' +
             '</div>';
 
             if (mem.total || cpu.load) {

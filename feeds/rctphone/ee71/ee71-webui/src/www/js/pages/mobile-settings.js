@@ -221,11 +221,11 @@
                 '<div class="card mt-2">' +
                     '<h3>Data Plan</h3>' +
                     '<div class="stat-row"><span class="label">Used</span><span class="value">' +
-                        App.formatBytes(us.UsedData || 0) + ' / ' + App.formatBytes((us.MonthlyPlan || 0) * 1048576) +
+                        App.formatBytes(_usageNum(us.UsedData)) + ' / ' + App.formatBytes(_usageNum(us.MonthlyPlan)) +
                     '</span></div>' +
                     '<div class="form-group">' +
                         '<label>Monthly Limit (MB)</label>' +
-                        '<input type="number" id="ms-planlimit" value="' + (parseInt(us.MonthlyPlan, 10) || 0) + '" min="0" max="999999">' +
+                        '<input type="number" id="ms-planlimit" value="' + Math.round(_usageNum(us.MonthlyPlan) / MB) + '" min="0" max="999999">' +
                     '</div>' +
                     '<div class="form-group">' +
                         '<label>Billing Day (1-31)</label>' +
@@ -382,14 +382,64 @@
         }, { pending: 'Disconnecting\u2026', success: 'Disconnected from the mobile network' });
     }
 
-    // Data plan
+    // --- Data plan ---
+    //
+    // SetUsageSettings is NOT a partial update. json_req_config_file dispatches
+    // one request into six separate usage-module setters
+    // ({"req":"SetUsageSettings","info":[{22,1},{22,3},{22,7},{22,11},{22,9},
+    // {22,13}]}); a setter whose field is absent fails, and one failed setter
+    // fails the whole call — which is why sending only the three fields this
+    // form owns always came back "070401 Set usage settings failed".
+    //
+    // Stock therefore posts the record whole, coerced to numbers
+    // (build.formatted.js:57240): MonthlyPlan, BillingDay, UsedData,
+    // TimeLimitFlag, TimeLimitTimes, UsedTimes, AutoDisconnFlag, Unit. Every
+    // one of those names is in core_app's usage parameter table at 0x2ce048
+    // (BillingDay id0, Unit id2, TimeLimitTimes id3, TimeLimitFlag id4,
+    // AutoDisconnFlag id5, MonthlyPlan id6, UsedTimes id28, UsedData id27), so
+    // these are the firmware's own spellings, not the SPA's. Stock's mock also
+    // carries UnitWarn/UsedDataWarn — those two strings appear nowhere in
+    // core_app, so they are not sent.
+    //
+    // MonthlyPlan is stored in BYTES (table type 5 = 64-bit) and Unit is only
+    // the unit the user typed in: stock multiplies by 1024^1..3 for KB/MB/GB on
+    // the way in and divides on the way out. This form's input is MB, so it
+    // sends Unit 0 and scales by 1 MiB. Reading it back needs the same scale:
+    // the old code put the raw byte count straight into a field labelled MB,
+    // and then multiplied that byte count by 1 MiB again for the "Used x / y"
+    // line — so the plan was reported 1048576x larger than it is.
+    var MB = 1048576;
+
+    // GetUsageSettings returns these as strings on some fields and numbers on
+    // others; Number('') is 0 but Number(undefined) is NaN, and a NaN would be
+    // serialised as null and fail the setter.
+    function _usageNum(v) {
+        var n = Number(v);
+        return isNaN(n) ? 0 : n;
+    }
+
     function _msetSavePlan() {
+        var limitMb = _usageNum(($('#ms-planlimit') || {}).value);
+        var billDay = _usageNum(($('#ms-billday') || {}).value) || 1;
+        var autoOff = ($('#ms-autodisconn') || {}).checked ? 1 : 0;
+
         App.wrapFormSubmit('#ms-save-plan', function() {
-            return API.webapi('SetUsageSettings', {
-                MonthlyPlan: $('#ms-planlimit').value || '0',
-                BillingDay: $('#ms-billday').value || '1',
-                AutoDisconnFlag: $('#ms-autodisconn').checked ? '1' : '0'
-            });
+            // Re-read immediately before writing: UsedData and UsedTimes are
+            // live counters that go back out in the same record, and posting
+            // the values this page rendered minutes ago would roll them back.
+            return API.webapi('GetUsageSettings').then(function(cur) {
+                var us = cur || {};
+                return API.webapi('SetUsageSettings', {
+                    MonthlyPlan: limitMb * MB,
+                    Unit: 0,
+                    BillingDay: billDay,
+                    AutoDisconnFlag: autoOff,
+                    UsedData: _usageNum(us.UsedData),
+                    UsedTimes: _usageNum(us.UsedTimes),
+                    TimeLimitFlag: _usageNum(us.TimeLimitFlag),
+                    TimeLimitTimes: _usageNum(us.TimeLimitTimes)
+                });
+            }).then(_loadNetwork);
         }, { success: 'Data plan saved' });
     }
 
