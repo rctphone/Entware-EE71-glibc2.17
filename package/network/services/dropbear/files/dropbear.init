@@ -20,13 +20,6 @@ DROPBEAR_PORT=22
 DROPBEAR_EXTRA_ARGS=
 NO_START=0
 
-# Refuse password logins (dropbear -s). Default OFF on purpose: a freshly
-# flashed or factory-reset device has no authorized_keys, and shipping -s by
-# default would make SSH unreachable on first contact with no way in.
-# The postinst turns it on automatically once a key is actually installed,
-# and you can set it either way in /etc/default/dropbear.
-DROPBEAR_DISABLE_PASSWORD_AUTH=0
-
 # Key types to generate/use (ed25519 preferred, rsa as fallback)
 DROPBEAR_KEYTYPES="ed25519 rsa"
 
@@ -67,18 +60,6 @@ gen_keys() {
       }
     fi
   done
-}
-
-get_pw_args() {
-  # An `[ cond ] && assign` here would return 1 when cond is false, and `set -e`
-  # would abort the script before start-stop-daemon runs — so setting
-  # DROPBEAR_DISABLE_PASSWORD_AUTH=0 would stop dropbear from starting at all,
-  # and on `restart` would kill the running daemon without replacing it.
-  # An if-condition is exempt from set -e.
-  PW_ARGS=""
-  if [ "$DROPBEAR_DISABLE_PASSWORD_AUTH" = "1" ]; then
-    PW_ARGS="-s"
-  fi
 }
 
 get_key_args() {
@@ -142,9 +123,8 @@ case "$1" in
 	gen_keys
 	fw_open
 	get_key_args
-	get_pw_args
 	start-stop-daemon -S -x "$DAEMON" -- \
-	  $KEY_ARGS -p "$DROPBEAR_PORT" $PW_ARGS $DROPBEAR_EXTRA_ARGS
+	  $KEY_ARGS -p "$DROPBEAR_PORT" $DROPBEAR_EXTRA_ARGS
 	echo "$NAME."
 	;;
   stop)
@@ -160,9 +140,8 @@ case "$1" in
 	gen_keys
 	fw_open
 	get_key_args
-	get_pw_args
 	start-stop-daemon -S -x "$DAEMON" -- \
-	  $KEY_ARGS -p "$DROPBEAR_PORT" $PW_ARGS $DROPBEAR_EXTRA_ARGS
+	  $KEY_ARGS -p "$DROPBEAR_PORT" $DROPBEAR_EXTRA_ARGS
 	echo "$NAME."
 	;;
   status)
