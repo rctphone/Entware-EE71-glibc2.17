@@ -234,8 +234,9 @@ snapshot)
     # WiFi
     HAPD_2G=$(grep max_num_sta /etc/hostapd.conf 2>/dev/null | head -1)
     HAPD_CH=$(grep "^channel=" /etc/hostapd.conf 2>/dev/null | head -1)
-    WLAN0_CLIENTS=$(hostapd_cli -i wlan0 -p /var/run/hostapd list_sta 2>/dev/null | grep -c '^[0-9a-f]')
-    WLAN1_CLIENTS=$(hostapd_cli -i wlan1 -p /var/run/hostapd list_sta 2>/dev/null | grep -c '^[0-9a-f]')
+    # Bounded: hostapd_cli blocks on the control socket if hostapd is wedged.
+    WLAN0_CLIENTS=$(run_timeout 5 hostapd_cli -i wlan0 -p /var/run/hostapd list_sta 2>/dev/null | grep -c '^[0-9a-f]')
+    WLAN1_CLIENTS=$(run_timeout 5 hostapd_cli -i wlan1 -p /var/run/hostapd list_sta 2>/dev/null | grep -c '^[0-9a-f]')
 
     # Default route
     DEF_ROUTE=$(ip route 2>/dev/null | head -1)

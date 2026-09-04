@@ -5,8 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
     <meta name="color-scheme" content="light dark">
     <title>EE71</title>
+    <!-- BUNDLE:CSS:BEGIN — replaced by tools/build-www.sh with the hashed bundle.
+         Keep this list identical to css/entry.css (the build verifies it). -->
     <link rel="stylesheet" href="css/pico.classless.min.css">
+    <link rel="stylesheet" href="css/uPlot.min.css">
     <link rel="stylesheet" href="css/app.css">
+    <!-- BUNDLE:CSS:END -->
     <link rel="icon" type="image/png" href="favicon.png">
     <link rel="apple-touch-icon" href="apple-touch-icon.png">
     <link rel="manifest" href="manifest.json">
@@ -149,7 +153,8 @@
         <div class="mobile-menu-content"></div>
     </div>
 
-    <!-- Scripts -->
+    <!-- BUNDLE:JS:BEGIN — replaced by tools/build-www.sh with the hashed bundle.
+         Keep this list identical to js/entry.js, in the same order (the build verifies it). -->
     <script src="js/uPlot.iife.min.js"></script>
     <script src="js/termino.min.js"></script>
     <script src="js/api.js"></script>
@@ -159,15 +164,12 @@
     <script src="js/pages/connection.js"></script>
     <script src="js/pages/apn.js"></script>
     <script src="js/pages/at-terminal.js"></script>
-    <script src="js/pages/traffic.js"></script>
     <script src="js/pages/clients.js"></script>
     <script src="js/pages/wifi.js"></script>
-    <script src="js/pages/wifi-extender.js"></script>
     <script src="js/pages/lan.js"></script>
     <script src="js/pages/firewall.js"></script>
     <script src="js/pages/upnp.js"></script>
     <script src="js/pages/ttl-fix.js"></script>
-    <script src="js/pages/ussd.js"></script>
     <script src="js/pages/sms.js"></script>
     <script src="js/pages/vpn.js"></script>
     <script src="js/pages/diagnostics.js"></script>
@@ -178,6 +180,7 @@
     <script src="js/pages/about.js"></script>
     <script src="js/pages/mobile-settings.js"></script>
     <script src="js/app-boot.js"></script>
+    <!-- BUNDLE:JS:END -->
 
 </body>
 </html>

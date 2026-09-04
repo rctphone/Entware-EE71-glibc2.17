@@ -11,8 +11,8 @@
 
     function _loadUpnp() {
         var el = $('#upnp-content');
-        if (!el) return;
-        Promise.all([
+        if (!el) return Promise.resolve();
+        return Promise.all([
             API.webapi('GetUpnpSettings'),
             API.cgiGet('system.cgi', { action: 'iptables' }).catch(function() { return null; }),
         ]).then(function(results) {
@@ -49,11 +49,23 @@
             '</div>';
 
             $('#upnp-toggle').addEventListener('change', function() {
-                API.webapi('SetUpnpSettings', { UpnpEnable: enabled ? '0' : '1' }).then(function() {
-                    setTimeout(_loadUpnp, 1000);
-                }).catch(function(e) { alert('Error: ' + e.message); });
+                var enable = !enabled;
+                App.wrapFormSubmit(this, function() {
+                    return API.webapi('SetUpnpSettings', { UpnpEnable: enable ? '1' : '0' })
+                        .then(function() {
+                            // miniupnpd needs a moment before its chain reflects the change.
+                            return new Promise(function(r) { setTimeout(r, 1000); });
+                        })
+                        .then(_loadUpnp);
+                }, {
+                    key: 'upnp-toggle',
+                    success: enable ? 'UPnP enabled' : 'UPnP disabled'
+                });
             });
-        }).catch(function(e) { el.innerHTML = '<div class="card"><p class="text-danger">Error: ' + escHtml(e.message) + '</p></div>'; });
+        }).catch(function(e) {
+            el = $('#upnp-content');
+            if (el) el.innerHTML = '<div class="card"><p class="text-danger">Error: ' + escHtml(App.errorText(e)) + '</p></div>';
+        });
     }
 
     App.registerPage('upnp', renderUpnp);

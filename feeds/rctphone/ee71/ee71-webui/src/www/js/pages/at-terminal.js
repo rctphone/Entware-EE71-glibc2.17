@@ -61,12 +61,13 @@
             _atTerm.disable_input();
             API.cgiPost('at.cgi', { action: 'send', cmd: cmd }).then(function(r) {
                 if (r.error) {
-                    _atTerm.output('Error: ' + r.error);
+                    // Termino renders output with innerHTML, so escape here too.
+                    _atTerm.output('Error: ' + escHtml(r.error));
                 } else {
                     _atTerm.output(escHtml(r.output || '(no response)'));
                 }
             }).catch(function(e) {
-                _atTerm.output('Error: ' + e.message);
+                _atTerm.output('Error: ' + escHtml(App.errorText(e)));
             }).then(function() {
                 _atTerm.enable_input();
                 _atLoop();
@@ -106,7 +107,7 @@
                 if (!item) return;
                 var cmd = item.dataset.cmd;
                 if (item.dataset.warn && _atTerm) {
-                    _atTerm.output('\u26a0 Warning: ' + item.dataset.warn);
+                    _atTerm.output('\u26a0 Warning: ' + escHtml(item.dataset.warn));
                 }
                 var termInput = document.querySelector('#at-terminal .termino-input');
                 if (termInput) { termInput.value = cmd; termInput.focus(); }

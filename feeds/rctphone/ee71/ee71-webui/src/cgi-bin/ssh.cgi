@@ -44,7 +44,9 @@ status)
     for KTYPE in ed25519 rsa; do
         KFILE="/etc/dropbear/dropbear_${KTYPE}_host_key"
         if [ -f "$KFILE" ]; then
-            FP=$(dropbearkey -y -f "$KFILE" 2>/dev/null | grep 'Fingerprint:' | sed 's/.*: //')
+            # dropbearkey can sit on a truncated/corrupt key file.
+            FP=$(run_timeout 5 dropbearkey -y -f "$KFILE" 2>/dev/null \
+                | grep 'Fingerprint:' | sed 's/.*: //')
             if [ -n "$FP" ]; then
                 ENTRY=$(jq -n --arg type "$KTYPE" --arg fp "$FP" \
                     '{"type":$type,"fingerprint":$fp}')
@@ -122,8 +124,15 @@ save)
         sed -i "s/-p [^ ]*/-p $LISTEN_ARG/" /etc/init.d/dropbear 2>/dev/null
     fi
 
-    # Restart dropbear on new port (safe: start new first, then stop old)
-    dropbear -p "$LISTEN_ARG" 2>/dev/null
+    # Restart dropbear on new port (safe: start new first, then stop old).
+    # Bounded: dropbear generates host keys on first run and can block on
+    # a starved entropy pool, which would freeze the whole server.
+    run_timeout 15 dropbear -p "$LISTEN_ARG" 2>/dev/null
+    DB_RC=$?
+    if [ "$DB_RC" -eq 124 ]; then
+        json_err "dropbear did not start on $LISTEN_ARG within 15s"
+        exit 0
+    fi
     jq -n --argjson port "$PORT" --arg listen "$LISTEN" \
         '{"ok":true,"port":$port,"listen":$listen}'
     ;;

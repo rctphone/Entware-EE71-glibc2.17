@@ -566,12 +566,22 @@
                 attempts++;
                 API.webapi('GetSendSMSResult').then(function(r) {
                     var st = parseInt(r.SendStatus, 10);
-                    if (st === 2) { clearInterval(timer); resolve(); }
-                    else if (st === 1 || st === 3) { /* still sending, keep polling */ }
-                    else if (attempts >= limit) { clearInterval(timer); reject(new Error('Send timed out (status ' + st + ')')); }
-                    else { clearInterval(timer); reject(new Error('Send failed (status ' + st + ')')); }
+                    if (st === 2) { clearInterval(timer); resolve(); return; }
+                    // The attempt limit applies to EVERY branch, including
+                    // "still sending" — otherwise a modem stuck at status 1
+                    // leaves this interval running forever.
+                    if (attempts >= limit) {
+                        clearInterval(timer);
+                        reject(new Error('Send timed out (status ' + st + ')'));
+                        return;
+                    }
+                    if (st === 1 || st === 3) return; // still sending, keep polling
+                    clearInterval(timer);
+                    reject(new Error('Send failed (status ' + st + ')'));
                 }).catch(function(e) { clearInterval(timer); reject(e); });
             }, 3000);
+            // Navigating away must not leave the poll running.
+            App.setCleanup(function() { clearInterval(timer); });
         });
     }
 
@@ -672,12 +682,16 @@
     }
 
     function _deleteSingleSms(smsId, phone, contactId) {
-        if (!confirm('Delete this message?')) return;
-        API.webapi('DeleteSMS', { DelFlag: 3, SMSArray: [parseInt(smsId, 10)] }).then(function() {
-            return _smsDelay(1200).then(function() {
-                return _openSmsThread(phone, contactId);
-            });
-        }).catch(function(e) { alert('Delete failed: ' + (e.message || e)); });
+        App.confirmDialog('Delete this message?', function() {
+            App.wrapFormSubmit(null, function() {
+                return API.webapi('DeleteSMS', { DelFlag: 3, SMSArray: [parseInt(smsId, 10)] })
+                    .then(function() {
+                        return _smsDelay(1200).then(function() {
+                            return _openSmsThread(phone, contactId);
+                        });
+                    });
+            }, { key: 'sms-del-one', error: 'Delete failed', success: 'Message deleted' });
+        }, null, { title: 'Delete message', confirmText: 'Delete', danger: true });
     }
 
     function _resolveThreadSmsIds(phone, smsIds) {
@@ -703,15 +717,23 @@
     }
 
     function _deleteSmsThread(contactId, phone, smsIds) {
-        if (!confirm('Delete all messages in this thread?')) return;
-        _resolveThreadSmsIds(phone, smsIds).then(function(ids) {
-            if (!ids.length) return null;
-            return API.webapi('DeleteSMS', { DelFlag: 3, SMSArray: ids });
-        }).then(function() {
-            _reloadSmsInboxSoon();
-        }).catch(function() {
-            _reloadSmsInboxSoon();
-        });
+        App.confirmDialog(
+            'Delete every message in this conversation? This cannot be undone.',
+            function() {
+                App.wrapFormSubmit(null, function() {
+                    return _resolveThreadSmsIds(phone, smsIds).then(function(ids) {
+                        if (!ids.length) return null;
+                        return API.webapi('DeleteSMS', { DelFlag: 3, SMSArray: ids });
+                    }).then(function() {
+                        _reloadSmsInboxSoon();
+                    }, function(e) {
+                        // The list still needs refreshing even when the delete failed.
+                        _reloadSmsInboxSoon();
+                        throw e;
+                    });
+                }, { key: 'sms-del-thread', error: 'Delete failed', success: 'Conversation deleted' });
+            }, null,
+            { title: 'Delete conversation', confirmText: 'Delete', danger: true });
     }
 
     function _loadSmsForward() {

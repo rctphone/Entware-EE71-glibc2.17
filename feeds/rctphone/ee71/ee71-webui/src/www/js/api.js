@@ -725,8 +725,46 @@ const API = (() => {
         document.removeEventListener('mousemove', _onMouseMove);
     }
 
+    // --- Why the session ended ---------------------------------------------
+    //
+    // Two server-side facts we cannot change: webs drops a session after about
+    // five minutes idle, and it allows only ONE session per user, so logging in
+    // from a second device silently kills the first. Both look identical from
+    // here — an expired-session error code — so the UI says what it knows and
+    // names both possibilities rather than bouncing to the login screen with no
+    // explanation. The notice has to survive the reload, hence sessionStorage.
+    const SESSION_NOTICE_KEY = 'ee71-session-end';
+
+    function _rememberSessionEnd(reason) {
+        try {
+            sessionStorage.setItem(SESSION_NOTICE_KEY, JSON.stringify({
+                reason: reason,
+                route: (location.hash || '').replace(/^#\/?/, ''),
+                at: Date.now()
+            }));
+        } catch (e) {
+            // Private mode / storage disabled: we lose the explanation, not the logout.
+        }
+    }
+
+    // Read once and clear — the notice belongs to exactly one login screen.
+    function takeSessionEndNotice() {
+        try {
+            const raw = sessionStorage.getItem(SESSION_NOTICE_KEY);
+            if (!raw) return null;
+            sessionStorage.removeItem(SESSION_NOTICE_KEY);
+            const notice = JSON.parse(raw);
+            // A notice from much earlier is noise, not information.
+            if (!notice || (Date.now() - (notice.at || 0)) > 120000) return null;
+            return notice;
+        } catch (e) {
+            return null;
+        }
+    }
+
     function _handleInactivityLogout() {
         _stopHeartbeat();
+        _rememberSessionEnd('idle');
         _verificationToken = '';
         clearCookie();
         webapi('Logout').catch(function() {}).then(function() {
@@ -737,6 +775,7 @@ const API = (() => {
     function _handleSessionExpired() {
         _stopHeartbeat();
         _stopInactivityTimer();
+        _rememberSessionEnd('expired');
         _verificationToken = '';
         clearCookie();
         // Stock behavior: call Logout → full page reload (clears all in-memory state)
@@ -799,6 +838,9 @@ const API = (() => {
         logout,
         isLoggedIn,
         restoreSession,
+        takeSessionEndNotice,
+        LOGIN_LOCKOUT_SECONDS: 300,
+        ERR_LOGIN_LOCKED,
         webapi,
         cgiGet,
         cgiPost,

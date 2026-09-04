@@ -2528,3 +2528,86 @@ input[type="checkbox"]:checked::after {
     transform: rotate(45deg);
     margin: 1px auto 0;
 }
+
+/* --- Standard form components (App.createFormField / showNotification / ...) --- */
+
+/* Inline validation message, inserted after the offending field. */
+.field-error {
+    display: block;
+    margin-top: 0.25rem;
+    font-size: 0.8rem;
+    line-height: 1.3;
+    color: var(--color-danger);
+}
+
+.field-error:empty { display: none; }
+
+.field-invalid {
+    border-color: var(--color-danger) !important;
+}
+
+/* Toast — the one place a page reports the result of an action. */
+.app-toast {
+    position: fixed;
+    left: 50%;
+    bottom: 24px;
+    z-index: 300;
+    max-width: min(90vw, 480px);
+    padding: 0.7rem 1.1rem;
+    border-radius: 8px;
+    font-size: 0.875rem;
+    line-height: 1.35;
+    color: #fff;
+    box-shadow: 0 6px 24px rgba(0,0,0,0.28);
+    opacity: 0;
+    pointer-events: none;
+    transform: translate(-50%, 8px);
+    transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.app-toast.show {
+    opacity: 1;
+    transform: translate(-50%, 0);
+}
+
+.app-toast-success { background: var(--color-success); }
+.app-toast-error   { background: var(--color-danger); }
+.app-toast-info    { background: var(--color-primary); }
+
+/* Keep the toast clear of the mobile bottom navigation. */
+@media (max-width: 768px) {
+    .app-toast { bottom: calc(var(--ee71-nav-bottom-h, 56px) + 16px); }
+}
+
+/* Submit button while its request is in flight. */
+button.is-pending {
+    opacity: 0.65;
+    cursor: progress;
+}
+
+/* Confirmation dialog detail block (e.g. the exact AT command being sent). */
+.confirm-detail {
+    margin: 0 0 1.25rem;
+    padding: 0.6rem 0.75rem;
+    max-height: 180px;
+    overflow: auto;
+    border-radius: 6px;
+    background: var(--bg-surface-secondary);
+    border: 1px solid var(--border-color);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.8rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+/* Login: explanation of why a session ended (distinct from a failed attempt). */
+.login-notice {
+    margin-bottom: 0.75rem;
+    padding: 0.6rem 0.75rem;
+    border-radius: 8px;
+    background: var(--bg-surface-secondary);
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    line-height: 1.4;
+}

@@ -19,9 +19,7 @@
     }
 
     function _loadAll() {
-        _loadWg();
-        _loadAwg();
-        _loadSs();
+        return Promise.all([_loadWg(), _loadAwg(), _loadSs()]);
     }
 
     function _reorderVpn() {
@@ -96,10 +94,10 @@
 
     function _loadWg() {
         var el = document.getElementById('vpn-wg');
-        if (!el) return;
+        if (!el) return Promise.resolve();
         el.innerHTML = '<div class="card"><div class="page-loading"><div class="spinner"></div> Loading WireGuard...</div></div>';
 
-        API.cgiGet('wireguard.cgi', { action: 'status' }).then(function(status) {
+        return API.cgiGet('wireguard.cgi', { action: 'status' }).then(function(status) {
             _wgStatus = status;
             _renderWg(el, status);
             _reorderVpn();
@@ -198,26 +196,41 @@
         }
     }
 
-    function _wgEnable() {
+    function _wgToggle(enable) {
         var st = document.getElementById('wg-action-status');
-        if (st) st.innerHTML = '<div class="page-loading"><div class="spinner"></div> Enabling...</div>';
-        API.cgiPost('wireguard.cgi', { action: 'enable' }).then(function(r) {
-            if (r.ok) { _loadAll(); } else { _wgError(r.error); }
-        }).catch(function(e) { _wgError(e.message); });
+        if (st) {
+            st.innerHTML = '<div class="page-loading"><div class="spinner"></div> ' +
+                (enable ? 'Enabling...' : 'Disabling...') + '</div>';
+        }
+        App.wrapFormSubmit(null, function() {
+            return API.cgiPost('wireguard.cgi', { action: enable ? 'enable' : 'disable' }).then(function(r) {
+                if (!r || !r.ok) throw new Error((r && r.error) || 'Unknown error');
+                return _loadAll();
+            }, function(e) {
+                _wgResyncToggle();
+                throw e;
+            });
+        }, {
+            key: 'wg-toggle',
+            error: 'WireGuard',
+            success: 'WireGuard ' + (enable ? 'enabled' : 'disabled')
+        });
     }
 
-    function _wgDisable() {
-        var st = document.getElementById('wg-action-status');
-        if (st) st.innerHTML = '<div class="page-loading"><div class="spinner"></div> Disabling...</div>';
-        API.cgiPost('wireguard.cgi', { action: 'disable' }).then(function(r) {
-            if (r.ok) { _loadAll(); } else { _wgError(r.error); }
-        }).catch(function(e) { _wgError(e.message); });
-    }
+    function _wgEnable() { _wgToggle(true); }
 
-    function _wgError(msg) {
+    function _wgDisable() { _wgToggle(false); }
+
+    // Called when a WireGuard enable/disable fails. It does NOT report the error --
+    // wrapFormSubmit's toast does that, and it lasts long enough to read. Writing
+    // the message here as well would both duplicate it and destroy it, because the
+    // reload below replaces this whole card 1.5 s later.
+    function _wgResyncToggle() {
+        // Drop the in-progress spinner so the card does not look busy while we wait.
         var st = document.getElementById('wg-action-status');
-        if (st) st.innerHTML = '<p class="text-danger">' + escHtml(msg) + '</p>';
-        // Reset toggle to match actual state
+        if (st) st.innerHTML = '';
+        // The switch still shows the position the user clicked, which is now wrong.
+        // Reload to snap it back to the device's real state.
         setTimeout(_loadWg, 1500);
     }
 
@@ -288,14 +301,23 @@
             return;
         }
         if (st) st.innerHTML = '<div class="page-loading"><div class="spinner"></div> Saving...</div>';
-        API.cgiPost('wireguard.cgi', { action: 'save', config: textarea.value }).then(function(r) {
-            if (r.ok) {
+        App.wrapFormSubmit(null, function() {
+            return API.cgiPost('wireguard.cgi', { action: 'save', config: textarea.value }).then(function(r) {
+                if (!r || !r.ok) throw new Error((r && r.error) || 'Unknown error');
                 _vpnCloseModal();
-                _loadWg();
-            } else {
-                if (st) st.innerHTML = '<p class="text-danger">' + escHtml(r.error) + '</p>';
-            }
-        }).catch(function(e) { if (st) st.innerHTML = '<p class="text-danger">' + escHtml(e.message) + '</p>'; });
+                return _loadWg();
+            }, function(e) {
+                if (st) st.innerHTML = '<p class="text-danger">' + escHtml(App.errorText(e)) + '</p>';
+                throw e;
+            });
+        }, {
+            key: 'wg-save-config',
+            // The failure is already rendered inline in the modal, next to the config
+            // the user has to fix, and the modal stays open. A toast on top of that
+            // would report the same thing twice.
+            error: false,
+            success: 'WireGuard configuration saved'
+        });
     }
 
     function _wgSaveImport() { _wgSaveConfig('wg-import-text', 'wg-import-status'); }
@@ -321,10 +343,10 @@
 
     function _loadAwg() {
         var el = document.getElementById('vpn-awg');
-        if (!el) return;
+        if (!el) return Promise.resolve();
         el.innerHTML = '<div class="card"><div class="page-loading"><div class="spinner"></div> Loading AmneziaWG...</div></div>';
 
-        API.cgiGet('amneziawg.cgi', { action: 'status' }).then(function(status) {
+        return API.cgiGet('amneziawg.cgi', { action: 'status' }).then(function(status) {
             _awgStatus = status;
             _renderAwg(el, status);
             _reorderVpn();
@@ -423,25 +445,41 @@
         }
     }
 
-    function _awgEnable() {
+    function _awgToggle(enable) {
         var st = document.getElementById('awg-action-status');
-        if (st) st.innerHTML = '<div class="page-loading"><div class="spinner"></div> Enabling...</div>';
-        API.cgiPost('amneziawg.cgi', { action: 'enable' }).then(function(r) {
-            if (r.ok) { _loadAll(); } else { _awgError(r.error); }
-        }).catch(function(e) { _awgError(e.message); });
+        if (st) {
+            st.innerHTML = '<div class="page-loading"><div class="spinner"></div> ' +
+                (enable ? 'Enabling...' : 'Disabling...') + '</div>';
+        }
+        App.wrapFormSubmit(null, function() {
+            return API.cgiPost('amneziawg.cgi', { action: enable ? 'enable' : 'disable' }).then(function(r) {
+                if (!r || !r.ok) throw new Error((r && r.error) || 'Unknown error');
+                return _loadAll();
+            }, function(e) {
+                _awgResyncToggle();
+                throw e;
+            });
+        }, {
+            key: 'awg-toggle',
+            error: 'AmneziaWG',
+            success: 'AmneziaWG ' + (enable ? 'enabled' : 'disabled')
+        });
     }
 
-    function _awgDisable() {
-        var st = document.getElementById('awg-action-status');
-        if (st) st.innerHTML = '<div class="page-loading"><div class="spinner"></div> Disabling...</div>';
-        API.cgiPost('amneziawg.cgi', { action: 'disable' }).then(function(r) {
-            if (r.ok) { _loadAll(); } else { _awgError(r.error); }
-        }).catch(function(e) { _awgError(e.message); });
-    }
+    function _awgEnable() { _awgToggle(true); }
 
-    function _awgError(msg) {
+    function _awgDisable() { _awgToggle(false); }
+
+    // Called when a AmneziaWG enable/disable fails. It does NOT report the error --
+    // wrapFormSubmit's toast does that, and it lasts long enough to read. Writing
+    // the message here as well would both duplicate it and destroy it, because the
+    // reload below replaces this whole card 1.5 s later.
+    function _awgResyncToggle() {
+        // Drop the in-progress spinner so the card does not look busy while we wait.
         var st = document.getElementById('awg-action-status');
-        if (st) st.innerHTML = '<p class="text-danger">' + escHtml(msg) + '</p>';
+        if (st) st.innerHTML = '';
+        // The switch still shows the position the user clicked, which is now wrong.
+        // Reload to snap it back to the device's real state.
         setTimeout(_loadAwg, 1500);
     }
 
@@ -494,14 +532,23 @@
             return;
         }
         if (st) st.innerHTML = '<div class="page-loading"><div class="spinner"></div> Saving...</div>';
-        API.cgiPost('amneziawg.cgi', { action: 'save', config: textarea.value }).then(function(r) {
-            if (r.ok) {
+        App.wrapFormSubmit(null, function() {
+            return API.cgiPost('amneziawg.cgi', { action: 'save', config: textarea.value }).then(function(r) {
+                if (!r || !r.ok) throw new Error((r && r.error) || 'Unknown error');
                 _vpnCloseModal();
-                _loadAwg();
-            } else {
-                if (st) st.innerHTML = '<p class="text-danger">' + escHtml(r.error) + '</p>';
-            }
-        }).catch(function(e) { if (st) st.innerHTML = '<p class="text-danger">' + escHtml(e.message) + '</p>'; });
+                return _loadAwg();
+            }, function(e) {
+                if (st) st.innerHTML = '<p class="text-danger">' + escHtml(App.errorText(e)) + '</p>';
+                throw e;
+            });
+        }, {
+            key: 'awg-save-config',
+            // The failure is already rendered inline in the modal, next to the config
+            // the user has to fix, and the modal stays open. A toast on top of that
+            // would report the same thing twice.
+            error: false,
+            success: 'AmneziaWG configuration saved'
+        });
     }
 
     function _awgSaveImport() { _awgSaveConfig('awg-import-text', 'awg-import-status'); }
@@ -527,10 +574,10 @@
 
     function _loadSs() {
         var el = document.getElementById('vpn-ss');
-        if (!el) return;
+        if (!el) return Promise.resolve();
         el.innerHTML = '<div class="card"><div class="page-loading"><div class="spinner"></div> Loading ShadowSocks...</div></div>';
 
-        API.cgiGet('shadowsocks.cgi', { action: 'status' }).then(function(status) {
+        return API.cgiGet('shadowsocks.cgi', { action: 'status' }).then(function(status) {
             _ssStatus = status;
             _renderSs(el, status);
             _reorderVpn();
@@ -559,14 +606,14 @@
             if (status.name) html += ' <span class="text-muted text-small">\u2022 ' + escHtml(status.name) + '</span>';
             html += '</div>';
             if (status.server) {
-                html += '<div class="vpn-endpoint">' + escHtml(status.server) + ':' + status.server_port + ' \u2022 ' + escHtml(status.method || '') + '</div>';
+                html += '<div class="vpn-endpoint">' + escHtml(status.server) + ':' + escHtml(status.server_port) + ' \u2022 ' + escHtml(status.method || '') + '</div>';
             }
         } else if (status.has_config) {
             html += '<div class="vpn-status"><span class="status-dot off"></span><span class="text-muted">Stopped</span>';
             if (status.name) html += ' <span class="text-muted text-small">\u2022 ' + escHtml(status.name) + '</span>';
             html += '</div>';
             if (status.server) {
-                html += '<div class="vpn-endpoint">' + escHtml(status.server) + ':' + status.server_port + '</div>';
+                html += '<div class="vpn-endpoint">' + escHtml(status.server) + ':' + escHtml(status.server_port) + '</div>';
             }
         } else {
             html += '<div class="text-muted">Configure server to enable</div>';
@@ -591,25 +638,41 @@
         }
     }
 
-    function _ssEnable() {
+    function _ssToggle(enable) {
         var st = document.getElementById('ss-action-status');
-        if (st) st.innerHTML = '<div class="page-loading"><div class="spinner"></div> Enabling...</div>';
-        API.cgiPost('shadowsocks.cgi', { action: 'enable' }).then(function(r) {
-            if (r.ok) { _loadAll(); } else { _ssError(r.error); }
-        }).catch(function(e) { _ssError(e.message); });
+        if (st) {
+            st.innerHTML = '<div class="page-loading"><div class="spinner"></div> ' +
+                (enable ? 'Enabling...' : 'Disabling...') + '</div>';
+        }
+        App.wrapFormSubmit(null, function() {
+            return API.cgiPost('shadowsocks.cgi', { action: enable ? 'enable' : 'disable' }).then(function(r) {
+                if (!r || !r.ok) throw new Error((r && r.error) || 'Unknown error');
+                return _loadAll();
+            }, function(e) {
+                _ssResyncToggle();
+                throw e;
+            });
+        }, {
+            key: 'ss-toggle',
+            error: 'Shadowsocks',
+            success: 'Shadowsocks ' + (enable ? 'enabled' : 'disabled')
+        });
     }
 
-    function _ssDisable() {
-        var st = document.getElementById('ss-action-status');
-        if (st) st.innerHTML = '<div class="page-loading"><div class="spinner"></div> Disabling...</div>';
-        API.cgiPost('shadowsocks.cgi', { action: 'disable' }).then(function(r) {
-            if (r.ok) { _loadAll(); } else { _ssError(r.error); }
-        }).catch(function(e) { _ssError(e.message); });
-    }
+    function _ssEnable() { _ssToggle(true); }
 
-    function _ssError(msg) {
+    function _ssDisable() { _ssToggle(false); }
+
+    // Called when a Shadowsocks enable/disable fails. It does NOT report the error --
+    // wrapFormSubmit's toast does that, and it lasts long enough to read. Writing
+    // the message here as well would both duplicate it and destroy it, because the
+    // reload below replaces this whole card 1.5 s later.
+    function _ssResyncToggle() {
+        // Drop the in-progress spinner so the card does not look busy while we wait.
         var st = document.getElementById('ss-action-status');
-        if (st) st.innerHTML = '<p class="text-danger">' + escHtml(msg) + '</p>';
+        if (st) st.innerHTML = '';
+        // The switch still shows the position the user clicked, which is now wrong.
+        // Reload to snap it back to the device's real state.
         setTimeout(_loadSs, 1500);
     }
 
@@ -624,7 +687,7 @@
         html += '<label>Server Address</label>';
         html += '<input type="text" id="ss-server" value="' + escHtml(s.server || '') + '" placeholder="vpn.example.com">';
         html += '<label>Port</label>';
-        html += '<input type="number" id="ss-port" value="' + (s.server_port || '') + '" placeholder="8388" min="1" max="65535">';
+        html += '<input type="number" id="ss-port" value="' + escHtml(s.server_port || '') + '" placeholder="8388" min="1" max="65535">';
         html += '<label>Password</label>';
         html += '<div class="pass-field"><input type="password" id="ss-password" value="" placeholder="' + (s.password ? 'Enter new to change' : 'Password') + '">';
         html += '<button class="pass-eye" ' + actionAttr('togglePassVis', ['ss-password']) + ' title="Show password">' + icon('ic-eye-off') + '</button></div>';
@@ -664,18 +727,32 @@
             password: (document.getElementById('ss-password') || {}).value || '',
             method: (document.getElementById('ss-method') || {}).value || 'chacha20-ietf-poly1305'
         };
-        if (!data.server || !data.server_port) {
-            if (st) st.innerHTML = '<p class="text-danger">Server and port required</p>';
-            return;
+        App.clearFieldErrors('#rule-panel-overlay');
+        if (!data.server) {
+            if (st) st.innerHTML = '';
+            return App.renderFieldError('#ss-server', 'Server address is required');
         }
-        API.cgiPost('shadowsocks.cgi', data).then(function(r) {
-            if (r.ok) {
+        if (!data.server_port || data.server_port < 1 || data.server_port > 65535) {
+            if (st) st.innerHTML = '';
+            return App.renderFieldError('#ss-port', 'Enter a port between 1 and 65535');
+        }
+        App.wrapFormSubmit(null, function() {
+            return API.cgiPost('shadowsocks.cgi', data).then(function(r) {
+                if (!r || !r.ok) throw new Error((r && r.error) || 'Unknown error');
                 _vpnCloseModal();
-                _loadSs();
-            } else {
-                if (st) st.innerHTML = '<p class="text-danger">' + escHtml(r.error) + '</p>';
-            }
-        }).catch(function(e) { if (st) st.innerHTML = '<p class="text-danger">' + escHtml(e.message) + '</p>'; });
+                return _loadSs();
+            }, function(e) {
+                if (st) st.innerHTML = '<p class="text-danger">' + escHtml(App.errorText(e)) + '</p>';
+                throw e;
+            });
+        }, {
+            key: 'ss-save-config',
+            // The failure is already rendered inline in the modal, next to the config
+            // the user has to fix, and the modal stays open. A toast on top of that
+            // would report the same thing twice.
+            error: false,
+            success: 'Shadowsocks configuration saved'
+        });
     }
 
     function _ssParseUri() {

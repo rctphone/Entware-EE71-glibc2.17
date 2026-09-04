@@ -73,7 +73,7 @@
                     '<label class="fw-switch-item"><input type="checkbox" id="fw-sw-ipf"' + (ipf ? ' checked' : '') + '> IP Filter</label>' +
                     '<label class="fw-switch-item"><input type="checkbox" id="fw-sw-pf"' + (pf ? ' checked' : '') + '> Port Forward</label>' +
                     '<label class="fw-switch-item"><input type="checkbox" id="fw-sw-wan"' + (wan ? ' checked' : '') + '> WAN Ping</label>' +
-                    '<button class="btn-small" ' + actionAttr('fwSaveSwitches') + '>Save</button>' +
+                    '<button class="btn-small" id="fw-save-switches" ' + actionAttr('fwSaveSwitches') + '>Save</button>' +
                 '</div>';
         }).catch(function() {
             el.innerHTML = '';
@@ -81,14 +81,14 @@
     }
 
     function _fwSaveSwitches() {
-        API.webapi('setFirewallSwitch', {
-            firewall_status: $('#fw-sw-fw').checked ? 1 : 0,
-            ipflt_status: $('#fw-sw-ipf').checked ? 1 : 0,
-            port_forward_status: $('#fw-sw-pf').checked ? 1 : 0,
-            wan_ping_status: $('#fw-sw-wan').checked ? 1 : 0
-        }).then(function() {
-            alert('Firewall switches saved.');
-        }).catch(function(e) { alert('Error: ' + e.message); });
+        App.wrapFormSubmit('#fw-save-switches', function() {
+            return API.webapi('setFirewallSwitch', {
+                firewall_status: $('#fw-sw-fw').checked ? 1 : 0,
+                ipflt_status: $('#fw-sw-ipf').checked ? 1 : 0,
+                port_forward_status: $('#fw-sw-pf').checked ? 1 : 0,
+                wan_ping_status: $('#fw-sw-wan').checked ? 1 : 0
+            });
+        }, { success: 'Firewall switches saved' });
     }
 
     function _loadFwTab(tab) {
@@ -132,6 +132,17 @@
     function _hideRulePanel() {
         var overlay = document.getElementById('rule-panel-overlay');
         if (overlay) overlay.remove();
+    }
+
+    function _isIPv4(v) {
+        var m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(v || '');
+        if (!m) return false;
+        for (var i = 1; i <= 4; i++) if (Number(m[i]) > 255) return false;
+        return true;
+    }
+
+    function _isPort(v) {
+        return /^\d{1,5}$/.test(v || '') && Number(v) >= 1 && Number(v) <= 65535;
     }
 
     function _pfProtoLabel(value) {
@@ -225,8 +236,8 @@
 
     function _loadPortFwd() {
         var el = $('#fw-tab-portfwd');
-        if (!el) return;
-        API.webapi('getPortFwding').then(function(data) {
+        if (!el) return Promise.resolve();
+        return API.webapi('getPortFwding').then(function(data) {
             var rules = data && data.portfwd_list;
             if (!Array.isArray(rules)) rules = [];
             rules = rules.map(_normalizePortFwdRule);
@@ -293,63 +304,77 @@
             '<div class="float-field"><label>Internal Port</label><input type="text" id="pf-int" value="' + escHtml(r.private_port || '') + '" placeholder="80"></div>';
 
         _showRulePanel(title, fields, function() {
-            var nextRules = _pfRules.slice();
+            App.clearFieldErrors('#rule-panel');
+
             var rule = {
-                list_id: editing ? r.list_id : String(nextRules.length),
-                portfwd_name: $('#pf-name').value,
+                list_id: editing ? r.list_id : String(_pfRules.length),
+                portfwd_name: ($('#pf-name').value || '').trim(),
                 fwding_protocol: $('#pf-proto').value,
-                global_port: $('#pf-ext').value,
-                private_ip: $('#pf-ip').value,
-                private_port: $('#pf-int').value,
+                global_port: ($('#pf-ext').value || '').trim(),
+                private_ip: ($('#pf-ip').value || '').trim(),
+                private_port: ($('#pf-int').value || '').trim(),
                 fwding_status: '1'
             };
-            if (!rule.portfwd_name || !rule.global_port || !rule.private_ip || !rule.private_port) {
-                alert('All fields required'); return;
-            }
-            if (editing) {
-                nextRules[index] = rule;
-            } else {
-                nextRules.push(rule);
-            }
-            _savePortFwdRules(nextRules).then(function() {
-                _hideRulePanel();
-                _loadPortFwd();
-            }).catch(function(e) { alert('Error: ' + e.message); });
+            if (!rule.portfwd_name) return App.renderFieldError('#pf-name', 'Name is required');
+            if (!_isPort(rule.global_port)) return App.renderFieldError('#pf-ext', 'Enter a port between 1 and 65535');
+            if (!_isIPv4(rule.private_ip)) return App.renderFieldError('#pf-ip', 'Enter a valid LAN IPv4 address');
+            if (!_isPort(rule.private_port)) return App.renderFieldError('#pf-int', 'Enter a port between 1 and 65535');
+
+            var nextRules = _pfRules.slice();
+            if (editing) nextRules[index] = rule; else nextRules.push(rule);
+
+            App.wrapFormSubmit('#rule-panel-save', function() {
+                return _savePortFwdRules(nextRules).then(function() {
+                    _hideRulePanel();
+                    return _loadPortFwd();
+                });
+            }, { success: editing ? 'Rule updated' : 'Rule added' });
         });
     }
 
     function _togglePF(i) {
         var r = _pfRules[i];
         if (!r) return;
+        var enable = r.fwding_status !== '1';
         var nextRules = _pfRules.slice();
-        nextRules[i] = Object.assign({}, r, {
-            fwding_status: r.fwding_status === '1' ? '0' : '1'
+        nextRules[i] = Object.assign({}, r, { fwding_status: enable ? '1' : '0' });
+        App.wrapFormSubmit(null, function() {
+            return _savePortFwdRules(nextRules).then(_loadPortFwd);
+        }, {
+            key: 'pf-toggle-' + i,
+            success: 'Rule "' + (r.portfwd_name || i) + '" ' + (enable ? 'enabled' : 'disabled')
         });
-        _savePortFwdRules(nextRules).then(_loadPortFwd).catch(function(e) { alert('Error: ' + e.message); });
     }
 
     function _delPortFwd(index) {
         var rule = _pfRules[index];
         var name = rule ? rule.portfwd_name : String(index);
-        if (!confirm('Delete port forward rule "' + name + '"?')) return;
-        var nextRules = _pfRules.slice();
-        nextRules.splice(index, 1);
-        _savePortFwdRules(nextRules).then(function() {
-            _loadPortFwd();
-        }).catch(function(e) { alert('Error: ' + e.message); });
+        App.confirmDialog('Delete port forward rule "' + name + '"?', function() {
+            var nextRules = _pfRules.slice();
+            nextRules.splice(index, 1);
+            App.wrapFormSubmit(null, function() {
+                return _savePortFwdRules(nextRules).then(_loadPortFwd);
+            }, { key: 'pf-del', success: 'Rule deleted' });
+        }, null, { title: 'Delete rule', confirmText: 'Delete', danger: true });
     }
 
     function _deleteAllPF() {
-        if (!confirm('Delete ALL port forwarding rules?')) return;
-        _savePortFwdRules([]).then(_loadPortFwd).catch(function(e) { alert('Error: ' + e.message); });
+        App.confirmDialog(
+            'Delete all ' + _pfRules.length + ' port forwarding rules? This cannot be undone.',
+            function() {
+                App.wrapFormSubmit(null, function() {
+                    return _savePortFwdRules([]).then(_loadPortFwd);
+                }, { key: 'pf-del-all', success: 'All port forwarding rules deleted' });
+            }, null,
+            { title: 'Delete all rules', confirmText: 'Delete all', danger: true });
     }
 
     // --- IP Filter ---
 
     function _loadIpFilter() {
         var el = $('#fw-tab-ipfilter');
-        if (!el) return;
-        API.webapi('getIPFilterList').then(function(data) {
+        if (!el) return Promise.resolve();
+        return API.webapi('getIPFilterList').then(function(data) {
             _ipfPolicy = data && data.filter_policy != null ? String(data.filter_policy) : '0';
             var blacklist = data && data.ipFilter_list;
             var allowlist = data && data.ipFilterAllowlist;
@@ -372,7 +397,7 @@
                 '</div>' +
                 '<div class="action-bar">' +
                     '<button ' + actionAttr('showIPFPanel', [-1]) + '>+ Add rule</button>' +
-                    '<button class="btn-outline" ' + actionAttr('saveIpFilterPolicy') + '>Save Mode</button>' +
+                    '<button class="btn-outline" id="ipf-save-policy" ' + actionAttr('saveIpFilterPolicy') + '>Save Mode</button>' +
                     (rules.length > 0 ? '<button class="btn-outline-danger" ' + actionAttr('deleteAllIPF') + '>Delete all rules</button>' : '') +
                 '</div>';
 
@@ -445,45 +470,54 @@
                 nextRules.push(nextRule);
             }
             _setActiveIpFilterRules(_ipfPolicy, nextRules);
-            _saveIpFilterRules(_ipfPolicy).then(function() {
-                _hideRulePanel();
-                _loadIpFilter();
-            }).catch(function(e) { alert('Error: ' + e.message); });
+            App.wrapFormSubmit('#rule-panel-save', function() {
+                return _saveIpFilterRules(_ipfPolicy).then(function() {
+                    _hideRulePanel();
+                    return _loadIpFilter();
+                });
+            }, { success: editing ? 'Rule updated' : 'Rule added' });
         });
     }
 
     function _delIpFilter(index) {
-        if (!confirm('Delete IP filter rule?')) return;
-        var nextRules = _ipfRules.slice();
-        nextRules.splice(index, 1);
-        _setActiveIpFilterRules(_ipfPolicy, nextRules);
-        _saveIpFilterRules(_ipfPolicy).then(function() {
-            _loadIpFilter();
-        }).catch(function(e) { alert('Error: ' + e.message); });
+        App.confirmDialog('Delete this IP filter rule?', function() {
+            var nextRules = _ipfRules.slice();
+            nextRules.splice(index, 1);
+            _setActiveIpFilterRules(_ipfPolicy, nextRules);
+            App.wrapFormSubmit(null, function() {
+                return _saveIpFilterRules(_ipfPolicy).then(_loadIpFilter);
+            }, { key: 'ipf-del', success: 'Rule deleted' });
+        }, null, { title: 'Delete rule', confirmText: 'Delete', danger: true });
     }
 
     function _deleteAllIPF() {
-        if (!confirm('Delete ALL IP filter rules?')) return;
-        _setActiveIpFilterRules(_ipfPolicy, []);
-        _saveIpFilterRules(_ipfPolicy).then(_loadIpFilter).catch(function(e) { alert('Error: ' + e.message); });
+        App.confirmDialog(
+            'Delete all ' + _ipfRules.length + ' IP filter rules? This cannot be undone.',
+            function() {
+                _setActiveIpFilterRules(_ipfPolicy, []);
+                App.wrapFormSubmit(null, function() {
+                    return _saveIpFilterRules(_ipfPolicy).then(_loadIpFilter);
+                }, { key: 'ipf-del-all', success: 'All IP filter rules deleted' });
+            }, null,
+            { title: 'Delete all rules', confirmText: 'Delete all', danger: true });
     }
 
     function _saveIpFilterPolicy() {
         var sel = $('#ipf-policy');
         _ipfPolicy = sel ? String(sel.value) : _ipfPolicy;
         _ipfRules = _getActiveIpFilterRules(_ipfPolicy).slice();
-        _saveIpFilterRules(_ipfPolicy).then(function() {
-            _loadIpFilter();
-        }).catch(function(e) { alert('Error: ' + e.message); });
+        App.wrapFormSubmit('#ipf-save-policy', function() {
+            return _saveIpFilterRules(_ipfPolicy).then(_loadIpFilter);
+        }, { success: 'Filter mode saved' });
     }
 
     // --- MAC Filter (unchanged) ---
 
     function _loadMacFilter() {
         var tab = $('#fw-tab-macfilter');
-        if (!tab) return;
+        if (!tab) return Promise.resolve();
 
-        Promise.all([
+        return Promise.all([
             API.webapi('GetMacFilterSettings').catch(function() { return null; }),
             API.webapi('GetMacFilterObjectSettings').catch(function() { return null; }),
         ]).then(function(results) {
@@ -502,7 +536,7 @@
                     '</select>' +
                 '</div>' +
                 '<div class="form-actions mb-2">' +
-                    '<button ' + actionAttr('saveMacFilterMode') + '>Save Mode</button>' +
+                    '<button id="mf-save-mode" ' + actionAttr('saveMacFilterMode') + '>Save Mode</button>' +
                 '</div>' +
                 '<h3>MAC Addresses</h3>' +
                 '<div id="mf-list">' +
@@ -525,7 +559,7 @@
                     '</div>' +
                 '</div>' +
                 '<div class="form-actions">' +
-                    '<button ' + actionAttr('addMacFilter') + '>Add</button>' +
+                    '<button id="mf-add" ' + actionAttr('addMacFilter') + '>Add</button>' +
                 '</div>' +
             '</div>';
         }).catch(function() {});
@@ -533,44 +567,45 @@
 
     function _saveMacFilterMode() {
         var mode = $('#mf-mode').value;
-        API.webapi('SetMacFilterSettings', { MacFilterMode: mode }).then(function() {
-            _loadMacFilter();
-        }).catch(function(e) { alert('Error: ' + e.message); });
+        App.wrapFormSubmit('#mf-save-mode', function() {
+            return API.webapi('SetMacFilterSettings', { MacFilterMode: mode }).then(_loadMacFilter);
+        }, { success: 'MAC filter mode saved' });
     }
 
     function _addMacFilter() {
-        var mac = ($('#mf-mac') || {}).value || '';
-        var name = ($('#mf-name') || {}).value || '';
+        App.clearFieldErrors('#fw-tab-macfilter');
+        var mac = (($('#mf-mac') || {}).value || '').trim();
+        var name = (($('#mf-name') || {}).value || '').trim();
         if (!/^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/.test(mac)) {
-            alert('Invalid MAC format (AA:BB:CC:DD:EE:FF)');
-            return;
+            return App.renderFieldError('#mf-mac', 'Expected a MAC address like AA:BB:CC:DD:EE:FF');
         }
-        API.webapi('SetMacFilterObjectSettings', {
-            MacAddress: mac.toUpperCase(),
-            DeviceName: name,
-            Action: 'add'
-        }).then(function() {
-            _loadMacFilter();
-        }).catch(function(e) { alert('Error: ' + e.message); });
+        App.wrapFormSubmit('#mf-add', function() {
+            return API.webapi('SetMacFilterObjectSettings', {
+                MacAddress: mac.toUpperCase(),
+                DeviceName: name,
+                Action: 'add'
+            }).then(_loadMacFilter);
+        }, { pending: 'Adding\u2026', success: 'MAC filter entry added' });
     }
 
     function _delMacFilter(index) {
-        if (!confirm('Remove this MAC filter entry?')) return;
-        API.webapi('SetMacFilterObjectSettings', {
-            Index: String(index),
-            Action: 'delete'
-        }).then(function() {
-            _loadMacFilter();
-        }).catch(function(e) { alert('Error: ' + e.message); });
+        App.confirmDialog('Remove this MAC filter entry?', function() {
+            App.wrapFormSubmit(null, function() {
+                return API.webapi('SetMacFilterObjectSettings', {
+                    Index: String(index),
+                    Action: 'delete'
+                }).then(_loadMacFilter);
+            }, { key: 'mf-del', success: 'MAC filter entry removed' });
+        }, null, { title: 'Remove entry', confirmText: 'Remove', danger: true });
     }
 
     // --- Feature 7: URL Filter ---
 
     function _loadUrlFilter() {
         var el = $('#fw-tab-urlfilter');
-        if (!el) return;
+        if (!el) return Promise.resolve();
 
-        API.webapi('getUrlFilterSettings').then(function(data) {
+        return API.webapi('getUrlFilterSettings').then(function(data) {
             var policy = data.filter_policy || '0';
             var denyList = data.UrlDenyList || [];
             var allowList = data.UrlAllowList || [];
@@ -602,7 +637,7 @@
                     '<div class="form-group" style="flex:1">' +
                         '<input type="text" id="uf-url" placeholder="example.com" maxlength="256">' +
                     '</div>' +
-                    '<button ' + actionAttr('fwAddUrl') + '>Add URL</button>' +
+                    '<button id="uf-add" ' + actionAttr('fwAddUrl') + '>Add URL</button>' +
                 '</div>' +
             '</div>';
             el.innerHTML = html;
@@ -617,53 +652,56 @@
     }
 
     function _fwAddUrl() {
+        App.clearFieldErrors('#fw-tab-urlfilter');
         var inp = $('#uf-url');
         var policy = ($('#uf-policy') || {}).value || '0';
-        if (!inp || !inp.value.trim()) { alert('Enter a URL'); return; }
+        if (!inp || !inp.value.trim()) return App.renderFieldError('#uf-url', 'Enter a URL or domain');
 
-        // Re-fetch current settings, add URL, save
-        API.webapi('getUrlFilterSettings').then(function(data) {
-            var denyList = data.UrlDenyList || [];
-            var allowList = data.UrlAllowList || [];
-            var url = inp.value.trim();
+        App.wrapFormSubmit('#uf-add', function() {
+            // Re-fetch current settings, add the URL, save the whole list back.
+            return API.webapi('getUrlFilterSettings').then(function(data) {
+                var denyList = data.UrlDenyList || [];
+                var allowList = data.UrlAllowList || [];
+                var url = inp.value.trim();
 
-            if (policy === '1') {
-                allowList.push(url);
-            } else {
-                denyList.push(url);
-            }
+                if (policy === '1') {
+                    allowList.push(url);
+                } else {
+                    denyList.push(url);
+                }
 
-            return API.webapi('SetUrlFilterSettings', {
-                filter_policy: policy,
-                UrlDenyList: denyList,
-                UrlAllowList: allowList
-            });
-        }).then(function() {
-            _loadUrlFilter();
-        }).catch(function(e) { alert('Error: ' + e.message); });
+                return API.webapi('SetUrlFilterSettings', {
+                    filter_policy: policy,
+                    UrlDenyList: denyList,
+                    UrlAllowList: allowList
+                });
+            }).then(_loadUrlFilter);
+        }, { pending: 'Adding\u2026', success: 'URL added to the filter list' });
     }
 
     function _fwDelUrl(index) {
         var policy = ($('#uf-policy') || {}).value || '0';
 
-        API.webapi('getUrlFilterSettings').then(function(data) {
-            var denyList = data.UrlDenyList || [];
-            var allowList = data.UrlAllowList || [];
+        App.confirmDialog('Remove this URL from the filter list?', function() {
+            App.wrapFormSubmit(null, function() {
+                return API.webapi('getUrlFilterSettings').then(function(data) {
+                    var denyList = data.UrlDenyList || [];
+                    var allowList = data.UrlAllowList || [];
 
-            if (policy === '1') {
-                allowList.splice(index, 1);
-            } else {
-                denyList.splice(index, 1);
-            }
+                    if (policy === '1') {
+                        allowList.splice(index, 1);
+                    } else {
+                        denyList.splice(index, 1);
+                    }
 
-            return API.webapi('SetUrlFilterSettings', {
-                filter_policy: policy,
-                UrlDenyList: denyList,
-                UrlAllowList: allowList
-            });
-        }).then(function() {
-            _loadUrlFilter();
-        }).catch(function(e) { alert('Error: ' + e.message); });
+                    return API.webapi('SetUrlFilterSettings', {
+                        filter_policy: policy,
+                        UrlDenyList: denyList,
+                        UrlAllowList: allowList
+                    });
+                }).then(_loadUrlFilter);
+            }, { key: 'uf-del', success: 'URL removed' });
+        }, null, { title: 'Remove URL', confirmText: 'Remove', danger: true });
     }
 
     // --- iptables rules view (unchanged) ---

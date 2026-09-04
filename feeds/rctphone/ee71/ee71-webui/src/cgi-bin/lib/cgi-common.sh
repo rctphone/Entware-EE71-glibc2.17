@@ -10,6 +10,9 @@
 #     csrf_check
 #     val=$(db_get "ItemName")
 #     db_set wifi_info "ItemName" "$val"
+#     run_timeout 5 some_slow_command
+#     with_lock vpn 30 /usr/bin/vpn_apply
+#     json_err "something went wrong"
 
 # Default DB path (overridable by the caller before sourcing)
 DB="${DB:-/jrd-resource/resource/sqlite3/user_info.db3}"
@@ -66,4 +69,116 @@ db_set() {
     _rc=$?
     [ "$_rc" -eq 0 ] || echo "[ERR] db_set failed: ${_table}.$2" >&2
     return "$_rc"
+}
+
+# --- Error reporting ---
+# json_err <msg> — the single error shape for every CGI.
+# Writes {"error":"<msg>"} to the client and "[ERR] <msg>" to the server
+# log. Callers still decide whether to exit; this only emits.
+json_err() {
+    _je_msg="$1"
+    [ -n "$_je_msg" ] || _je_msg="unknown error"
+    echo "[ERR] ${_je_msg}" >&2
+    # jq is the only safe JSON escaper here; if it is missing, emit a
+    # fixed string rather than risk producing invalid JSON.
+    jq -n --arg error "$_je_msg" '{"error":$error}' 2>/dev/null \
+        || printf '{"error":"internal error"}'
+}
+
+# --- Bounded execution ---
+# webs is single-threaded: a CGI that blocks blocks the entire UI. Every
+# external command that talks to a device node, the network or another
+# daemon must go through this.
+#
+# run_timeout <secs> <cmd> [args...]
+# Returns the command's own exit status, except 124 when it was killed on
+# timeout. BusyBox `timeout` exits 143 (128+TERM) / 137 (128+KILL); those
+# are normalised to the GNU 124 convention so callers test one value.
+run_timeout() {
+    _rt_secs="$1"
+    shift
+    if [ -z "$_rt_secs" ] || [ "$#" -eq 0 ]; then
+        echo "[ERR] run_timeout: usage: run_timeout <secs> <cmd> [args...]" >&2
+        return 2
+    fi
+    if command -v timeout >/dev/null 2>&1; then
+        timeout -k 2 "$_rt_secs" "$@"
+        _rt_rc=$?
+    else
+        # No timeout applet — run unbounded rather than fail the request.
+        # Moot on the main system (BusyBox 1.36.1 has it), but the recovery
+        # partition ships BusyBox 1.20.2 with a different applet set, so
+        # this branch is reachable there: the caller's bound silently
+        # becomes no bound at all. The [ERR] line is the only warning.
+        echo "[ERR] run_timeout: timeout applet missing, running unbounded" >&2
+        "$@"
+        _rt_rc=$?
+    fi
+    case "$_rt_rc" in
+        137|143) return 124 ;;
+    esac
+    return "$_rt_rc"
+}
+
+# --- Serialisation ---
+# with_lock <name> <wait_secs> <run_secs> <cmd> [args...]
+# Serialise mutations of shared system state (VPN routing / iptables /
+# dnsmasq reloads) across concurrent CGI requests.
+#
+# What this actually guarantees:
+#   - waiting for the lock is bounded by <wait_secs>  -> returns 124
+#   - running <cmd> is bounded by <run_secs>          -> returns 124
+#   - the lock is released when the function returns, however it returns
+# Worst-case wall time is wait_secs + run_secs. Both are the caller's to
+# choose, so the total a request can cost is visible at the call site.
+# Not guaranteed: <cmd> is signalled, not its grandchildren, and a command
+# killed mid-flight can leave partial state — bounded, not transactional.
+#
+# WHY THE FILE-DESCRIPTOR FORM. `run_timeout N flock FILE CMD` does NOT
+# bound CMD. BusyBox flock forks a child to exec CMD and blocks in
+# waitpid(), so CMD is timeout's GRANDchild, one level too deep to be
+# signalled — and the fd it inherited keeps the lock held. Measured on
+# device: the wrapper returned 143 at 3 s while the command ran on to its
+# natural 8 s end, with the lock held the whole time. Locking a descriptor
+# instead puts no process between timeout and <cmd>.
+# BusyBox flock has no -w, so the wait is bounded by timeout too; the lock
+# lives on the open file description this shell holds, so it outlives the
+# short-lived `flock -x 9` helper and drops when the subshell exits.
+#
+# The subshell is load-bearing, not style: a failed `exec 9>` terminates a
+# non-interactive ash outright, which inside a CGI would cut the response
+# off mid-flight. Contained here, it costs one degraded request instead.
+with_lock() {
+    _wl_name="$1"
+    _wl_wait="$2"
+    _wl_run="$3"
+    shift 3
+    _wl_file="/tmp/ee71-webui-${_wl_name}.lock"
+
+    if ! command -v flock >/dev/null 2>&1; then
+        echo "[ERR] with_lock: flock applet missing, running unserialised" >&2
+        run_timeout "$_wl_run" "$@"
+        return $?
+    fi
+    # Probe before the subshell so an unusable /tmp degrades to an
+    # unserialised run instead of an ambiguous exit status.
+    if ! : >>"$_wl_file" 2>/dev/null; then
+        echo "[ERR] with_lock: cannot open ${_wl_file}, running unserialised" >&2
+        run_timeout "$_wl_run" "$@"
+        return $?
+    fi
+
+    (
+        exec 9>>"$_wl_file"
+        run_timeout "$_wl_wait" flock -x 9 || exit 124
+        # 9>&- is what makes the run bound mean anything. Without it the
+        # command and every descendant inherit fd 9, so a child that
+        # outlives the TERM — an orphaned `sleep` under a killed shell,
+        # say — keeps the lock held after this function has already
+        # returned 124 and reported the switch abandoned. Measured: the
+        # lock stayed held for the orphan's full lifetime. Closing the
+        # descriptor for the command leaves this subshell the only holder,
+        # so the lock is released exactly when the function returns.
+        run_timeout "$_wl_run" "$@" 9>&-
+    )
 }

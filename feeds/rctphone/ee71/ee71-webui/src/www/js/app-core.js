@@ -185,6 +185,318 @@ var App = (function() {
         return s;
     }
 
+    // --- Standard form components -------------------------------------------
+    //
+    // One way to build a field, one way to report a result, one way to submit.
+    // Everything here returns an HTML STRING rather than a DOM node: every page
+    // in this UI builds markup by concatenation and assigns it with innerHTML,
+    // so a node-based API would fit none of the existing call sites.
+
+    var _FIELD_TAGS = { textarea: 'textarea', select: 'select' };
+
+    // createFormField('SSID', 'text', 'wifi-ssid', s.SSID, { placeholder: 'EE71' })
+    // Select fields take attrs.options: ['a', 'b'] or [{ value: 'a', label: 'A' }].
+    // Attribute NAMES come from calling code and are emitted verbatim; values
+    // and content are escaped.
+    function createFormField(label, type, id, value, attrs) {
+        attrs = attrs || {};
+        var tag = _FIELD_TAGS[type] || 'input';
+        var val = (value === null || value === undefined) ? '' : value;
+
+        var extra = '';
+        for (var k in attrs) {
+            if (!attrs.hasOwnProperty(k) || k === 'options') continue;
+            var v = attrs[k];
+            if (v === false || v === null || v === undefined) continue;
+            extra += ' ' + k + (v === true ? '' : '="' + escHtml(v) + '"');
+        }
+
+        var field;
+        if (tag === 'textarea') {
+            field = '<textarea id="' + escHtml(id) + '"' + extra + '>' + escHtml(val) + '</textarea>';
+        } else if (tag === 'select') {
+            field = '<select id="' + escHtml(id) + '"' + extra + '>' +
+                (attrs.options || []).map(function(o) {
+                    var ov = (o && o.value !== undefined) ? o.value : o;
+                    var ol = (o && o.label !== undefined) ? o.label : o;
+                    return '<option value="' + escHtml(ov) + '"' +
+                        (String(ov) === String(val) ? ' selected' : '') + '>' + escHtml(ol) + '</option>';
+                }).join('') + '</select>';
+        } else if (type === 'checkbox') {
+            field = '<input type="checkbox" id="' + escHtml(id) + '"' + (val ? ' checked' : '') + extra + '>';
+        } else {
+            field = '<input type="' + escHtml(type || 'text') + '" id="' + escHtml(id) + '"' +
+                ' value="' + escHtml(val) + '"' + extra + '>';
+        }
+
+        return '<div class="form-group">' +
+            (label ? '<label for="' + escHtml(id) + '">' + escHtml(label) + '</label>' : '') +
+            field +
+            '</div>';
+    }
+
+    // --- Result reporting ---
+    //
+    // The single way a page tells the user what happened. Errors linger longer
+    // than successes because the user has to read them.
+
+    var _toastEl = null;
+    var _toastTimer = null;
+
+    function showNotification(msg, type, duration) {
+        // `type === true` accepts the older _toast(msg, isError) call shape.
+        var kind = (type === true) ? 'error' : (type || 'success');
+
+        if (!_toastEl || !_toastEl.parentNode) {
+            _toastEl = document.createElement('div');
+            _toastEl.id = 'app-toast';
+            _toastEl.setAttribute('role', 'status');
+            document.body.appendChild(_toastEl);
+        }
+        _toastEl.className = 'app-toast app-toast-' + kind;
+        _toastEl.textContent = msg;
+        // Force a reflow so a repeated notification replays the entrance.
+        void _toastEl.offsetWidth;
+        _toastEl.classList.add('show');
+
+        clearTimeout(_toastTimer);
+        _toastTimer = setTimeout(function() {
+            if (_toastEl) _toastEl.classList.remove('show');
+        }, duration || (kind === 'error' ? 6000 : 3000));
+    }
+
+    // Turn any thrown value into something worth showing a user.
+    function errorText(err) {
+        if (!err) return 'Unknown error';
+        if (typeof err === 'string') return err;
+        return err.message || err.error || String(err);
+    }
+
+    // --- Inline field errors ---
+
+    function _asEl(target) {
+        return typeof target === 'string' ? $(target) : target;
+    }
+
+    // Returns false, so a validator can read:  if (!ssid) return renderFieldError('#ssid', 'Required');
+    function renderFieldError(target, message) {
+        var el = _asEl(target);
+        if (!el || !el.parentNode) {
+            showNotification(message, 'error');
+            return false;
+        }
+        el.classList.add('field-invalid');
+        var err = el.nextElementSibling;
+        if (!err || !err.classList || !err.classList.contains('field-error')) {
+            err = document.createElement('div');
+            err.className = 'field-error';
+            el.parentNode.insertBefore(err, el.nextSibling);
+        }
+        err.textContent = message;
+        err.hidden = false;
+        if (typeof el.focus === 'function') el.focus();
+        return false;
+    }
+
+    function clearFieldError(target) {
+        var el = _asEl(target);
+        if (!el) return;
+        el.classList.remove('field-invalid');
+        var err = el.nextElementSibling;
+        if (err && err.classList && err.classList.contains('field-error')) {
+            err.textContent = '';
+            err.hidden = true;
+        }
+    }
+
+    // Clear every field error under a container (call at the top of a validator).
+    function clearFieldErrors(root) {
+        var ctx = (typeof root === 'string' ? $(root) : root) || document;
+        $$('.field-error', ctx).forEach(function(e) { e.textContent = ''; e.hidden = true; });
+        $$('.field-invalid', ctx).forEach(function(e) { e.classList.remove('field-invalid'); });
+    }
+
+    // --- Form submit ---
+    //
+    // The ONE place that owns pending state and double-submit protection.
+    // Call it from inside the data-action handler, not at render time: buttons
+    // here are rebuilt by innerHTML, so a render-time addEventListener would be
+    // lost on every rebuild and double-bound on every re-render.
+    //
+    //   App._saveTtl = function() {
+    //       wrapFormSubmit('#ttl-save', function() {
+    //           return API.cgiPost('ttl.cgi', { action: 'set', ttl: v }).then(_loadTtl);
+    //       }, { success: 'TTL settings saved' });
+    //   };
+    //
+    // Anything that must happen on success belongs INSIDE fn — the returned
+    // promise resolves to null on failure so that call sites cannot accidentally
+    // treat a failed save as a success.
+    //
+    // opts: { pending, success, error, key }
+    //   success: false suppresses the success toast; error: false suppresses the
+    //   error toast (for a page that renders its own inline status).
+    //   key: double-submit guard key; defaults to the selector or the button id.
+
+    var _submitBusy = {};
+
+    function wrapFormSubmit(target, fn, opts) {
+        opts = opts || {};
+        var btn = _asEl(target);
+        var key = opts.key || (typeof target === 'string' ? target : (btn && btn.id) || '');
+
+        // Guard on a key rather than on the element: fn() may replace the button
+        // via an innerHTML rebuild while the request is still in flight.
+        if (key && _submitBusy[key]) return Promise.resolve(null);
+        if (key) _submitBusy[key] = true;
+
+        // Only a <button> gets a pending label; a switch or checkbox is just
+        // disabled for the duration.
+        var label = null;
+        if (btn) {
+            btn.disabled = true;
+            btn.classList.add('is-pending');
+            if (btn.tagName === 'BUTTON') {
+                label = btn.textContent;
+                btn.textContent = opts.pending || 'Saving\u2026';
+            }
+        }
+
+        function restore() {
+            if (key) delete _submitBusy[key];
+            if (btn && btn.isConnected) {
+                btn.disabled = false;
+                btn.classList.remove('is-pending');
+                if (label !== null) btn.textContent = label;
+            }
+        }
+
+        var p;
+        try {
+            p = Promise.resolve(fn());
+        } catch (e) {
+            p = Promise.reject(e);
+        }
+
+        return p.then(function(res) {
+            restore();
+            if (opts.success !== false) showNotification(opts.success || 'Saved', 'success');
+            return res;
+        }, function(err) {
+            restore();
+            if (opts.error !== false) {
+                showNotification((opts.error || 'Error') + ': ' + errorText(err), 'error');
+            }
+            return null;
+        });
+    }
+
+    // --- Confirmation dialog ---
+    //
+    // Replaces native confirm(): themed, keyboard-dismissable, and able to carry
+    // a destructive-action warning plus the exact command being confirmed.
+    // Asynchronous, so call sites take a callback instead of `if (!confirm(x))`.
+    //
+    // opts: { title, detail, confirmText, cancelText, danger, wide, input }
+    //   input: { label, value, placeholder } turns it into a prompt — onYes then
+    //   receives the entered text. This is the only reason the UI no longer needs
+    //   native prompt() anywhere.
+
+    var _confirmCb = null;
+
+    function confirmDialog(message, onYes, onNo, opts) {
+        opts = opts || {};
+        _closeConfirm();
+
+        var input = opts.input;
+        var overlay = document.createElement('div');
+        overlay.id = 'app-confirm';
+        overlay.className = 'modal-overlay';
+        overlay.innerHTML =
+            '<div class="modal-box' + (opts.wide ? ' modal-wide' : '') + '" role="alertdialog" aria-modal="true">' +
+                (opts.title ? '<div class="modal-header"><h3>' + escHtml(opts.title) + '</h3></div>' : '') +
+                '<p>' + escHtml(message).replace(/\n/g, '<br>') + '</p>' +
+                (opts.detail ? '<pre class="confirm-detail">' + escHtml(opts.detail) + '</pre>' : '') +
+                (input ? createFormField(input.label || '', 'text', 'app-confirm-input',
+                    input.value || '', { placeholder: input.placeholder || '' }) : '') +
+                '<div class="modal-actions">' +
+                    '<button class="btn-outline" data-action="confirmNo">' +
+                        escHtml(opts.cancelText || 'Cancel') + '</button>' +
+                    '<button' + (opts.danger ? ' class="btn-danger"' : '') + ' data-action="confirmYes">' +
+                        escHtml(opts.confirmText || 'OK') + '</button>' +
+                '</div>' +
+            '</div>';
+        document.body.appendChild(overlay);
+
+        overlay.addEventListener('click', function(e) {
+            if (e.target === overlay) _confirmNo();
+        });
+        document.addEventListener('keydown', _confirmKey);
+
+        _confirmCb = { yes: onYes || null, no: onNo || null, input: !!input };
+
+        var focusEl = overlay.querySelector(input ? '#app-confirm-input' : '[data-action="confirmYes"]');
+        if (focusEl) focusEl.focus();
+        if (input && focusEl && focusEl.select) focusEl.select();
+    }
+
+    function _closeConfirm() {
+        var overlay = document.getElementById('app-confirm');
+        if (overlay) overlay.remove();
+        document.removeEventListener('keydown', _confirmKey);
+    }
+
+    function _confirmKey(e) {
+        if (e.key === 'Escape') { e.preventDefault(); _confirmNo(); }
+        else if (e.key === 'Enter') { e.preventDefault(); _confirmYes(); }
+    }
+
+    function _confirmYes() {
+        var cb = _confirmCb;
+        var field = document.getElementById('app-confirm-input');
+        var value = field ? field.value : undefined;
+        _confirmCb = null;
+        _closeConfirm();
+        if (cb && cb.yes) cb.yes(cb.input ? value : undefined);
+    }
+
+    function _confirmNo() {
+        var cb = _confirmCb;
+        _confirmCb = null;
+        _closeConfirm();
+        if (cb && cb.no) cb.no();
+    }
+
+    // --- Focus / scroll preservation ---
+    //
+    // Rebuilding a region with innerHTML destroys the focused element and its
+    // caret. Wrap a rebuild that can land while the user is typing.
+
+    function preserveFocus(fn) {
+        var active = document.activeElement;
+        var id = active && active.id;
+        var start = null, end = null;
+        if (id && typeof active.selectionStart === 'number') {
+            start = active.selectionStart;
+            end = active.selectionEnd;
+        }
+        var scroller = document.scrollingElement || document.documentElement;
+        var top = scroller ? scroller.scrollTop : 0;
+
+        fn();
+
+        if (id) {
+            var next = document.getElementById(id);
+            if (next && next !== active && typeof next.focus === 'function') {
+                next.focus();
+                if (start !== null && typeof next.setSelectionRange === 'function') {
+                    try { next.setSelectionRange(start, end); } catch (e) { /* unsupported input type */ }
+                }
+            }
+        }
+        if (scroller) scroller.scrollTop = top;
+    }
+
     // --- Navigation definition ---
 
     var NAV_ITEMS = [
@@ -402,10 +714,20 @@ var App = (function() {
     // --- Router ---
 
     var _currentPage = null;
-    var _currentPageCleanup = null;
+    var _pageCleanups = [];
 
+    // Cleanups accumulate: a page that registers a timer teardown and a chart
+    // teardown used to silently lose the first one.
     function setCleanup(fn) {
-        _currentPageCleanup = fn;
+        if (typeof fn === 'function') _pageCleanups.push(fn);
+    }
+
+    function _runCleanups() {
+        var fns = _pageCleanups;
+        _pageCleanups = [];
+        fns.forEach(function(fn) {
+            try { fn(); } catch (e) { /* one bad teardown must not block the rest */ }
+        });
     }
 
     function navigate(pageId) {
@@ -437,11 +759,12 @@ var App = (function() {
     }
 
     function renderPage(pageId) {
-        // Cleanup previous page
-        if (_currentPageCleanup) {
-            _currentPageCleanup();
-            _currentPageCleanup = null;
-        }
+        // Tear down the previous page: timers, charts, cached state.
+        _runCleanups();
+        // A dialog belonging to the page we are leaving must not outlive it.
+        // Dropped, not answered — neither branch should fire on navigation.
+        _confirmCb = null;
+        _closeConfirm();
 
         _currentPage = pageId;
 
@@ -773,8 +1096,22 @@ var App = (function() {
         formatBand: formatBand,
         escHtml: escHtml,
         actionAttr: actionAttr,
+        // Standard form components — see the block above for usage.
+        createFormField: createFormField,
+        showNotification: showNotification,
+        renderFieldError: renderFieldError,
+        clearFieldError: clearFieldError,
+        clearFieldErrors: clearFieldErrors,
+        wrapFormSubmit: wrapFormSubmit,
+        confirmDialog: confirmDialog,
+        preserveFocus: preserveFocus,
+        errorText: errorText,
+        showModal: showModal,
         _getRoute: getRoute,
         _modalOk: _modalOk,
+        // data-action targets for the confirmation dialog
+        _confirmYes: _confirmYes,
+        _confirmNo: _confirmNo,
     };
 })();
 window.App = App;

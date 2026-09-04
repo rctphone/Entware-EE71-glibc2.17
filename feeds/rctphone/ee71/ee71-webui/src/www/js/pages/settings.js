@@ -62,14 +62,14 @@
                     '</div>' +
                     '<div class="stat-row"><span class="label">Firmware</span><span class="value">' + escHtml((info.SwVersion || info.SWversion || info.FWversion || '').replace(/\n/g, '')) + '</span></div>' +
                     '<div class="form-actions">' +
-                        '<button ' + actionAttr('setDeviceName') + '>Save Name</button>' +
+                        '<button ' + actionAttr('setDeviceName') + ' id="s-save-name">Save Name</button>' +
                     '</div>' +
                 '</div>' +
                 '<div class="card mt-2">' +
                     '<h3>Actions</h3>' +
                     '<div class="form-row">' +
-                        '<button class="btn-warn" ' + actionAttr('setReboot') + '>Reboot Device</button>' +
-                        '<button class="btn-danger" ' + actionAttr('setFactoryReset') + '>Factory Reset</button>' +
+                        '<button class="btn-warn" ' + actionAttr('setReboot') + ' id="s-reboot">Reboot Device</button>' +
+                        '<button class="btn-danger" ' + actionAttr('setFactoryReset') + ' id="s-factory">Factory Reset</button>' +
                     '</div>' +
                 '</div>' +
                 '<div class="card mt-2">' +
@@ -84,26 +84,46 @@
     }
 
     function _setDeviceName() {
-        var name = ($('#s-devname') || {}).value;
-        if (!name) { alert('Name required'); return; }
-        API.webapi('SetDeviceName', { DeviceName: name }).then(function() {
-            alert('Device name saved.');
-        }).catch(function(e) { alert('Error: ' + e.message); });
+        App.clearFieldErrors('#set-tab-system');
+        var name = (($('#s-devname') || {}).value || '').trim();
+        if (!name) return App.renderFieldError('#s-devname', 'Device name is required');
+        App.wrapFormSubmit('#s-save-name', function() {
+            return API.webapi('SetDeviceName', { DeviceName: name });
+        }, { success: 'Device name saved' });
     }
 
     function _setReboot() {
-        if (!confirm('Reboot the device? This will disconnect all clients.')) return;
-        API.webapi('SetDeviceReboot').then(function() {
-            alert('Rebooting... Please wait 30-60 seconds.');
-        }).catch(function(e) { alert('Error: ' + e.message); });
+        App.confirmDialog(
+            'Reboot the device? Every connected client will be disconnected for about a minute.',
+            function() {
+                App.wrapFormSubmit('#s-reboot', function() {
+                    return API.webapi('SetDeviceReboot');
+                }, {
+                    pending: 'Rebooting\u2026',
+                    success: 'Reboot started - the device will be back in 30-60 seconds'
+                });
+            }, null,
+            { title: 'Reboot device', confirmText: 'Reboot', danger: true });
     }
 
     function _setFactoryReset() {
-        if (!confirm('WARNING: Factory reset will erase ALL settings and restore stock firmware defaults. Continue?')) return;
-        if (!confirm('Are you sure? This cannot be undone.')) return;
-        API.webapi('SetDeviceReset').then(function() {
-            alert('Factory reset initiated. Device will restart.');
-        }).catch(function(e) { alert('Error: ' + e.message); });
+        App.confirmDialog(
+            'A factory reset erases every setting on this device - WiFi names and passwords, APN profiles, ' +
+            'firewall and port forwarding rules, VPN configuration and the admin password - and restores the ' +
+            'stock firmware defaults.\n\nThis cannot be undone.',
+            function() {
+                // Second gate, kept deliberately: this is the most destructive
+                // action in the UI and a single mis-click should not reach it.
+                App.confirmDialog('Erase all settings and restore factory defaults?', function() {
+                    App.wrapFormSubmit('#s-factory', function() {
+                        return API.webapi('SetDeviceReset');
+                    }, {
+                        pending: 'Resetting\u2026',
+                        success: 'Factory reset started - the device is restarting'
+                    });
+                }, null, { title: 'Last chance', confirmText: 'Erase everything', danger: true });
+            }, null,
+            { title: 'Factory reset', confirmText: 'Continue', danger: true });
     }
 
     function _setCheckUpdate() {
@@ -143,7 +163,7 @@
                     '<button class="pass-eye" ' + actionAttr('togglePassVis', ['s-pw-confirm']) + ' title="Show password">' + icon('ic-eye-off') + '</button></div>' +
                 '</div>' +
                 '<div class="form-actions">' +
-                    '<button ' + actionAttr('setChangePassword') + '>Change Password</button>' +
+                    '<button ' + actionAttr('setChangePassword') + ' id="s-change-pw">Change Password</button>' +
                 '</div>' +
             '</div>';
     }
@@ -152,27 +172,31 @@
         var oldPw = ($('#s-pw-old') || {}).value;
         var newPw = ($('#s-pw-new') || {}).value;
         var confirmPw = ($('#s-pw-confirm') || {}).value;
-        if (!oldPw || !newPw) { alert('All fields required'); return; }
-        if (newPw !== confirmPw) { alert('Passwords do not match'); return; }
-        if (newPw.length < 4) { alert('Password too short (min 4 chars)'); return; }
+        App.clearFieldErrors('#set-tab-admin');
+        if (!oldPw) return App.renderFieldError('#s-pw-old', 'Enter the current password');
+        if (!newPw) return App.renderFieldError('#s-pw-new', 'Enter a new password');
+        if (newPw.length < 4) return App.renderFieldError('#s-pw-new', 'Password must be at least 4 characters');
+        if (newPw !== confirmPw) return App.renderFieldError('#s-pw-confirm', 'The two passwords do not match');
 
-        // Get salt, hash passwords with PBKDF2-SHA512, XOR-encrypt username
-        API.webapi('GetDeviceSt').then(function(st) {
-            var salt = st.Salt || '';
-            return Promise.all([
-                API._pbkdf2Sha512(oldPw, salt),
-                API._pbkdf2Sha512(newPw, salt)
-            ]).then(function(hashes) {
-                return API.webapi('ChangePassword', {
-                    UserName: API._xorEncrypt('admin'),
-                    CurrPassword: hashes[0],
-                    NewPassword: hashes[1]
+        App.wrapFormSubmit('#s-change-pw', function() {
+            // Get salt, hash passwords with PBKDF2-SHA512, XOR-encrypt username
+            return API.webapi('GetDeviceSt').then(function(st) {
+                var salt = st.Salt || '';
+                return Promise.all([
+                    API._pbkdf2Sha512(oldPw, salt),
+                    API._pbkdf2Sha512(newPw, salt)
+                ]).then(function(hashes) {
+                    return API.webapi('ChangePassword', {
+                        UserName: API._xorEncrypt('admin'),
+                        CurrPassword: hashes[0],
+                        NewPassword: hashes[1]
+                    });
                 });
+            }).then(function() {
+                // The server drops the session when the password changes.
+                setTimeout(function() { App.navigate('login'); }, 1500);
             });
-        }).then(function() {
-            alert('Password changed. Please log in again.');
-            App.navigate('login');
-        }).catch(function(e) { alert('Error: ' + e.message); });
+        }, { pending: 'Changing\u2026', success: 'Password changed - log in again with the new one' });
     }
 
     // --- Power tab ---
@@ -203,7 +227,7 @@
                         '<label><input type="checkbox" id="s-pwr-led"' + (p.led_off_no_client == 1 ? ' checked' : '') + '> LEDs off when no clients</label>' +
                     '</div>' +
                     '<div class="form-actions">' +
-                        '<button ' + actionAttr('setPowerSave') + '>Save</button>' +
+                        '<button ' + actionAttr('setPowerSave') + ' id="s-save-power">Save</button>' +
                     '</div>' +
                 '</div>';
         }).catch(function() {
@@ -220,10 +244,12 @@
             wifi_off_time: (parseInt($('#s-pwr-wifioff-time').value) || 10) * 60,
             led_off_no_client: $('#s-pwr-led').checked ? 1 : 0,
         };
-        API.cgiPost('power.cgi', params).then(function(r) {
-            if (r.error) { alert(r.error); return; }
-            alert('Power settings saved.');
-        }).catch(function(e) { alert('Error: ' + e.message); });
+        App.wrapFormSubmit('#s-save-power', function() {
+            return API.cgiPost('power.cgi', params).then(function(r) {
+                if (r && r.error) throw new Error(r.error);
+                return r;
+            });
+        }, { success: 'Power settings saved' });
     }
 
     // --- SIM tab ---
@@ -235,10 +261,10 @@
 
     function _loadSIM() {
         var tab = $('#set-tab-sim');
-        if (!tab) return;
+        if (!tab) return Promise.resolve();
         tab.innerHTML = '<div class="card"><div class="page-loading"><div class="spinner"></div> Loading...</div></div>';
 
-        API.webapi('GetSimStatus').then(function(sim) {
+        return API.webapi('GetSimStatus').then(function(sim) {
             var simState = String(sim.SIMState || '255');
             var pinState = String(sim.PinState || '0');
             var pinEnabled = pinState === '1';
@@ -265,7 +291,7 @@
                         '<input type="password" id="s-pin-code" maxlength="8" placeholder="Enter PIN">' +
                     '</div>' +
                     '<div class="form-actions">' +
-                        '<button ' + actionAttr('simUnlockPin') + '>Unlock</button>' +
+                        '<button ' + actionAttr('simUnlockPin') + ' id="s-pin-unlock">Unlock</button>' +
                     '</div>' +
                 '</div>';
             }
@@ -283,7 +309,7 @@
                         '<input type="password" id="s-puk-newpin" maxlength="8" placeholder="New PIN">' +
                     '</div>' +
                     '<div class="form-actions">' +
-                        '<button ' + actionAttr('simUnlockPuk') + '>Unlock</button>' +
+                        '<button ' + actionAttr('simUnlockPuk') + ' id="s-puk-unlock">Unlock</button>' +
                     '</div>' +
                 '</div>';
             }
@@ -297,7 +323,7 @@
                         '<input type="password" id="s-pin-toggle" maxlength="8" placeholder="Enter current PIN">' +
                     '</div>' +
                     '<div class="form-actions">' +
-                        '<button ' + actionAttr('simTogglePin', [pinEnabled ? '0' : '1']) + '>' + (pinEnabled ? 'Disable PIN' : 'Enable PIN') + '</button>' +
+                        '<button ' + actionAttr('simTogglePin', [pinEnabled ? '0' : '1']) + ' id="s-pin-toggle-btn">' + (pinEnabled ? 'Disable PIN' : 'Enable PIN') + '</button>' +
                     '</div>' +
                 '</div>';
 
@@ -313,7 +339,7 @@
                             '<input type="password" id="s-pin-new" maxlength="8">' +
                         '</div>' +
                         '<div class="form-actions">' +
-                            '<button ' + actionAttr('simChangePin') + '>Change PIN</button>' +
+                            '<button ' + actionAttr('simChangePin') + ' id="s-pin-change">Change PIN</button>' +
                         '</div>' +
                     '</div>';
                 }
@@ -326,42 +352,47 @@
     }
 
     function _simUnlockPin() {
-        var pin = ($('#s-pin-code') || {}).value;
-        if (!pin) { alert('Enter PIN'); return; }
-        API.webapi('UnlockPin', { Pin: pin, State: 1 }).then(function() {
-            alert('PIN verified.');
-            _loadSIM();
-        }).catch(function(e) { alert('Error: ' + e.message); _loadSIM(); });
+        App.clearFieldErrors('#set-tab-sim');
+        var pin = (($('#s-pin-code') || {}).value || '').trim();
+        if (!pin) return App.renderFieldError('#s-pin-code', 'Enter the SIM PIN');
+        App.wrapFormSubmit('#s-pin-unlock', function() {
+            return API.webapi('UnlockPin', { Pin: pin, State: 1 })
+                .then(_loadSIM, function(e) { _loadSIM(); throw e; });
+        }, { pending: 'Verifying\u2026', success: 'PIN verified' });
     }
 
     function _simUnlockPuk() {
-        var puk = ($('#s-puk-code') || {}).value;
-        var pin = ($('#s-puk-newpin') || {}).value;
-        if (!puk || !pin) { alert('Enter PUK and new PIN'); return; }
-        API.webapi('UnlockPuk', { Puk: puk, Pin: pin }).then(function() {
-            alert('PUK verified, new PIN set.');
-            _loadSIM();
-        }).catch(function(e) { alert('Error: ' + e.message); _loadSIM(); });
+        App.clearFieldErrors('#set-tab-sim');
+        var puk = (($('#s-puk-code') || {}).value || '').trim();
+        var pin = (($('#s-puk-newpin') || {}).value || '').trim();
+        if (!puk) return App.renderFieldError('#s-puk-code', 'Enter the PUK from your operator');
+        if (!pin) return App.renderFieldError('#s-puk-newpin', 'Choose a new PIN');
+        App.wrapFormSubmit('#s-puk-unlock', function() {
+            return API.webapi('UnlockPuk', { Puk: puk, Pin: pin })
+                .then(_loadSIM, function(e) { _loadSIM(); throw e; });
+        }, { pending: 'Verifying\u2026', success: 'PUK verified and the new PIN is set' });
     }
 
     function _simTogglePin(newState) {
-        var pin = ($('#s-pin-toggle') || {}).value;
-        if (!pin) { alert('Enter current PIN'); return; }
-        API.webapi('ChangePinState', { Pin: pin, State: parseInt(newState, 10) }).then(function() {
-            alert(newState === '1' ? 'PIN enabled.' : 'PIN disabled.');
-            _loadSIM();
-        }).catch(function(e) { alert('Error: ' + e.message); _loadSIM(); });
+        App.clearFieldErrors('#set-tab-sim');
+        var pin = (($('#s-pin-toggle') || {}).value || '').trim();
+        if (!pin) return App.renderFieldError('#s-pin-toggle', 'Enter the current PIN');
+        App.wrapFormSubmit('#s-pin-toggle-btn', function() {
+            return API.webapi('ChangePinState', { Pin: pin, State: parseInt(newState, 10) })
+                .then(_loadSIM, function(e) { _loadSIM(); throw e; });
+        }, { success: newState === '1' ? 'SIM PIN enabled' : 'SIM PIN disabled' });
     }
 
     function _simChangePin() {
-        var old = ($('#s-pin-old') || {}).value;
-        var nw = ($('#s-pin-new') || {}).value;
-        if (!old || !nw) { alert('Enter current and new PIN'); return; }
-        if (nw.length < 4) { alert('PIN must be at least 4 digits'); return; }
-        API.webapi('ChangePinCode', { CurrentPin: old, NewPin: nw }).then(function() {
-            alert('PIN changed.');
-            _loadSIM();
-        }).catch(function(e) { alert('Error: ' + e.message); _loadSIM(); });
+        App.clearFieldErrors('#set-tab-sim');
+        var old = (($('#s-pin-old') || {}).value || '').trim();
+        var nw = (($('#s-pin-new') || {}).value || '').trim();
+        if (!old) return App.renderFieldError('#s-pin-old', 'Enter the current PIN');
+        if (nw.length < 4) return App.renderFieldError('#s-pin-new', 'The new PIN must be at least 4 digits');
+        App.wrapFormSubmit('#s-pin-change', function() {
+            return API.webapi('ChangePinCode', { CurrentPin: old, NewPin: nw })
+                .then(_loadSIM, function(e) { _loadSIM(); throw e; });
+        }, { success: 'SIM PIN changed' });
     }
 
     // --- USB tab ---
@@ -565,10 +596,10 @@
 
     function _loadUSB() {
         var tab = $('#set-tab-usb');
-        if (!tab) return;
+        if (!tab) return Promise.resolve();
         tab.innerHTML = '<div class="card"><div class="page-loading"><div class="spinner"></div> Loading...</div></div>';
 
-        Promise.all([
+        return Promise.all([
             API.cgiGet('usbcomp.cgi', { action: 'status' }).catch(function() { return null; }),
             API.cgiGet('usbcomp.cgi', { action: 'kernel_table' }).catch(function() { return null; }),
         ]).then(function(results) {
@@ -622,7 +653,10 @@
                 var cb = $('#s-usb-f' + USB_CUSTOM_FUNCS[i].id + '-' + entryIdx);
                 if (cb && cb.checked) extraIds.push(USB_CUSTOM_FUNCS[i].id);
             }
-            if (extraIds.length === 0) { alert('Select at least one function.'); return; }
+            if (extraIds.length === 0) {
+                App.showNotification('Select at least one USB function.', 'error');
+                return;
+            }
             presetLabel = 'Custom (' + extraIds.map(_funcLabel).join(' + ') + ')';
         } else {
             for (var i = 0; i < USB_PRESETS.length; i++) {
@@ -638,12 +672,19 @@
         var label = netName + ' + ' + presetLabel;
 
         var osName = entryIdx === 14 ? 'macOS' : 'Windows / Linux';
-        if (!confirm('Set ' + osName + ' USB mode to ' + label + '?\nTakes effect on next USB reconnect.')) return;
-
-        API.cgiPost('usbcomp.cgi', { action: 'patch_entry', index: entryIdx, funcs: funcsStr }).then(function(r) {
-            if (r.error) { alert('Error: ' + r.error); return; }
-            _loadUSB();
-        }).catch(function(e) { alert('Error: ' + e.message); });
+        App.confirmDialog(
+            'Set the ' + osName + ' USB mode to ' + label + '?\nThis takes effect on the next USB reconnect.',
+            function() {
+                App.wrapFormSubmit(null, function() {
+                    return API.cgiPost('usbcomp.cgi', {
+                        action: 'patch_entry', index: entryIdx, funcs: funcsStr
+                    }).then(function(r) {
+                        if (r && r.error) throw new Error(r.error);
+                        return _loadUSB();
+                    });
+                }, { key: 'usb-apply-' + entryIdx, success: osName + ' USB mode set to ' + label });
+            }, null,
+            { title: 'Change USB mode', confirmText: 'Apply' });
     }
 
     App.registerPage('settings', renderSettings);

@@ -15,32 +15,65 @@ DESC="EE71 Web UI daemons"
 TRAFFIC_BIN=/usr/sbin/traffic_stats
 TRAFFIC_PID=/var/run/traffic_stats.pid
 
+# Read a PID file, rejecting anything that is not a plain number. A
+# truncated or garbage PID file used to make `kill -0 ""` succeed-ish and
+# `kill ""` fail silently, so the daemon looked running when it was not.
+read_pid() {
+    [ -f "$TRAFFIC_PID" ] || return 1
+    PID="$(cat "$TRAFFIC_PID" 2>/dev/null)"
+    case "$PID" in
+        ''|*[!0-9]*)
+            rm -f "$TRAFFIC_PID"
+            return 1
+            ;;
+    esac
+    return 0
+}
+
+# Stale PID files are cleaned up here, so callers can trust the answer.
 is_running() {
-    [ -f "$1" ] && kill -0 "$(cat "$1" 2>/dev/null)" 2>/dev/null
+    read_pid || return 1
+    if kill -0 "$PID" 2>/dev/null; then
+        return 0
+    fi
+    rm -f "$TRAFFIC_PID"
+    return 1
 }
 
 start_traffic() {
-    if is_running "$TRAFFIC_PID"; then
-        echo "traffic_stats already running"
+    if is_running; then
+        echo "$NAME: traffic_stats already running (pid $PID)"
         return 0
     fi
     if [ ! -x "$TRAFFIC_BIN" ]; then
-        echo "traffic_stats binary not found"
+        echo "$NAME: traffic_stats binary not found"
         return 1
     fi
     # Enable conntrack byte accounting
     echo 1 > /proc/sys/net/netfilter/nf_conntrack_acct 2>/dev/null
+
+    # traffic_stats daemonises and writes its own PID file. Never block
+    # the boot chain waiting for it: this script runs inside the serial
+    # rc5.d sequence and anything that waits here delays every later
+    # service. Start it and move on; `status` reports the real state.
     "$TRAFFIC_BIN"
-    echo "traffic_stats started"
+    if [ "$?" -eq 0 ]; then
+        echo "$NAME: traffic_stats started"
+    else
+        echo "$NAME: traffic_stats failed to start"
+        return 1
+    fi
 }
 
 stop_traffic() {
-    if is_running "$TRAFFIC_PID"; then
-        kill "$(cat "$TRAFFIC_PID")" 2>/dev/null
+    if is_running; then
+        kill "$PID" 2>/dev/null
         rm -f "$TRAFFIC_PID"
-        echo "traffic_stats stopped"
+        echo "$NAME: traffic_stats stopped"
     else
-        echo "traffic_stats not running"
+        # is_running already removed a stale file; this covers the rest.
+        rm -f "$TRAFFIC_PID"
+        echo "$NAME: traffic_stats not running"
     fi
 }
 
@@ -59,10 +92,11 @@ case "$1" in
         $0 start
         ;;
     status)
-        if is_running "$TRAFFIC_PID"; then
-            echo "traffic_stats: running (pid $(cat "$TRAFFIC_PID"))"
+        if is_running; then
+            echo "traffic_stats: running (pid $PID)"
         else
             echo "traffic_stats: stopped"
+            exit 3
         fi
         ;;
     *)

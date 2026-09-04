@@ -266,9 +266,9 @@
 
     function _loadNetwork() {
         var tab = $('#conn-tab-network');
-        if (!tab) return;
+        if (!tab) return Promise.resolve();
 
-        Promise.all([
+        return Promise.all([
             API.webapi('GetConnectionSettings').catch(function() { return null; }),
             API.webapi('GetNetworkSettings').catch(function() { return null; }),
             API.webapi('GetNetworkInfo').catch(function() { return null; }),
@@ -347,10 +347,10 @@
                         '<label><input type="checkbox" id="m-roaming"' + (roaming === '1' || roaming === 1 ? ' checked' : '') + '> Connect while roaming</label>' +
                     '</div>' +
                     '<div class="form-actions">' +
-                        '<button ' + actionAttr('connSaveConn') + '>Save</button>' +
+                        '<button ' + actionAttr('connSaveConn') + ' id="m-save-conn">Save</button>' +
                         (connected ?
-                            '<button class="btn-outline" ' + actionAttr('connDisconnect') + '>Disconnect</button>' :
-                            '<button class="btn-outline" ' + actionAttr('connConnect') + '>Connect</button>') +
+                            '<button class="btn-outline" ' + actionAttr('connDisconnect') + ' id="m-disconnect">Disconnect</button>' :
+                            '<button class="btn-outline" ' + actionAttr('connConnect') + ' id="m-connect">Connect</button>') +
                     '</div>' +
                 '</div>' +
 
@@ -372,8 +372,8 @@
                         '<label><input type="checkbox" id="m-autodisconn"' + (us.AutoDisconnFlag === '1' || us.AutoDisconnFlag === 1 ? ' checked' : '') + '> Auto-disconnect at limit</label>' +
                     '</div>' +
                     '<div class="form-actions">' +
-                        '<button ' + actionAttr('connSavePlan') + '>Save Plan</button>' +
-                        '<button class="btn-outline" ' + actionAttr('connResetCounters') + '>Reset Counters</button>' +
+                        '<button ' + actionAttr('connSavePlan') + ' id="m-save-plan">Save Plan</button>' +
+                        '<button class="btn-outline" ' + actionAttr('connResetCounters') + ' id="m-reset-counters">Reset Counters</button>' +
                     '</div>' +
                 '</div>' +
 
@@ -444,7 +444,7 @@
                         '</tr>';
                 });
                 html += '</tbody></table>' +
-                    '<div class="form-actions mt-1"><button class="btn-outline" ' + actionAttr('connAutoNet') + '>Back to Auto</button></div>';
+                    '<div class="form-actions mt-1"><button class="btn-outline" ' + actionAttr('connAutoNet') + ' id="m-auto-net">Back to Auto</button></div>';
                 el.innerHTML = html;
             }).catch(function() {
                 _pollNetSearch(attempt + 1);
@@ -452,20 +452,31 @@
         }, 2000);
     }
 
+    // Several operations only take effect after the modem settles; wait, then
+    // reload, so the success toast is not shown before the state is real.
+    function _reloadAfter(ms) {
+        return new Promise(function(r) { setTimeout(r, ms); }).then(_loadNetwork);
+    }
+
     function _connRegNet(networkId) {
         var el = $('#m-netsearch');
         if (el) el.innerHTML += '<div class="page-loading"><div class="spinner"></div> Registering...</div>';
-        API.webapi('RegisterNetwork', { NetworkID: networkId }).then(function() {
-            alert('Registered on network. Reconnecting...');
-            setTimeout(_loadNetwork, 3000);
-        }).catch(function(e) { alert('Error: ' + e.message); });
+        App.wrapFormSubmit(null, function() {
+            return API.webapi('RegisterNetwork', { NetworkID: networkId }).then(function() {
+                return _reloadAfter(3000);
+            });
+        }, {
+            key: 'conn-register',
+            success: 'Registered on the network - reconnecting'
+        });
     }
 
     function _connAutoNet() {
-        API.webapi('SetNetworkSettings', { NetselectionMode: 0 }).then(function() {
-            alert('Switched to automatic network selection.');
-            setTimeout(_loadNetwork, 3000);
-        }).catch(function(e) { alert('Error: ' + e.message); });
+        App.wrapFormSubmit('#m-auto-net', function() {
+            return API.webapi('SetNetworkSettings', { NetselectionMode: 0 }).then(function() {
+                return _reloadAfter(3000);
+            });
+        }, { pending: 'Switching\u2026', success: 'Switched to automatic network selection' });
     }
 
     // Feature 5: Connection settings
@@ -478,23 +489,21 @@
             RoamingConnect: $('#m-roaming').checked ? 1 : 0,
             PdpType: isNaN(pdp) ? 3 : pdp
         };
-        API.webapi('SetConnectionSettings', params).then(function() {
-            alert('Connection settings saved.');
-        }).catch(function(e) { alert('Error: ' + e.message); });
+        App.wrapFormSubmit('#m-save-conn', function() {
+            return API.webapi('SetConnectionSettings', params);
+        }, { success: 'Connection settings saved' });
     }
 
     function _connConnect() {
-        API.webapi('Connect').then(function() {
-            alert('Connecting...');
-            setTimeout(_loadNetwork, 3000);
-        }).catch(function(e) { alert('Error: ' + e.message); });
+        App.wrapFormSubmit('#m-connect', function() {
+            return API.webapi('Connect').then(function() { return _reloadAfter(3000); });
+        }, { pending: 'Connecting\u2026', success: 'Connecting to the mobile network' });
     }
 
     function _connDisconnect() {
-        API.webapi('DisConnect').then(function() {
-            alert('Disconnected.');
-            setTimeout(_loadNetwork, 2000);
-        }).catch(function(e) { alert('Error: ' + e.message); });
+        App.wrapFormSubmit('#m-disconnect', function() {
+            return API.webapi('DisConnect').then(function() { return _reloadAfter(2000); });
+        }, { pending: 'Disconnecting\u2026', success: 'Disconnected from the mobile network' });
     }
 
     // Feature 4: Data plan
@@ -504,21 +513,26 @@
             BillingDay: $('#m-billday').value || '1',
             AutoDisconnFlag: $('#m-autodisconn').checked ? '1' : '0'
         };
-        API.webapi('SetUsageSettings', params).then(function() {
-            alert('Data plan saved.');
-        }).catch(function(e) { alert('Error: ' + e.message); });
+        App.wrapFormSubmit('#m-save-plan', function() {
+            return API.webapi('SetUsageSettings', params);
+        }, { success: 'Data plan saved' });
     }
 
     function _connResetCounters() {
-        if (!confirm('Reset data usage counters?')) return;
-        API.webapi('SetUsageRecordClear').then(function() {
-            alert('Counters reset.');
-            setTimeout(_loadNetwork, 1000);
-        }).catch(function(e) { alert('Error: ' + e.message); });
+        App.confirmDialog(
+            'Reset the data usage counters to zero? The recorded history is discarded.',
+            function() {
+                App.wrapFormSubmit('#m-reset-counters', function() {
+                    return API.webapi('SetUsageRecordClear').then(function() { return _reloadAfter(1000); });
+                }, { success: 'Data usage counters reset' });
+            }, null,
+            { title: 'Reset counters', confirmText: 'Reset', danger: true });
     }
 
     function _connSetMode() {
-        alert('Changing preferred mode is disabled until the router NetworkMode enum values are verified.');
+        App.showNotification(
+            'Changing the preferred mode is disabled until the router NetworkMode enum values are verified.',
+            'info', 6000);
     }
 
     App.registerPage('connection', renderConnection);

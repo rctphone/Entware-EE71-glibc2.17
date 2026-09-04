@@ -49,7 +49,7 @@
             '<div class="card">' +
                 '<h3>Export Config</h3>' +
                 '<p class="text-small">Download all custom settings as JSON file.</p>' +
-                '<button ' + actionAttr('backupExport') + '>Export Configuration</button>' +
+                '<button id="backup-export-btn" ' + actionAttr('backupExport') + '>Export Configuration</button>' +
                 '<div id="backup-export-status" class="mt-1"></div>' +
             '</div>' +
             '<div class="card mt-2">' +
@@ -57,7 +57,7 @@
                 '<p class="text-small">Upload a previously exported ee71-config.json file.</p>' +
                 '<input type="file" id="backup-import-file" accept=".json">' +
                 '<div class="form-actions mt-1">' +
-                    '<button ' + actionAttr('backupValidate') + '>Validate</button>' +
+                    '<button id="backup-validate-btn" ' + actionAttr('backupValidate') + '>Validate</button>' +
                 '</div>' +
                 '<div id="backup-import-result" class="mt-1"></div>' +
             '</div>';
@@ -66,128 +66,131 @@
     function _backupExport() {
         var el = $('#backup-export-status');
         if (el) el.textContent = 'Gathering settings...';
-        Promise.all([
-            API.webapi('GetWlanSettings').catch(function() { return null; }),
-            API.webapi('GetLanSettings').catch(function() { return null; }),
-            API.cgiGet('ttl.cgi', { action: 'status' }).catch(function() { return null; }),
-            API.cgiGet('wireguard.cgi', { action: 'config' }).catch(function() { return null; }),
-            API.cgiGet('shadowsocks.cgi', { action: 'config' }).catch(function() { return null; }),
-            API.cgiGet('sms_fwd.cgi', { action: 'config' }).catch(function() { return null; }),
-            API.cgiGet('ssh.cgi', { action: 'status' }).catch(function() { return null; }),
-            API.cgiGet('ssh.cgi', { action: 'keys' }).catch(function() { return null; }),
-            API.cgiGet('usbcomp.cgi', { action: 'status' }).catch(function() { return null; }),
-            API.cgiGet('power.cgi', { action: 'status' }).catch(function() { return null; }),
-            API.webapi('GetProfileList').catch(function() { return null; }),
-            API.webapi('GetConnectionSettings').catch(function() { return null; }),
-            API.cgiGet('system.cgi', { action: 'backup-extra' }).catch(function() { return null; }),
-        ]).then(function(r) {
-            var wifi = r[0], lan = r[1], ttl = r[2], wg = r[3], ss = r[4];
-            var sms = r[5], ssh = r[6], sshKeys = r[7], usb = r[8], power = r[9], apn = r[10], conn = r[11], extra = r[12];
+        App.wrapFormSubmit('#backup-export-btn', function() {
+            return Promise.all([
+                API.webapi('GetWlanSettings').catch(function() { return null; }),
+                API.webapi('GetLanSettings').catch(function() { return null; }),
+                API.cgiGet('ttl.cgi', { action: 'status' }).catch(function() { return null; }),
+                API.cgiGet('wireguard.cgi', { action: 'config' }).catch(function() { return null; }),
+                API.cgiGet('shadowsocks.cgi', { action: 'config' }).catch(function() { return null; }),
+                API.cgiGet('sms_fwd.cgi', { action: 'config' }).catch(function() { return null; }),
+                API.cgiGet('ssh.cgi', { action: 'status' }).catch(function() { return null; }),
+                API.cgiGet('ssh.cgi', { action: 'keys' }).catch(function() { return null; }),
+                API.cgiGet('usbcomp.cgi', { action: 'status' }).catch(function() { return null; }),
+                API.cgiGet('power.cgi', { action: 'status' }).catch(function() { return null; }),
+                API.webapi('GetProfileList').catch(function() { return null; }),
+                API.webapi('GetConnectionSettings').catch(function() { return null; }),
+                API.cgiGet('system.cgi', { action: 'backup-extra' }).catch(function() { return null; }),
+            ]).then(function(r) {
+                var wifi = r[0], lan = r[1], ttl = r[2], wg = r[3], ss = r[4];
+                var sms = r[5], ssh = r[6], sshKeys = r[7], usb = r[8], power = r[9], apn = r[10], conn = r[11], extra = r[12];
 
-            var config = {
-                version: 1,
-                timestamp: Math.floor(Date.now() / 1000),
-            };
-
-            if (wifi) {
-                var ap2g = wifi.AP2G || {};
-                var ap5g = wifi.AP5G || {};
-                var guest5g = wifi.AP2G_guest || wifi.AP5G_guest || {};
-                var wifiMode = _wifiModeForExport(wifi, extra && extra.wlan_mode);
-                var src5g = wifiMode === 'dual' ? guest5g : ap5g;
-                config.wifi = {
-                    mode: wifiMode,
-                    ssid_24: ap2g.Ssid || wifi.WlanSSID || '',
-                    password_24: ap2g.WpaKey || wifi.WlanAPPwd || '',
-                    channel_24: ap2g.Channel != null ? String(ap2g.Channel) : (wifi.WlanChannel || '0'),
-                    mode_24: wifi.WlanMode || '',
-                    bandwidth_24: wifi.WlanBandwidth || '',
-                    ssid_5g: src5g.Ssid || wifi.WlanSSID_5G || '',
-                    password_5g: src5g.WpaKey || wifi.WlanAPPwd_5G || '',
-                    channel_5g: src5g.Channel != null ? String(src5g.Channel) : (wifi.WlanChannel_5G || '0'),
-                    mode_5g: wifi.WlanMode_5G || '',
-                    bandwidth_5g: wifi.WlanBandwidth_5G || '',
-                    ap_status_24: ap2g.ApStatus != null ? parseInt(ap2g.ApStatus, 10) : null,
-                    ap_status_5g: ap5g.ApStatus != null ? parseInt(ap5g.ApStatus, 10) : null,
-                    guest_status_5g: src5g.ApStatus != null ? parseInt(src5g.ApStatus, 10) : null,
+                var config = {
+                    version: 1,
+                    timestamp: Math.floor(Date.now() / 1000),
                 };
-            }
 
-            if (lan) config.network = {
-                gateway: lan.IPv4IPAddress || lan.GatewayIP || '',
-                subnet: lan.SubnetMask || '',
-                dhcp_start: lan.StartIPAddress || lan.DhcpStartIP || '',
-                dhcp_end: lan.EndIPAddress || lan.DhcpEndIP || '',
-                dhcp_lease: lan.DHCPLeaseTime || lan.DhcpLeaseTime || '',
-                hostname: lan.host_name || '',
-            };
+                if (wifi) {
+                    var ap2g = wifi.AP2G || {};
+                    var ap5g = wifi.AP5G || {};
+                    var guest5g = wifi.AP2G_guest || wifi.AP5G_guest || {};
+                    var wifiMode = _wifiModeForExport(wifi, extra && extra.wlan_mode);
+                    var src5g = wifiMode === 'dual' ? guest5g : ap5g;
+                    config.wifi = {
+                        mode: wifiMode,
+                        ssid_24: ap2g.Ssid || wifi.WlanSSID || '',
+                        password_24: ap2g.WpaKey || wifi.WlanAPPwd || '',
+                        channel_24: ap2g.Channel != null ? String(ap2g.Channel) : (wifi.WlanChannel || '0'),
+                        mode_24: wifi.WlanMode || '',
+                        bandwidth_24: wifi.WlanBandwidth || '',
+                        ssid_5g: src5g.Ssid || wifi.WlanSSID_5G || '',
+                        password_5g: src5g.WpaKey || wifi.WlanAPPwd_5G || '',
+                        channel_5g: src5g.Channel != null ? String(src5g.Channel) : (wifi.WlanChannel_5G || '0'),
+                        mode_5g: wifi.WlanMode_5G || '',
+                        bandwidth_5g: wifi.WlanBandwidth_5G || '',
+                        ap_status_24: ap2g.ApStatus != null ? parseInt(ap2g.ApStatus, 10) : null,
+                        ap_status_5g: ap5g.ApStatus != null ? parseInt(ap5g.ApStatus, 10) : null,
+                        guest_status_5g: src5g.ApStatus != null ? parseInt(src5g.ApStatus, 10) : null,
+                    };
+                }
 
-            if (ttl) config.firewall = { ttl: ttl };
-            if (wg && !wg.error) config.wireguard = wg;
-            if (ss && ss.server) config.shadowsocks = ss;
-            if (sms && !sms.error) config.sms_forward = sms;
+                if (lan) config.network = {
+                    gateway: lan.IPv4IPAddress || lan.GatewayIP || '',
+                    subnet: lan.SubnetMask || '',
+                    dhcp_start: lan.StartIPAddress || lan.DhcpStartIP || '',
+                    dhcp_end: lan.EndIPAddress || lan.DhcpEndIP || '',
+                    dhcp_lease: lan.DHCPLeaseTime || lan.DhcpLeaseTime || '',
+                    hostname: lan.host_name || '',
+                };
 
-            if (ssh) {
-                config.ssh = { port: ssh.port || 22 };
-                if (sshKeys && sshKeys.length) config.ssh.keys = sshKeys;
-            }
+                if (ttl) config.firewall = { ttl: ttl };
+                if (wg && !wg.error) config.wireguard = wg;
+                if (ss && ss.server) config.shadowsocks = ss;
+                if (sms && !sms.error) config.sms_forward = sms;
 
-            if (usb) config.usb = { pid: usb.pid || '', functions: usb.functions || '' };
+                if (ssh) {
+                    config.ssh = { port: ssh.port || 22 };
+                    if (sshKeys && sshKeys.length) config.ssh.keys = sshKeys;
+                }
 
-            if (power) config.power = {
-                auto_off_enable: power.auto_off_enable,
-                auto_off_time: power.auto_off_time,
-                wifi_off_enable: power.wifi_off_enable,
-                wifi_off_time: power.wifi_off_time,
-                led_off: power.led_off_no_client,
-            };
+                if (usb) config.usb = { pid: usb.pid || '', functions: usb.functions || '' };
 
-            var apnList = apn && (apn.ProfileList || apn);
-            if (Array.isArray(apnList) && apnList.length) config.apn = apnList;
+                if (power) config.power = {
+                    auto_off_enable: power.auto_off_enable,
+                    auto_off_time: power.auto_off_time,
+                    wifi_off_enable: power.wifi_off_enable,
+                    wifi_off_time: power.wifi_off_time,
+                    led_off: power.led_off_no_client,
+                };
 
-            if (conn) config.connection = {
-                ConnectMode: conn.ConnectMode,
-                IdleTime: conn.IdleTime,
-                RoamingConnect: conn.RoamingConnect,
-                PdpType: conn.PdpType,
-            };
+                var apnList = apn && (apn.ProfileList || apn);
+                if (Array.isArray(apnList) && apnList.length) config.apn = apnList;
 
-            if (extra) {
-                config.system = {};
-                if (extra.wlan_mode) config.system.wlan_mode = extra.wlan_mode;
-                if (extra.authorized_keys) config.system.authorized_keys = extra.authorized_keys;
-                if (extra.hosts) config.system.hosts = extra.hosts;
-                if (extra.wg_init) config.system.wg_init = extra.wg_init;
-                if (extra.user_apn_profiles && extra.user_apn_profiles.length) config.system.user_apn_profiles = extra.user_apn_profiles;
-                if (extra.disabled_inits && extra.disabled_inits.length) config.system.disabled_inits = extra.disabled_inits;
-            }
+                if (conn) config.connection = {
+                    ConnectMode: conn.ConnectMode,
+                    IdleTime: conn.IdleTime,
+                    RoamingConnect: conn.RoamingConnect,
+                    PdpType: conn.PdpType,
+                };
 
-            var blob = new Blob([JSON.stringify(config, null, 2)], { type: 'application/json' });
-            var url = URL.createObjectURL(blob);
-            var a = document.createElement('a');
-            a.href = url;
-            a.download = 'ee71-config.json';
-            a.click();
-            URL.revokeObjectURL(url);
-            if (el) el.textContent = 'Exported.';
-        }).catch(function(e) {
-            if (el) el.textContent = 'Export failed: ' + e.message;
-        });
+                if (extra) {
+                    config.system = {};
+                    if (extra.wlan_mode) config.system.wlan_mode = extra.wlan_mode;
+                    if (extra.authorized_keys) config.system.authorized_keys = extra.authorized_keys;
+                    if (extra.hosts) config.system.hosts = extra.hosts;
+                    if (extra.wg_init) config.system.wg_init = extra.wg_init;
+                    if (extra.user_apn_profiles && extra.user_apn_profiles.length) config.system.user_apn_profiles = extra.user_apn_profiles;
+                    if (extra.disabled_inits && extra.disabled_inits.length) config.system.disabled_inits = extra.disabled_inits;
+                }
+
+                var blob = new Blob([JSON.stringify(config, null, 2)], { type: 'application/json' });
+                var url = URL.createObjectURL(blob);
+                var a = document.createElement('a');
+                a.href = url;
+                a.download = 'ee71-config.json';
+                a.click();
+                URL.revokeObjectURL(url);
+                if (el) el.textContent = 'Exported.';
+            });
+        }, { pending: 'Exporting\u2026', error: 'Export failed', success: 'Configuration exported' });
     }
 
     function _backupValidate() {
         var input = $('#backup-import-file');
         var result = $('#backup-import-result');
         if (!input || !input.files || !input.files[0]) {
-            if (result) result.textContent = 'Select a file first';
+            App.renderFieldError('#backup-import-file', 'Choose an ee71-config.json file first');
             return;
         }
+        App.clearFieldError('#backup-import-file');
         var reader = new FileReader();
         reader.onload = function(e) {
             try {
                 var data = JSON.parse(e.target.result);
                 if (data.version !== 1) {
-                    if (result) result.textContent = 'Unsupported config version: ' + (data.version || 'none');
+                    App.showNotification(
+                        'Unsupported config version: ' + (data.version || 'none') + ' (expected 1)', 'error');
+                    if (result) result.textContent = '';
                     return;
                 }
                 var sections = [];
@@ -207,7 +210,8 @@
                 if (result) result.innerHTML = 'Valid config v1. Sections: ' + escHtml(sections.join(', ') || 'none') +
                     '<br><button class="mt-1" ' + actionAttr('backupImport') + '>Import Now</button>';
             } catch (ex) {
-                if (result) result.textContent = 'Invalid JSON file';
+                App.showNotification('That file is not valid JSON', 'error');
+                if (result) result.textContent = '';
             }
         };
         reader.readAsText(input.files[0]);
@@ -216,11 +220,15 @@
     function _backupImport() {
         var result = $('#backup-import-result');
         if (!_backupData) {
-            if (result) result.textContent = 'Validate a file first';
+            App.showNotification('Validate a config file first', 'error');
             return;
         }
-        if (!confirm('Import will overwrite current settings. Continue?')) return;
-        _doImport(_backupData, result);
+        App.confirmDialog(
+            'Importing overwrites the current WiFi, network, firewall, VPN and system settings with the ' +
+            'contents of this file. Export the current configuration first if you might want it back.',
+            function() { _doImport(_backupData, result); },
+            null,
+            { title: 'Import configuration', confirmText: 'Import', danger: true });
     }
 
     function _doImport(data, el) {
@@ -364,9 +372,26 @@
         }
 
         if (el) el.textContent = 'Importing...';
-        Promise.all(tasks.map(function(t) { return t.catch(function(e) { return e; }); })).then(function() {
-            _backupData = null;
-            if (el) el.textContent = 'Imported: ' + (applied.join(', ') || 'none') + '. Some settings may require restart.';
+        App.wrapFormSubmit(null, function() {
+            return Promise.all(tasks.map(function(t) { return t.catch(function(e) { return e; }); }))
+                .then(function() {
+                    _backupData = null;
+                    // The inline line carries the detail (which sections landed), the
+                    // toast carries the verdict. Both must agree: the old order wrote
+                    // "Imported: none" and then threw, so the page claimed success while
+                    // the toast said it failed.
+                    if (!applied.length) {
+                        if (el) el.textContent = 'Nothing was applied - no section of this file could be imported.';
+                        throw new Error('no section of this file could be imported');
+                    }
+                    var summary = applied.join(', ');
+                    if (el) el.textContent = 'Imported: ' + summary + '. Some settings may require a restart.';
+                    return summary;
+                });
+        }, {
+            key: 'backup-import',
+            error: 'Import failed',
+            success: 'Configuration imported - some settings need a restart'
         });
     }
 

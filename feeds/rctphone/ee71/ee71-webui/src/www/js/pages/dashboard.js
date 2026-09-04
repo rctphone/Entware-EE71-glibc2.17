@@ -193,7 +193,7 @@
                             var devIcon = isPhone ? 'ic-mobile' : 'ic-computer';
                             var conn = d.connection || '';
                             var connIcon = conn === 'usb' ? 'ic-usb' : 'ic-wifi';
-                            var signal = d.rssi != null ? ' ' + d.rssi + ' dBm' : '';
+                            var signal = d.rssi != null ? ' ' + App.escHtml(d.rssi) + ' dBm' : '';
                             return '<div class="device-row">' +
                                 icon(devIcon) +
                                 '<span class="device-name">' + escHtml(d.name || d.DeviceName || d.HostName || d.ip || d.mac || '?') + '</span>' +

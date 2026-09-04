@@ -28,7 +28,12 @@
     function _deleteBrokenApnProfiles(pending, replacement, skipped) {
         skipped = skipped || 0;
         if (!pending.length) {
-            if (skipped) alert('Skipped ' + skipped + ' default broken profile(s) because there is no valid replacement profile.');
+            if (skipped) {
+                App.showNotification('Skipped ' + skipped +
+                    ' default broken profile(s): no valid replacement to make default first.', 'error', 8000);
+            } else {
+                App.showNotification('Broken APN profiles removed', 'success');
+            }
             _loadAPNContent();
             return;
         }
@@ -42,11 +47,15 @@
         var deleteNow = function() {
             API.webapi('DeleteProfile', { ProfileID: pid }).then(function() {
                 _deleteBrokenApnProfiles(pending, replacement, skipped);
-            }).catch(function(e) { alert('Error: ' + e.message); });
+            }).catch(function(e) {
+                App.showNotification('Delete failed: ' + App.errorText(e), 'error');
+            });
         };
         if (isDefault && replacement) {
             API.webapi('SetDefaultProfile', { ProfileID: parseInt(replacement.ProfileID, 10) }).then(deleteNow)
-                .catch(function(e) { alert('Error switching default: ' + e.message); });
+                .catch(function(e) {
+                    App.showNotification('Could not switch the default profile: ' + App.errorText(e), 'error');
+                });
             return;
         }
         if (isDefault && !replacement) {
@@ -113,10 +122,10 @@
 
     function _loadNetwork() {
         var tab = $('#mset-tab-network');
-        if (!tab) return;
+        if (!tab) return Promise.resolve();
         tab.innerHTML = '<div class="card"><div class="page-loading"><div class="spinner"></div> Loading...</div></div>';
 
-        Promise.all([
+        return Promise.all([
             API.webapi('GetConnectionSettings').catch(function() { return null; }),
             API.webapi('GetNetworkSettings').catch(function() { return null; }),
             API.webapi('GetNetworkInfo').catch(function() { return null; }),
@@ -195,10 +204,10 @@
                         '<label><input type="checkbox" id="ms-roaming"' + (roaming === '1' || roaming === 1 ? ' checked' : '') + '> Connect while roaming</label>' +
                     '</div>' +
                     '<div class="form-actions">' +
-                        '<button ' + actionAttr('msetSaveConn') + '>Save</button>' +
+                        '<button ' + actionAttr('msetSaveConn') + ' id="ms-save-conn">Save</button>' +
                         (connected ?
-                            '<button class="btn-outline" ' + actionAttr('msetDisconnect') + '>Disconnect</button>' :
-                            '<button class="btn-outline" ' + actionAttr('msetConnect') + '>Connect</button>') +
+                            '<button class="btn-outline" ' + actionAttr('msetDisconnect') + ' id="ms-disconnect">Disconnect</button>' :
+                            '<button class="btn-outline" ' + actionAttr('msetConnect') + ' id="ms-connect">Connect</button>') +
                     '</div>' +
                 '</div>' +
 
@@ -220,8 +229,8 @@
                         '<label><input type="checkbox" id="ms-autodisconn"' + (us.AutoDisconnFlag === '1' || us.AutoDisconnFlag === 1 ? ' checked' : '') + '> Auto-disconnect at limit</label>' +
                     '</div>' +
                     '<div class="form-actions">' +
-                        '<button ' + actionAttr('msetSavePlan') + '>Save Plan</button>' +
-                        '<button class="btn-outline" ' + actionAttr('msetResetCounters') + '>Reset Counters</button>' +
+                        '<button ' + actionAttr('msetSavePlan') + ' id="ms-save-plan">Save Plan</button>' +
+                        '<button class="btn-outline" ' + actionAttr('msetResetCounters') + ' id="ms-reset-counters">Reset Counters</button>' +
                     '</div>' +
                 '</div>' +
 
@@ -242,7 +251,9 @@
     }
 
     function _msetNetMode() {
-        alert('Changing preferred mode is disabled until the router NetworkMode enum values are verified.');
+        App.showNotification(
+            'Changing the preferred mode is disabled until the router NetworkMode enum values are verified.',
+            'info', 6000);
     }
 
     // Operator search
@@ -287,67 +298,78 @@
                         '<td>' + escHtml(rat) + '</td><td>' + escHtml(state) + '</td>' +
                         '<td><button class="btn-small" ' + actionAttr('msetRegNet', [netId]) + '>Register</button></td></tr>';
                 });
-                html += '</tbody></table><div class="form-actions mt-1"><button class="btn-outline" ' + actionAttr('msetAutoNet') + '>Back to Auto</button></div>';
+                html += '</tbody></table><div class="form-actions mt-1"><button class="btn-outline" ' + actionAttr('msetAutoNet') + ' id="ms-auto-net">Back to Auto</button></div>';
                 el.innerHTML = html;
             }).catch(function() { _msPollNetSearch(attempt + 1); });
         }, 2000);
     }
 
+    // Several operations only take effect after the modem settles; wait, then
+    // reload, so the success toast is not shown before the state is real.
+    function _reloadAfter(ms) {
+        return new Promise(function(r) { setTimeout(r, ms); }).then(_loadNetwork);
+    }
+
     function _msetRegNet(networkId) {
-        API.webapi('RegisterNetwork', { NetworkID: networkId }).then(function() {
-            alert('Registered on network.');
-            setTimeout(_loadNetwork, 3000);
-        }).catch(function(e) { alert('Error: ' + e.message); });
+        App.wrapFormSubmit(null, function() {
+            return API.webapi('RegisterNetwork', { NetworkID: networkId })
+                .then(function() { return _reloadAfter(3000); });
+        }, { key: 'mset-register', success: 'Registered on the network' });
     }
 
     function _msetAutoNet() {
-        API.webapi('SetNetworkSettings', { NetselectionMode: 0 }).then(function() {
-            alert('Switched to auto.');
-            setTimeout(_loadNetwork, 3000);
-        }).catch(function(e) { alert('Error: ' + e.message); });
+        App.wrapFormSubmit('#ms-auto-net', function() {
+            return API.webapi('SetNetworkSettings', { NetselectionMode: 0 })
+                .then(function() { return _reloadAfter(3000); });
+        }, { pending: 'Switching\u2026', success: 'Switched to automatic network selection' });
     }
 
     // Connection settings
     function _msetSaveConn() {
         var pdp = parseInt($('#ms-pdptype').value, 10);
         var idle = parseInt($('#ms-idle').value, 10) || 0;
-        API.webapi('SetConnectionSettings', {
-            ConnectMode: parseInt($('#ms-connmode').value, 10),
-            IdleTime: idle,
-            RoamingConnect: $('#ms-roaming').checked ? 1 : 0,
-            PdpType: isNaN(pdp) ? 3 : pdp
-        }).then(function() { alert('Saved.'); }).catch(function(e) { alert('Error: ' + e.message); });
+        App.wrapFormSubmit('#ms-save-conn', function() {
+            return API.webapi('SetConnectionSettings', {
+                ConnectMode: parseInt($('#ms-connmode').value, 10),
+                IdleTime: idle,
+                RoamingConnect: $('#ms-roaming').checked ? 1 : 0,
+                PdpType: isNaN(pdp) ? 3 : pdp
+            });
+        }, { success: 'Connection settings saved' });
     }
 
     function _msetConnect() {
-        API.webapi('Connect').then(function() {
-            alert('Connecting...');
-            setTimeout(_loadNetwork, 3000);
-        }).catch(function(e) { alert('Error: ' + e.message); });
+        App.wrapFormSubmit('#ms-connect', function() {
+            return API.webapi('Connect').then(function() { return _reloadAfter(3000); });
+        }, { pending: 'Connecting\u2026', success: 'Connecting to the mobile network' });
     }
 
     function _msetDisconnect() {
-        API.webapi('DisConnect').then(function() {
-            alert('Disconnected.');
-            setTimeout(_loadNetwork, 2000);
-        }).catch(function(e) { alert('Error: ' + e.message); });
+        App.wrapFormSubmit('#ms-disconnect', function() {
+            return API.webapi('DisConnect').then(function() { return _reloadAfter(2000); });
+        }, { pending: 'Disconnecting\u2026', success: 'Disconnected from the mobile network' });
     }
 
     // Data plan
     function _msetSavePlan() {
-        API.webapi('SetUsageSettings', {
-            MonthlyPlan: $('#ms-planlimit').value || '0',
-            BillingDay: $('#ms-billday').value || '1',
-            AutoDisconnFlag: $('#ms-autodisconn').checked ? '1' : '0'
-        }).then(function() { alert('Saved.'); }).catch(function(e) { alert('Error: ' + e.message); });
+        App.wrapFormSubmit('#ms-save-plan', function() {
+            return API.webapi('SetUsageSettings', {
+                MonthlyPlan: $('#ms-planlimit').value || '0',
+                BillingDay: $('#ms-billday').value || '1',
+                AutoDisconnFlag: $('#ms-autodisconn').checked ? '1' : '0'
+            });
+        }, { success: 'Data plan saved' });
     }
 
     function _msetResetCounters() {
-        if (!confirm('Reset data usage counters?')) return;
-        API.webapi('SetUsageRecordClear').then(function() {
-            alert('Counters reset.');
-            setTimeout(_loadNetwork, 1000);
-        }).catch(function(e) { alert('Error: ' + e.message); });
+        App.confirmDialog(
+            'Reset the data usage counters to zero? The recorded history is discarded.',
+            function() {
+                App.wrapFormSubmit('#ms-reset-counters', function() {
+                    return API.webapi('SetUsageRecordClear').then(function() { return _reloadAfter(1000); });
+                }, { success: 'Data usage counters reset' });
+            }, null,
+            { title: 'Reset counters', confirmText: 'Reset', danger: true });
     }
 
     // --- APN tab (from apn.js) ---
@@ -361,11 +383,11 @@
 
     function _loadAPNContent() {
         var el = $('#ms-apn-content');
-        if (!el) return;
+        if (!el) return Promise.resolve();
         el.innerHTML = '<div class="card"><div class="page-loading"><div class="spinner"></div> Loading...</div></div>';
         _editingAPN = null;
 
-        API.webapi('GetProfileList').then(function(profiles) {
+        return API.webapi('GetProfileList').then(function(profiles) {
             var list = profiles.ProfileList || profiles || [];
             if (!Array.isArray(list)) list = [];
             _apnList = list;
@@ -446,48 +468,67 @@
     }
 
     function _msetApnSave() {
+        App.clearFieldErrors('#mset-tab-apn');
+        var name = (($('#ms-apn-name') || {}).value || '').trim();
+        var apn = (($('#ms-apn-apn') || {}).value || '').trim();
+        if (!name) return App.renderFieldError('#ms-apn-name', 'Profile name is required');
+        if (!apn) return App.renderFieldError('#ms-apn-apn', 'APN is required');
+
         var params = {
-            ProfileName: ($('#ms-apn-name') || {}).value,
-            APN: ($('#ms-apn-apn') || {}).value,
+            ProfileName: name,
+            APN: apn,
             AuthType: ($('#ms-apn-auth') || {}).value || '0',
             UserName: ($('#ms-apn-user') || {}).value || '',
             Password: ($('#ms-apn-pass') || {}).value || '',
         };
-        if (!params.ProfileName || !params.APN) { alert('Name and APN required'); return; }
-        var method = _editingAPN !== null ? 'EditProfile' : 'AddNewProfile';
-        if (_editingAPN !== null) params.ProfileID = parseInt(_apnList[_editingAPN].ProfileID, 10);
-        API.webapi(method, params).then(function() {
-            _loadAPNContent();
-        }).catch(function(e) { alert('Error: ' + e.message); });
+        var editing = _editingAPN !== null;
+        var method = editing ? 'EditProfile' : 'AddNewProfile';
+        if (editing) params.ProfileID = parseInt(_apnList[_editingAPN].ProfileID, 10);
+
+        App.wrapFormSubmit('#ms-apn-submit', function() {
+            return API.webapi(method, params).then(_loadAPNContent);
+        }, { success: editing ? 'Profile updated' : 'Profile added' });
     }
 
     function _msetApnDel(i) {
-        if (!confirm('Delete APN profile?')) return;
         var p = _apnList[i];
+        if (!p) return;
         var pid = parseInt(p.ProfileID, 10);
         var isDefault = p.Default === 1 || p.Default === '1' || p.IsDefault === 1 || p.IsDefault === '1';
-        var doDelete = function() {
-            API.webapi('DeleteProfile', { ProfileID: pid }).then(function() {
-                _loadAPNContent();
-            }).catch(function(e) { alert('Error: ' + e.message); });
-        };
+        var replacement = null;
+
         if (isDefault && _apnList.length > 1) {
-            var other = _findReplacementApnDefault([pid]);
-            if (other) {
-                API.webapi('SetDefaultProfile', { ProfileID: parseInt(other.ProfileID, 10) }).then(doDelete)
-                    .catch(function(e) { alert('Error switching default: ' + e.message); });
+            replacement = _findReplacementApnDefault([pid]);
+            if (!replacement) {
+                App.showNotification(
+                    'Cannot delete the default profile: no valid replacement to make default first.', 'error');
                 return;
             }
-            alert('Cannot delete the default profile because there is no valid replacement profile.');
-            return;
         }
-        doDelete();
+
+        App.confirmDialog(
+            'Delete APN profile "' + (p.ProfileName || pid) + '"?' +
+                (replacement ? ' "' + (replacement.ProfileName || replacement.ProfileID) + '" becomes the default.' : ''),
+            function() {
+                App.wrapFormSubmit(null, function() {
+                    var chain = replacement
+                        ? API.webapi('SetDefaultProfile', { ProfileID: parseInt(replacement.ProfileID, 10) })
+                        : Promise.resolve();
+                    return chain
+                        .then(function() { return API.webapi('DeleteProfile', { ProfileID: pid }); })
+                        .then(_loadAPNContent);
+                }, { key: 'mset-apn-delete', success: 'Profile deleted' });
+            }, null,
+            { title: 'Delete APN profile', confirmText: 'Delete', danger: true });
     }
 
     function _msetApnDef(i) {
-        API.webapi('SetDefaultProfile', { ProfileID: parseInt(_apnList[i].ProfileID, 10) }).then(function() {
-            _loadAPNContent();
-        }).catch(function(e) { alert('Error: ' + e.message); });
+        var p = _apnList[i];
+        if (!p) return;
+        App.wrapFormSubmit(null, function() {
+            return API.webapi('SetDefaultProfile', { ProfileID: parseInt(p.ProfileID, 10) })
+                .then(_loadAPNContent);
+        }, { key: 'mset-apn-default', success: 'Default profile set to "' + (p.ProfileName || p.ProfileID) + '"' });
     }
 
     function _msetApnPurgeBroken() {
@@ -497,13 +538,14 @@
             return aDefault === bDefault ? 0 : (aDefault ? 1 : -1);
         });
         if (!broken.length) {
-            alert('No empty/NULL profiles found.');
+            App.showNotification('No empty/NULL profiles found.', 'info');
             return;
         }
-        if (!confirm('Delete ' + broken.length + ' empty/NULL APN profiles?')) return;
-        var brokenIds = broken.map(function(profile) { return parseInt(profile.ProfileID, 10); }).filter(function(pid) { return !isNaN(pid); });
-        var replacement = _findReplacementApnDefault(brokenIds);
-        _deleteBrokenApnProfiles(broken.slice(), replacement, 0);
+        App.confirmDialog('Delete ' + broken.length + ' empty/NULL APN profiles?', function() {
+            var brokenIds = broken.map(function(profile) { return parseInt(profile.ProfileID, 10); })
+                .filter(function(pid) { return !isNaN(pid); });
+            _deleteBrokenApnProfiles(broken.slice(), _findReplacementApnDefault(brokenIds), 0);
+        }, null, { title: 'Remove broken profiles', confirmText: 'Delete', danger: true });
     }
 
     // --- AT Terminal tab (from at-terminal.js) ---
@@ -561,12 +603,13 @@
             _atTerm.disable_input();
             API.cgiPost('at.cgi', { action: 'send', cmd: cmd }).then(function(r) {
                 if (r.error) {
-                    _atTerm.output('Error: ' + r.error);
+                    // Termino renders output with innerHTML, so escape here too.
+                    _atTerm.output('Error: ' + escHtml(r.error));
                 } else {
                     _atTerm.output(escHtml(r.output || '(no response)'));
                 }
             }).catch(function(e) {
-                _atTerm.output('Error: ' + e.message);
+                _atTerm.output('Error: ' + escHtml(App.errorText(e)));
             }).then(function() {
                 _atTerm.enable_input();
                 _atLoop();
@@ -606,7 +649,7 @@
                 if (!item) return;
                 var cmd = item.dataset.cmd;
                 if (item.dataset.warn && _atTerm) {
-                    _atTerm.output('\u26a0 Warning: ' + item.dataset.warn);
+                    _atTerm.output('\u26a0 Warning: ' + escHtml(item.dataset.warn));
                 }
                 var termInput = document.querySelector('#ms-at-terminal .termino-input');
                 if (termInput) { termInput.value = cmd; termInput.focus(); }

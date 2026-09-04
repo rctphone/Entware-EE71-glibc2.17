@@ -14,7 +14,7 @@
                 '</div>' +
             '</div>' +
             '<div class="wifi-save-row">' +
-                '<button ' + actionAttr('saveWifiAll') + '>Save</button>' +
+                '<button id="w-save-all" ' + actionAttr('saveWifiAll') + '>Save</button>' +
             '</div>';
 
         _loadWifiSettings();
@@ -152,24 +152,12 @@
         return { AP2G: ap2g, AP5G: ap5g, AP2G_guest: guest, AP5G_guest: guest };
     }
 
-    function _toast(msg, isErr) {
-        var el = document.getElementById('wifi-toast');
-        if (!el) {
-            el = document.createElement('div');
-            el.id = 'wifi-toast';
-            el.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);padding:8px 20px;border-radius:8px;font-size:0.85rem;z-index:9999;transition:opacity 0.3s;pointer-events:none;';
-            document.body.appendChild(el);
-        }
-        el.style.background = isErr ? 'var(--color-danger,#c62828)' : 'var(--color-success,#2e7d32)';
-        el.style.color = '#fff';
-        el.textContent = msg;
-        el.style.opacity = '1';
-        clearTimeout(el._t);
-        el._t = setTimeout(function() { el.style.opacity = '0'; }, 3000);
-    }
+    // Kept as a thin alias so the surrounding progress messages read the same;
+    // the toast itself is now the shared App.showNotification component.
+    var _toast = App.showNotification;
 
     function _loadWifiSettings() {
-        Promise.all([
+        return Promise.all([
             API.webapi('GetWlanSettings').catch(function() { return null; }),
             API.webapi('GetWlanState').catch(function() { return null; }),
             API.webapi('GetWlanSupportMode').catch(function() { return null; }),
@@ -263,7 +251,7 @@
             _applyWifi(params).then(function() {
                 _toast(want2g ? '2.4 GHz on' : '2.4 GHz off');
                 setTimeout(_loadWifiSettings, 8000);
-            }).catch(function(e) { _toast('Error: ' + e.message, true); });
+            }).catch(function(e) { _toast('Error: ' + App.errorText(e), true); });
         });
     }
 
@@ -315,7 +303,7 @@
             _applyWifi(params).then(function() {
                 _toast(want5g ? '5 GHz on' : '5 GHz off');
                 setTimeout(_loadWifiSettings, 8000);
-            }).catch(function(e) { _toast('Error: ' + e.message, true); });
+            }).catch(function(e) { _toast('Error: ' + App.errorText(e), true); });
         });
     }
 
@@ -332,7 +320,7 @@
                         _toast('5 GHz still down, retrying...');
                         API.cgiPost('wifi.cgi', { action: 'restart', target: 'guest' }).then(function() {
                             _schedule5gRepairCheck(retriesLeft - 1);
-                        }).catch(function(e) { _toast('Error: ' + e.message, true); });
+                        }).catch(function(e) { _toast('Error: ' + App.errorText(e), true); });
                         return;
                     }
                     _toast('5 GHz is still down after repair', true);
@@ -348,7 +336,7 @@
         API.cgiPost('wifi.cgi', { action: 'restart', target: 'guest' }).then(function() {
             _toast('5 GHz restart requested');
             _schedule5gRepairCheck(1);
-        }).catch(function(e) { _toast('Error: ' + e.message, true); });
+        }).catch(function(e) { _toast('Error: ' + App.errorText(e), true); });
     }
 
     function _securityOptions(current) {
@@ -424,11 +412,12 @@
             };
 
             var params = is5g ? _fullParams(null, advFields) : _fullParams(advFields, null);
-            _applyWifi(params).then(function() {
-                _hidePanel();
-                _toast('Saved');
-                setTimeout(_loadWifiSettings, 3000);
-            }).catch(function(e) { _toast('Error: ' + e.message, true); });
+            App.wrapFormSubmit('#wifi-panel-save', function() {
+                return _applyWifi(params).then(function() {
+                    _hidePanel();
+                    return new Promise(function(r) { setTimeout(r, 3000); });
+                }).then(_loadWifiSettings);
+            }, { pending: 'Applying\u2026', success: 'Advanced settings saved' });
         });
     }
 
@@ -463,51 +452,63 @@
 
     // --- Save handlers (main card only: SSID + security + password) ---
 
-    function _saveWifi24() {
-        var pw = ($('#w-pass') || {}).value || '';
-        var security = ($('#w-security') || {}).value || 'WPA2-PSK';
-        if (security !== 'OPEN' && pw.length < 8) {
-            _toast('Password must be at least 8 characters', true); return;
+    // hostapd restarts on apply and takes several seconds to come back; hold the
+    // pending state until then so the page does not look finished while the radio
+    // is still down.
+    var WIFI_SETTLE_MS = 8000;
+
+    function _applyAndReload(params) {
+        return _applyWifi(params).then(function() {
+            return new Promise(function(r) { setTimeout(r, WIFI_SETTLE_MS); });
+        }).then(_loadWifiSettings);
+    }
+
+    function _validateBand(prefix, label) {
+        var pw = (($('#' + prefix + '-pass') || {}).value) || '';
+        var security = (($('#' + prefix + '-security') || {}).value) || 'WPA2-PSK';
+        var ssid = (($('#' + prefix + '-ssid') || {}).value) || '';
+        if (!ssid.trim()) {
+            App.renderFieldError('#' + prefix + '-ssid', label + ' network name is required');
+            return null;
         }
-        var params = _fullParams({ Ssid: $('#w-ssid').value, WpaKey: pw, SecurityMode: SEC_REV[security] != null ? SEC_REV[security] : 3 }, null);
-        _applyWifi(params).then(function() {
-            _toast('Saved');
-            setTimeout(_loadWifiSettings, 8000);
-        }).catch(function(e) { _toast('Error: ' + e.message, true); });
+        if (security !== 'OPEN' && pw.length < 8) {
+            App.renderFieldError('#' + prefix + '-pass', label + ' password must be at least 8 characters');
+            return null;
+        }
+        return {
+            Ssid: ssid,
+            WpaKey: pw,
+            SecurityMode: SEC_REV[security] != null ? SEC_REV[security] : 3
+        };
+    }
+
+    function _saveWifi24() {
+        App.clearFieldErrors();
+        var band = _validateBand('w', '2.4 GHz');
+        if (!band) return;
+        App.wrapFormSubmit('#w-save-all', function() {
+            return _applyAndReload(_fullParams(band, null));
+        }, { pending: 'Applying\u2026', success: '2.4 GHz settings saved' });
     }
 
     function _saveWifi5g() {
-        var pw = ($('#w5-pass') || {}).value || '';
-        var security = ($('#w5-security') || {}).value || 'WPA2-PSK';
-        if (security !== 'OPEN' && pw.length < 8) {
-            _toast('Password must be at least 8 characters', true); return;
-        }
-        var params = _fullParams(null, { Ssid: $('#w5-ssid').value, WpaKey: pw, SecurityMode: SEC_REV[security] != null ? SEC_REV[security] : 3 });
-        _applyWifi(params).then(function() {
-            _toast('Saved');
-            setTimeout(_loadWifiSettings, 8000);
-        }).catch(function(e) { _toast('Error: ' + e.message, true); });
+        App.clearFieldErrors();
+        var band = _validateBand('w5', '5 GHz');
+        if (!band) return;
+        App.wrapFormSubmit('#w-save-all', function() {
+            return _applyAndReload(_fullParams(null, band));
+        }, { pending: 'Applying\u2026', success: '5 GHz settings saved' });
     }
 
     function _saveWifiAll() {
-        var pw2g = ($('#w-pass') || {}).value || '';
-        var sec2g = ($('#w-security') || {}).value || 'WPA2-PSK';
-        var pw5g = ($('#w5-pass') || {}).value || '';
-        var sec5g = ($('#w5-security') || {}).value || 'WPA2-PSK';
-        if (sec2g !== 'OPEN' && pw2g.length < 8) {
-            _toast('2.4 GHz password must be at least 8 characters', true); return;
-        }
-        if (sec5g !== 'OPEN' && pw5g.length < 8) {
-            _toast('5 GHz password must be at least 8 characters', true); return;
-        }
-        var params = _fullParams(
-            { Ssid: ($('#w-ssid') || {}).value || '', WpaKey: pw2g, SecurityMode: SEC_REV[sec2g] != null ? SEC_REV[sec2g] : 3 },
-            { Ssid: ($('#w5-ssid') || {}).value || '', WpaKey: pw5g, SecurityMode: SEC_REV[sec5g] != null ? SEC_REV[sec5g] : 3 }
-        );
-        _applyWifi(params).then(function() {
-            _toast('Saved');
-            setTimeout(_loadWifiSettings, 8000);
-        }).catch(function(e) { _toast('Error: ' + e.message, true); });
+        App.clearFieldErrors();
+        var b2 = _validateBand('w', '2.4 GHz');
+        if (!b2) return;
+        var b5 = _validateBand('w5', '5 GHz');
+        if (!b5) return;
+        App.wrapFormSubmit('#w-save-all', function() {
+            return _applyAndReload(_fullParams(b2, b5));
+        }, { pending: 'Applying\u2026', success: 'WiFi settings saved on both bands' });
     }
 
     function _togglePassVis(inputId) {

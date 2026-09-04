@@ -38,8 +38,28 @@ vpn_read() {
     [ -f "$VPN_CONF" ] && _VPN=$(sed -n 's/^VPN=//p' "$VPN_CONF")
 }
 
-vpn_write() {
-    printf 'VPN=%s\n' "$1" > "$VPN_CONF"
+# Bounds for the serialised VPN switch. The wait is deliberately much
+# shorter than the run: if another VPN change is already in flight, failing
+# fast with "in progress" beats freezing the single-threaded server for the
+# full apply budget on top of it. Worst case per request is the sum.
+VPN_LOCK_WAIT=10
+VPN_LOCK_RUN=45
+
+# vpn_switch <mode> — set /etc/vpn.conf and enforce it, serialised.
+#
+# wireguard.cgi, amneziawg.cgi and shadowsocks.cgi all write the same
+# /etc/vpn.conf and then run vpn_apply, which rewrites routes and
+# iptables and HUPs dnsmasq. Two of them running at once interleave those
+# mutations and leave the router in a state neither request asked for.
+# The write and the apply are one critical section held under a single
+# named lock shared by all three scripts.
+#
+# Returns 124 if the lock could not be taken in time.
+vpn_switch() {
+    with_lock vpn "$VPN_LOCK_WAIT" "$VPN_LOCK_RUN" sh -c '
+        printf "VPN=%s\n" "$2" > "$1"
+        exec "$3"
+    ' vpn_switch "$VPN_CONF" "$1" "$VPN_APPLY" >/dev/null 2>&1
 }
 
 # Read SS config JSON
@@ -178,8 +198,14 @@ enable)
     fi
 
     # Write VPN state and apply (stops WG if running, starts SS)
-    vpn_write "ss"
-    "$VPN_APPLY" >/dev/null 2>&1
+    vpn_switch "ss"
+    case "$?" in
+        0) ;;
+        124) json_err "VPN switch timed out (waited up to ${VPN_LOCK_WAIT}s for a concurrent VPN change, then up to ${VPN_LOCK_RUN}s to apply)"
+             exit 0 ;;
+        *)   json_err "vpn_apply failed while switching to ss"
+             exit 0 ;;
+    esac
 
     RUNNING=$(is_ss_running)
     printf '{"ok":true,"running":%d}' "$RUNNING"
@@ -187,8 +213,14 @@ enable)
 
 disable)
     # Write VPN off and apply (stops SS, cleans iptables)
-    vpn_write "off"
-    "$VPN_APPLY" >/dev/null 2>&1
+    vpn_switch "off"
+    case "$?" in
+        0) ;;
+        124) json_err "VPN switch timed out (waited up to ${VPN_LOCK_WAIT}s for a concurrent VPN change, then up to ${VPN_LOCK_RUN}s to apply)"
+             exit 0 ;;
+        *)   json_err "vpn_apply failed while switching to off"
+             exit 0 ;;
+    esac
 
     RUNNING=$(is_ss_running)
     printf '{"ok":true,"running":%d}' "$RUNNING"

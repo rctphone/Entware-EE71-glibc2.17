@@ -4,6 +4,11 @@
 echo "Content-Type: application/json"
 echo ""
 
+. /jrd-resource/resource/webrc/www/cgi-bin/lib/cgi-common.sh
+
+# Seconds to hold the modem node open (see the `ca` action).
+AT_READ_TIMEOUT=3
+
 ACTION="${QUERY_STRING%%&*}"
 ACTION="${ACTION#action=}"
 
@@ -52,11 +57,22 @@ ca)
         exit 0
     fi
 
-    # Send AT command, capture response
-    exec 3<>"$AT_DEV"
-    printf 'AT$QCRSRP?\r' >&3
-    _resp=$(timeout 2 cat <&3 2>/dev/null | head -10)
-    exec 3>&-
+    # Send AT command, capture response. Open + write + read all run in
+    # one bounded child: opening the modem node can itself block when the
+    # modem is wedged, and webs is single-threaded, so a bound on the read
+    # alone would not stop this from freezing the whole UI. `exec cat` so
+    # the reader IS the process the timeout signals.
+    # The command is passed as an argument, never interpolated into the
+    # inner script — "AT$QCRSRP?" inside double quotes would expand
+    # $QCRSRP to nothing and send a bare "AT?".
+    _at_out="/tmp/signal_ca_$$.out"
+    run_timeout "$AT_READ_TIMEOUT" sh -c '
+        exec 3<>"$1" || exit 1
+        printf "%s\r" "$2" >&3
+        exec cat <&3
+    ' signal_ca "$AT_DEV" 'AT$QCRSRP?' > "$_at_out" 2>/dev/null
+    _resp=$(head -c 4096 "$_at_out" 2>/dev/null | head -10)
+    rm -f "$_at_out"
 
     # Parse $QCRSRP response: extract EARFCN values, map to LTE bands
     # Format: $QCRSRP: PCI,EARFCN,"RSRP",PCI,EARFCN,"RSRP",...

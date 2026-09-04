@@ -27,10 +27,11 @@
     function _deleteProfilesSequential(pending, replacement, stats) {
         stats = stats || { skipped: 0, deleted: 0, failed: 0 };
         if (!pending.length) {
+            // Always report — a partial sweep used to finish in silence.
             var msg = 'Removed ' + stats.deleted + ' empty/NULL profile(s).';
-            if (stats.skipped) msg += '\nSkipped ' + stats.skipped + ' default profile(s): no valid replacement.';
-            if (stats.failed) msg += '\nFailed to delete ' + stats.failed + ' profile(s) — see console.';
-            if (stats.skipped || stats.failed) alert(msg);
+            if (stats.skipped) msg += ' Skipped ' + stats.skipped + ' default profile(s): no valid replacement.';
+            if (stats.failed) msg += ' Failed to delete ' + stats.failed + ' profile(s), see the browser console.';
+            App.showNotification(msg, (stats.skipped || stats.failed) ? 'error' : 'success', 8000);
             _loadAPN();
             return;
         }
@@ -75,11 +76,11 @@
 
     function _loadAPN() {
         var el = $('#apn-content');
-        if (!el) return;
+        if (!el) return Promise.resolve();
         el.innerHTML = '<div class="card"><div class="page-loading"><div class="spinner"></div> Loading...</div></div>';
         _editingAPN = null;
 
-        API.webapi('GetProfileList').then(function(profiles) {
+        return API.webapi('GetProfileList').then(function(profiles) {
             var list = profiles.ProfileList || profiles || [];
             if (!Array.isArray(list)) list = [];
             _apnList = list;
@@ -130,7 +131,8 @@
             '</details></div>';
             el.innerHTML = html;
         }).catch(function() {
-            el.innerHTML = '<div class="card"><p class="text-muted">Failed to load APN profiles</p></div>';
+            el = $('#apn-content');
+            if (el) el.innerHTML = '<div class="card"><p class="text-muted">Failed to load APN profiles</p></div>';
         });
     }
 
@@ -160,48 +162,67 @@
     }
 
     function _apnSave() {
+        App.clearFieldErrors('#apn-form');
+
+        var name = (($('#apn-name') || {}).value || '').trim();
+        var apn = (($('#apn-apn') || {}).value || '').trim();
+        if (!name) return App.renderFieldError('#apn-name', 'Profile name is required');
+        if (!apn) return App.renderFieldError('#apn-apn', 'APN is required');
+
         var params = {
-            ProfileName: ($('#apn-name') || {}).value,
-            APN: ($('#apn-apn') || {}).value,
+            ProfileName: name,
+            APN: apn,
             AuthType: ($('#apn-auth') || {}).value || '0',
             UserName: ($('#apn-user') || {}).value || '',
             Password: ($('#apn-pass') || {}).value || '',
         };
-        if (!params.ProfileName || !params.APN) { alert('Name and APN required'); return; }
-        var method = _editingAPN !== null ? 'EditProfile' : 'AddNewProfile';
-        if (_editingAPN !== null) params.ProfileID = parseInt(_apnList[_editingAPN].ProfileID, 10);
-        API.webapi(method, params).then(function() {
-            _loadAPN();
-        }).catch(function(e) { alert('Error: ' + e.message); });
+        var editing = _editingAPN !== null;
+        var method = editing ? 'EditProfile' : 'AddNewProfile';
+        if (editing) params.ProfileID = parseInt(_apnList[_editingAPN].ProfileID, 10);
+
+        App.wrapFormSubmit('#apn-submit', function() {
+            return API.webapi(method, params).then(_loadAPN);
+        }, { success: editing ? 'Profile updated' : 'Profile added' });
     }
 
     function _apnDelete(i) {
-        if (!confirm('Delete APN profile?')) return;
         var p = _apnList[i];
+        if (!p) return;
         var pid = parseInt(p.ProfileID, 10);
         var isDefault = p.Default === 1 || p.Default === '1' || p.IsDefault === 1 || p.IsDefault === '1';
-        var doDelete = function() {
-            API.webapi('DeleteProfile', { ProfileID: pid }).then(function() {
-                _loadAPN();
-            }).catch(function(e) { alert('Error: ' + e.message); });
-        };
+        var replacement = null;
+
         if (isDefault && _apnList.length > 1) {
-            var other = _findReplacementDefault([pid]);
-            if (other) {
-                API.webapi('SetDefaultProfile', { ProfileID: parseInt(other.ProfileID, 10) }).then(doDelete)
-                    .catch(function(e) { alert('Error switching default: ' + e.message); });
+            replacement = _findReplacementDefault([pid]);
+            if (!replacement) {
+                App.showNotification(
+                    'Cannot delete the default profile: no valid replacement to make default first.', 'error');
                 return;
             }
-            alert('Cannot delete the default profile because there is no valid replacement profile.');
-            return;
         }
-        doDelete();
+
+        App.confirmDialog(
+            'Delete APN profile "' + (p.ProfileName || pid) + '"?' +
+                (replacement ? ' "' + (replacement.ProfileName || replacement.ProfileID) + '" becomes the default.' : ''),
+            function() {
+                App.wrapFormSubmit(null, function() {
+                    var chain = replacement
+                        ? API.webapi('SetDefaultProfile', { ProfileID: parseInt(replacement.ProfileID, 10) })
+                        : Promise.resolve();
+                    return chain
+                        .then(function() { return API.webapi('DeleteProfile', { ProfileID: pid }); })
+                        .then(_loadAPN);
+                }, { key: 'apn-delete', success: 'Profile deleted' });
+            }, null,
+            { title: 'Delete APN profile', confirmText: 'Delete', danger: true });
     }
 
     function _apnDefault(i) {
-        API.webapi('SetDefaultProfile', { ProfileID: parseInt(_apnList[i].ProfileID, 10) }).then(function() {
-            _loadAPN();
-        }).catch(function(e) { alert('Error: ' + e.message); });
+        var p = _apnList[i];
+        if (!p) return;
+        App.wrapFormSubmit(null, function() {
+            return API.webapi('SetDefaultProfile', { ProfileID: parseInt(p.ProfileID, 10) }).then(_loadAPN);
+        }, { key: 'apn-default', success: 'Default profile set to "' + (p.ProfileName || p.ProfileID) + '"' });
     }
 
     function _apnPurgeBroken() {
@@ -211,13 +232,14 @@
             return aDefault === bDefault ? 0 : (aDefault ? 1 : -1);
         });
         if (!broken.length) {
-            alert('No empty/NULL profiles found.');
+            App.showNotification('No empty/NULL profiles found.', 'info');
             return;
         }
-        if (!confirm('Delete ' + broken.length + ' empty/NULL APN profiles?')) return;
-        var brokenIds = broken.map(function(profile) { return parseInt(profile.ProfileID, 10); }).filter(function(pid) { return !isNaN(pid); });
-        var replacement = _findReplacementDefault(brokenIds);
-        _deleteProfilesSequential(broken.slice(), replacement, null);
+        App.confirmDialog('Delete ' + broken.length + ' empty/NULL APN profiles?', function() {
+            var brokenIds = broken.map(function(profile) { return parseInt(profile.ProfileID, 10); })
+                .filter(function(pid) { return !isNaN(pid); });
+            _deleteProfilesSequential(broken.slice(), _findReplacementDefault(brokenIds), null);
+        }, null, { title: 'Remove broken profiles', confirmText: 'Delete', danger: true });
     }
 
     App.registerPage('apn', renderAPN);

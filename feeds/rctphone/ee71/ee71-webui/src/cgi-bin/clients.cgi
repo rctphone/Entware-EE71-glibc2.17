@@ -5,6 +5,8 @@
 echo "Content-Type: application/json"
 echo ""
 
+. /jrd-resource/resource/webrc/www/cgi-bin/lib/cgi-common.sh
+
 ACTION="${QUERY_STRING%%&*}"
 ACTION="${ACTION#action=}"
 
@@ -90,7 +92,9 @@ list)
     # === 4. Collect hostapd station data (MAC -> interface, connected_time) ===
     HAPD_DATA=$(
         for IFACE in wlan0 wlan1; do
-            hostapd_cli -i "$IFACE" -p /var/run/hostapd all_sta 2>/dev/null | \
+            # hostapd_cli waits on a control-socket reply; a wedged hostapd
+            # would otherwise block this page and the whole server.
+            run_timeout 5 hostapd_cli -i "$IFACE" -p /var/run/hostapd all_sta 2>/dev/null | \
                 awk -v iface="$IFACE" '
                     /^[0-9a-f][0-9a-f]:[0-9a-f]/ { mac=tolower($0) }
                     /^connected_time=/ { split($0,a,"="); print mac "\t" iface "\t" a[2] }

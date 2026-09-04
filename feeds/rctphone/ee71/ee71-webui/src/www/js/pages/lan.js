@@ -29,8 +29,16 @@
         _loadLan();
     }
 
+    // Dotted-quad check — the CGI/webapi accepts anything and then fails opaquely.
+    function _isIPv4(v) {
+        var m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(v || '');
+        if (!m) return false;
+        for (var i = 1; i <= 4; i++) if (Number(m[i]) > 255) return false;
+        return true;
+    }
+
     function _loadLan() {
-        Promise.all([
+        return Promise.all([
             API.webapi('GetLanSettings').catch(function() { return null; }),
             API.webapi('getDNSInfo').catch(function() { return null; }),
             API.cgiGet('system.cgi', { action: 'interfaces' }).catch(function() { return null; }),
@@ -85,7 +93,7 @@
 
                 // Save
                 '<div class="form-actions">' +
-                    '<button ' + actionAttr('saveLan') + '>Save</button>' +
+                    '<button id="lan-save" ' + actionAttr('saveLan') + '>Save</button>' +
                 '</div>' +
             '</div>';
 
@@ -231,31 +239,49 @@
     }
 
     function _saveDhcp() {
-        var startIP = $('#lan-dhcp-start').value;
-        var poolSize = parseInt($('#lan-pool-size').value, 10) || 101;
-        var endIP = _endIPFromPool(startIP, poolSize);
-        var leaseSec = parseInt($('#lan-lease').value, 10) || 86400;
-        var leaseHours = Math.max(1, Math.round(leaseSec / 3600));
+        App.clearFieldErrors('#rule-panel-overlay');
+
+        var startIP = (($('#lan-dhcp-start') || {}).value || '').trim();
+        if (!_isIPv4(startIP)) {
+            return App.renderFieldError('#lan-dhcp-start', 'Enter a valid IPv4 address, e.g. 192.168.1.100');
+        }
+
+        var poolSize = parseInt(($('#lan-pool-size') || {}).value, 10);
+        if (isNaN(poolSize) || poolSize < 1 || poolSize > 254) {
+            return App.renderFieldError('#lan-pool-size', 'Pool size must be between 1 and 254');
+        }
+
+        var leaseSec = parseInt(($('#lan-lease') || {}).value, 10);
+        if (isNaN(leaseSec) || leaseSec < 60) {
+            return App.renderFieldError('#lan-lease', 'Lease time must be at least 60 seconds');
+        }
+
+        var dns1 = (($('#lan-dns1') || {}).value || '').trim();
+        var dns2 = (($('#lan-dns2') || {}).value || '').trim();
+        if (dns1 && !_isIPv4(dns1)) return App.renderFieldError('#lan-dns1', 'Enter a valid IPv4 address or leave blank');
+        if (dns2 && !_isIPv4(dns2)) return App.renderFieldError('#lan-dns2', 'Enter a valid IPv4 address or leave blank');
 
         var params = {
             StartIPAddress: startIP,
-            EndIPAddress: endIP,
-            DHCPLeaseTime: String(leaseHours),
+            EndIPAddress: _endIPFromPool(startIP, poolSize),
+            DHCPLeaseTime: String(Math.max(1, Math.round(leaseSec / 3600))),
         };
 
-        var dns1 = ($('#lan-dns1') || {}).value || '';
-        var dns2 = ($('#lan-dns2') || {}).value || '';
-
-        API.webapi('SetLanSettings', params).then(function() {
-            return API.webapi('setDNSInfo', {
-                DNSMode: (dns1 || dns2) ? '1' : '0',
-                PrimaryDNS: dns1,
-                SecondaryDNS: dns2,
-            }).catch(function() {});
-        }).then(function() {
-            _hidePanel();
-            _loadLan();
-        }).catch(function(e) { alert('Error: ' + e.message); });
+        App.wrapFormSubmit('#lan-panel-save', function() {
+            return API.webapi('SetLanSettings', params).then(function() {
+                return API.webapi('setDNSInfo', {
+                    DNSMode: (dns1 || dns2) ? '1' : '0',
+                    PrimaryDNS: dns1,
+                    SecondaryDNS: dns2,
+                }).catch(function() {
+                    // Address/lease changes did land; only the DNS override failed.
+                    App.showNotification('DHCP saved, but the DNS override could not be applied', 'error');
+                });
+            }).then(function() {
+                _hidePanel();
+                return _loadLan();
+            });
+        }, { success: 'DHCP settings saved' });
     }
 
     function _showPanel(title, fieldsHTML, onSave) {
@@ -288,9 +314,17 @@
     // --- Save main LAN settings (hostname, IP, subnet, DHCP on/off) ---
 
     function _saveLan() {
-        var hostname = ($('#lan-hostname') || {}).value || '';
+        App.clearFieldErrors('#lan-content');
+
+        var hostname = (($('#lan-hostname') || {}).value || '').trim();
         if (hostname && !/^[a-zA-Z0-9][a-zA-Z0-9.-]*$/.test(hostname)) {
-            alert('Invalid hostname'); return;
+            return App.renderFieldError('#lan-hostname',
+                'Use only letters, digits, dots and hyphens, starting with a letter or digit');
+        }
+
+        var ip = (($('#lan-ip') || {}).value || '').trim();
+        if (!_isIPv4(ip)) {
+            return App.renderFieldError('#lan-ip', 'Enter a valid IPv4 address, e.g. 192.168.1.1');
         }
 
         var dhcpMode = '1';
@@ -301,15 +335,20 @@
 
         var params = {
             host_name: hostname,
-            IPv4IPAddress: $('#lan-ip').value,
-            SubnetMask: $('#lan-mask').value,
+            IPv4IPAddress: ip,
+            SubnetMask: ($('#lan-mask') || {}).value,
             DHCPServerStatus: dhcpMode,
         };
 
-        API.webapi('SetLanSettings', params).then(function() {
-            alert('Settings saved. Device may restart networking.');
-            setTimeout(_loadLan, 2000);
-        }).catch(function(e) { alert('Error: ' + e.message); });
+        App.wrapFormSubmit('#lan-save', function() {
+            return API.webapi('SetLanSettings', params).then(function() {
+                // Networking restarts; give it a moment before reading back.
+                return new Promise(function(r) { setTimeout(r, 2000); });
+            }).then(_loadLan);
+        }, {
+            pending: 'Applying\u2026',
+            success: 'LAN settings saved - networking is restarting'
+        });
     }
 
     App.registerPage('lan', renderLan);

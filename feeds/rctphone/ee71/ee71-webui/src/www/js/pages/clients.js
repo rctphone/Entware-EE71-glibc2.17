@@ -63,7 +63,7 @@
         for (var i = 0; i < 4; i++) {
             html += '<span></span>';
         }
-        html += '</span> ' + rssi + ' dBm';
+        html += '</span> ' + escHtml(rssi) + ' dBm';
         return html;
     }
 
@@ -283,9 +283,9 @@
             if (isWifi) {
                 html += '<div class="stat-row"><span class="label">Signal</span><span class="value">' + _signalBarsHtml(dev.rssi) + '</span></div>';
                 if (dev.wifi_mode) html += '<div class="stat-row"><span class="label">WiFi</span><span class="value">' + escHtml(dev.wifi_mode + ' ' + _bandLabel(dev.channel)) + '</span></div>';
-                if (dev.channel) html += '<div class="stat-row"><span class="label">Channel</span><span class="value">' + dev.channel + '</span></div>';
-                if (dev.bandwidth) html += '<div class="stat-row"><span class="label">Bandwidth</span><span class="value">' + dev.bandwidth + ' MHz</span></div>';
-                if (dev.max_speed) html += '<div class="stat-row"><span class="label">Max Speed</span><span class="value">' + dev.max_speed + ' Mbps</span></div>';
+                if (dev.channel) html += '<div class="stat-row"><span class="label">Channel</span><span class="value">' + escHtml(dev.channel) + '</span></div>';
+                if (dev.bandwidth) html += '<div class="stat-row"><span class="label">Bandwidth</span><span class="value">' + escHtml(dev.bandwidth) + ' MHz</span></div>';
+                if (dev.max_speed) html += '<div class="stat-row"><span class="label">Max Speed</span><span class="value">' + escHtml(dev.max_speed) + ' Mbps</span></div>';
             }
             if (dev.connected_time > 0) {
                 var ct = dev.connected_time;
@@ -306,7 +306,7 @@
                 '<div class="stat-row"><span class="label">Upload</span><span class="value">' + ul.value + ' ' + ul.unit + '</span></div>' +
                 '<div class="stat-row"><span class="label">Total RX</span><span class="value">' + formatBytes(traffic.rx_total) + '</span></div>' +
                 '<div class="stat-row"><span class="label">Total TX</span><span class="value">' + formatBytes(traffic.tx_total) + '</span></div>' +
-                '<div class="stat-row"><span class="label">Connections</span><span class="value">' + (traffic.connections || 0) + '</span></div>' +
+                '<div class="stat-row"><span class="label">Connections</span><span class="value">' + escHtml(traffic.connections || 0) + '</span></div>' +
                 '</div>';
         }
 
@@ -354,13 +354,24 @@
     }
 
     function _renameClient(mac, currentName) {
-        var newName = prompt('Enter new name for device:', currentName);
-        if (!newName || newName === currentName) return;
-        API.webapi('SetDeviceName', { MacAddress: mac, DeviceName: newName }).then(function() {
-            _refreshClients();
-        }).catch(function(e) {
-            alert('Failed to rename: ' + (e.message || e));
-        });
+        App.confirmDialog('Give this device a name you will recognise in the client list.',
+            function(newName) {
+                newName = (newName || '').trim();
+                if (!newName || newName === currentName) return;
+                App.wrapFormSubmit(null, function() {
+                    return API.webapi('SetDeviceName', { MacAddress: mac, DeviceName: newName })
+                        .then(_refreshClients);
+                }, {
+                    key: 'client-rename',
+                    error: 'Rename failed',
+                    success: 'Device renamed to "' + newName + '"'
+                });
+            }, null,
+            {
+                title: 'Rename device',
+                confirmText: 'Rename',
+                input: { label: 'Device name', value: currentName, placeholder: 'Living room laptop' }
+            });
     }
 
     App.registerPage('clients', renderClients);

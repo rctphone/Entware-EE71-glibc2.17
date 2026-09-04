@@ -29,6 +29,7 @@
             '</div>' +
             '<h2>EE71</h2>' +
             '</div>' +
+            '<div class="login-notice" id="login-notice" hidden></div>' +
             '<div class="login-error" id="login-error"></div>' +
             '<div class="form-group">' +
                 '<div class="pass-field">' +
@@ -44,31 +45,91 @@
         var passInput = $('#login-pass');
         var btn = $('#login-btn');
         var err = $('#login-error');
+        var notice = $('#login-notice');
+
+        // Where to go back to once the user is in again. A session that ended
+        // by itself remembers the page the user was on; a deliberate logout
+        // does not, and lands on the dashboard.
+        var returnRoute = '';
+
+        var ended = API.takeSessionEndNotice && API.takeSessionEndNotice();
+        if (ended && notice) {
+            returnRoute = ended.route && ended.route !== 'login' ? ended.route : '';
+            notice.hidden = false;
+            notice.textContent = ended.reason === 'idle'
+                ? 'You were signed out after a long period of inactivity.'
+                : 'Your session ended. The router signs a session out after about five minutes ' +
+                  'idle, and it allows only one session at a time - signing in from another ' +
+                  'device or browser ends this one.';
+        }
+
+        // 5 failed logins lock the interface for 300 s server-side. Show the
+        // countdown instead of repeating "wrong password" at a locked door.
+        var lockTimer = null;
+
+        function stopLockCountdown() {
+            if (lockTimer) { clearInterval(lockTimer); lockTimer = null; }
+        }
+
+        function startLockCountdown(seconds) {
+            stopLockCountdown();
+            var left = seconds;
+            btn.disabled = true;
+            passInput.disabled = true;
+
+            function tick() {
+                if (left <= 0) {
+                    stopLockCountdown();
+                    btn.disabled = false;
+                    passInput.disabled = false;
+                    btn.textContent = 'Log in';
+                    err.textContent = 'You can try again now.';
+                    return;
+                }
+                var mm = Math.floor(left / 60);
+                var ss = left % 60;
+                err.textContent = 'Too many failed attempts. Try again in ' +
+                    mm + ':' + (ss < 10 ? '0' : '') + ss + '.';
+                btn.textContent = 'Locked';
+                left--;
+            }
+
+            tick();
+            lockTimer = setInterval(tick, 1000);
+        }
+
+        App.setCleanup(stopLockCountdown);
 
         function doLogin() {
+            if (lockTimer) return; // locked out; the countdown is the answer
             var pw = passInput.value.trim();
-            if (!pw) { err.textContent = 'Enter password'; return; }
+            if (!pw) { err.textContent = 'Enter the admin password'; return; }
 
             btn.disabled = true;
             btn.textContent = 'Logging in...';
             err.textContent = '';
+            if (notice) notice.hidden = true;
 
             API.login('admin', pw).then(function() {
                 App.startStatusPolling();
-                window.location.hash = '#/dashboard';
+                window.location.hash = '#/' + (returnRoute || 'dashboard');
             }).catch(function(e) {
                 if (e instanceof API.ApiError) {
-                    if (e.code === '010103') {
-                        err.textContent = 'Too many attempts. Locked for 5 minutes.';
-                    } else if (e.code === '010102') {
-                        err.textContent = 'Wrong password';
+                    if (e.code === API.ERR_LOGIN_LOCKED) {
+                        startLockCountdown(API.LOGIN_LOCKOUT_SECONDS);
+                        return;
+                    }
+                    if (e.code === '010102') {
+                        err.textContent = 'Wrong password. After five failed attempts in a row ' +
+                            'the interface locks for five minutes.';
                     } else {
                         err.textContent = e.apiMessage;
                     }
                 } else {
-                    err.textContent = 'Connection error';
+                    err.textContent = 'Could not reach the router.';
                 }
             }).then(function() {
+                if (lockTimer) return; // the countdown owns the button now
                 btn.disabled = false;
                 btn.textContent = 'Log in';
             });

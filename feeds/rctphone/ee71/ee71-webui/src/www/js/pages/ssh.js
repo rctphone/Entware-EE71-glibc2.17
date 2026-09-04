@@ -11,10 +11,10 @@
 
     function _loadSSH() {
         var el = $('#ssh-content');
-        if (!el) return;
+        if (!el) return Promise.resolve();
         el.innerHTML = '<div class="card"><div class="page-loading"><div class="spinner"></div> Loading...</div></div>';
 
-        Promise.all([
+        return Promise.all([
             API.cgiGet('ssh.cgi', { action: 'status' }).catch(function() { return null; }),
             API.cgiGet('ssh.cgi', { action: 'keys' }).catch(function() { return null; }),
         ]).then(function(results) {
@@ -47,32 +47,45 @@
                 '<div class="card mt-2">' +
                     '<h3>Authorized Keys</h3>' +
                     keysHtml +
-                    '<div class="form-group mt-2">' +
-                        '<label>Add SSH Key</label>' +
-                        '<input type="text" id="ssh-newkey" placeholder="ssh-ed25519 AAAA...">' +
+                    '<div class="mt-2">' +
+                        App.createFormField('Add SSH Key', 'text', 'ssh-newkey', '',
+                            { placeholder: 'ssh-ed25519 AAAA...' }) +
                     '</div>' +
-                    '<button ' + actionAttr('sshAddKey') + '>Add Key</button>' +
+                    '<button id="ssh-add-btn" ' + actionAttr('sshAddKey') + '>Add Key</button>' +
                 '</div>';
         }).catch(function() {
-            el.innerHTML = '<div class="card"><p class="text-muted">Failed to load SSH status</p></div>';
+            el = $('#ssh-content');
+            if (el) el.innerHTML = '<div class="card"><p class="text-muted">Failed to load SSH status</p></div>';
+        });
+    }
+
+    // The CGI reports a refusal in the JSON body rather than as an HTTP error,
+    // so turn that into a rejection and let wrapFormSubmit report it once.
+    function _sshPost(params) {
+        return API.cgiPost('ssh.cgi', params).then(function(r) {
+            if (r && r.error) throw new Error(r.error);
+            return r;
         });
     }
 
     function _sshAddKey() {
-        var key = ($('#ssh-newkey') || {}).value;
-        if (!key) return;
-        API.cgiPost('ssh.cgi', { action: 'add_key', key: key }).then(function(r) {
-            if (r.error) { alert(r.error); return; }
-            _loadSSH();
-        }).catch(function(e) { alert('Error: ' + e.message); });
+        App.clearFieldErrors('#ssh-content');
+        var key = (($('#ssh-newkey') || {}).value || '').trim();
+        if (!key) return App.renderFieldError('#ssh-newkey', 'Paste a public key first');
+        if (!/^(ssh-|ecdsa-|sk-)/.test(key)) {
+            return App.renderFieldError('#ssh-newkey', 'Not a public key: expected it to start with ssh-, ecdsa- or sk-');
+        }
+        App.wrapFormSubmit('#ssh-add-btn', function() {
+            return _sshPost({ action: 'add_key', key: key }).then(_loadSSH);
+        }, { pending: 'Adding\u2026', success: 'SSH key added' });
     }
 
     function _sshRemoveKey(idx) {
-        if (!confirm('Remove this SSH key?')) return;
-        API.cgiPost('ssh.cgi', { action: 'remove_key', index: idx }).then(function(r) {
-            if (r.error) { alert(r.error); return; }
-            _loadSSH();
-        }).catch(function(e) { alert('Error: ' + e.message); });
+        App.confirmDialog('Remove this SSH key? Anything using it will lose access.', function() {
+            App.wrapFormSubmit(null, function() {
+                return _sshPost({ action: 'remove_key', index: idx }).then(_loadSSH);
+            }, { key: 'ssh-remove', success: 'SSH key removed' });
+        }, null, { title: 'Remove SSH key', confirmText: 'Remove', danger: true });
     }
 
     App.registerPage('ssh', renderSSH);
