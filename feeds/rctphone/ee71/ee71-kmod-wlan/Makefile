@@ -28,6 +28,28 @@ define Package/ee71-kmod-wlan/description
   change the driver source. If the rebuilt module does not load, the router
   comes up with no WiFi - no 2.4 GHz, no 5 GHz.
 
+  KNOWN SECURITY REGRESSION - READ BEFORE ENABLING. This build is upstream
+  4.2.25.8 exactly. The vendor's module reports the same version but is NOT
+  that source: TCL cherry-picked later fixes on top without ever bumping
+  QWLAN_VERSIONSTR. The vendor module therefore contains security fixes this
+  one does not, confirmed by symbols present there and absent here:
+
+      ol_rx_pn_strict_chk                  fragment PN continuity
+      ol_cfg_rx_host_duplicate_check       defrag duplicate detection
+      ol_cfg_rx_host_defrag_timeout_check  defrag timeout
+      __adf_nbuf_data_is_eapol_pkt         EAPOL check on intra-BSS forwarding
+
+  Those are the March 2021 FragAttacks batch - CVE-2020-24586/24587/24588 -
+  plus the plaintext-injection check. This build predates all of them. The
+  giveaway that it is a source difference and not a compiler one: this module
+  still has ol_cfg_rx_host_defrag_timeout_duplicate_check, the single pre-2021
+  function that those commits split into the two ol_cfg_rx_host_* above.
+
+  So enabling this trades away four mitigations against an attacker within
+  WiFi range. It is a fine tool for reproducing and studying the driver; it is
+  not currently an upgrade over what the device ships, and it should not be
+  left enabled on a router anyone depends on until those fixes are carried.
+
   Installing the package does NOT switch drivers. It only puts files on the
   device. Switching is a separate, deliberate step:
 
@@ -76,6 +98,13 @@ define Package/ee71-kmod-wlan/description
   docs/wlan-ko-analysis.md
 endef
 
+# NOT /usr/lib/modules/3.10.49/. That tree already contains the stock module,
+# and modules.dep already carries an "extra/wlan.ko:" line. A second file named
+# wlan.ko in the module tree would give depmod two modules with one name, with
+# no symptom until something loads the wrong one - which on this device means
+# the WiFi driver. Living outside the module tree and being reachable only
+# through the explicit insmod in wlan_load is the point, not an oversight.
+# Do not "tidy" this into the standard path.
 MODULE_DIR:=/usr/lib/ee71
 
 # The .ko is built out of tree with GCC 4.9 (kernel 3.10 cannot be built with
