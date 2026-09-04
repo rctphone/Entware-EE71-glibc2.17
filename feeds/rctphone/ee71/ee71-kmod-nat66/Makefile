@@ -45,8 +45,8 @@ MODULE_DIR:=/usr/lib/modules/3.10.49/kernel/net/ipv6/netfilter
 # useful message instead of a confusing install error when they are absent.
 define Build/Compile
 	@for m in nf_nat_ipv6 ip6table_nat ip6t_MASQUERADE; do \
-		[ -f ./files/$$m.ko ] && continue; \
-		echo "[ERR] $(PKG_NAME): ./files/$$m.ko missing"; \
+		[ -f ./files/$$$$m.ko ] && continue; \
+		echo "[ERR] $(PKG_NAME): ./files/$$$$m.ko missing"; \
 		echo "[ERR] build them first:"; \
 		echo "[ERR]   cd docker/kernel-modules && ./build_host.sh"; \
 		echo "[ERR]   cd work/out && cp nf_nat_ipv6.ko ip6table_nat.ko \\"; \
