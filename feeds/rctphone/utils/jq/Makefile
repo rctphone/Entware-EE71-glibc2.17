@@ -1,12 +1,12 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=jq
-PKG_VERSION:=1.8.1
+PKG_VERSION:=1.8.2
 PKG_RELEASE:=1
 
 PKG_SOURCE:=jq-$(PKG_VERSION).tar.gz
 PKG_SOURCE_URL:=https://github.com/jqlang/jq/releases/download/jq-$(PKG_VERSION)/
-PKG_HASH:=2be64e7129cecb11d5906290eba10af694fb9e3e7f9fc208a311dc33ca837eb0
+PKG_HASH:=71b8d6e8f5fe81f6c6d0d110e3892251f6ce76ed095abd315e26e6e1193af3af
 
 PKG_LICENSE:=MIT
 PKG_INSTALL:=1
