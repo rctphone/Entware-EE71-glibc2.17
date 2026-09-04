@@ -5,22 +5,39 @@
 # Default-Start:     2 3 4 5
 # Short-Description: Patch QCMAP_ConnectionManager binary bugs
 ### END INIT INFO
-
-# Patch 1: 12-byte ARM32 patch at file offset 0x1C4C4 (vaddr 0x244C4)
-# Fixes infinite busy loop when netlink attribute has length=0
-# Original: sub r2,r2,r4,lsl#3 / add r7,r7,r8 / cmp r2,#2
-# Patched:  cmp r8,#0 / subsne r2,r2,r4,lsl#3 / addne r7,r7,r8
-
-# Patch 2: 1-byte patch at file offset 0x6A858
-# Disables "rm /var/lib/misc/dnsmasq.leases" — changes 'r' to '#'
-# system("#m /var/...") is a shell comment, lease file preserved
+#
+# Patch 1 - zero-length netlink fix. 12 bytes at vaddr 0x244C4, file offset
+# 0x1C4C4. The route-attribute parser walks TLVs looking for RTA_GATEWAY; an
+# attribute with length=0 never advances the pointer or the remaining counter,
+# so the netlink thread spins at 100% CPU, stops calling recvfrom(), and the
+# 164 KB receive buffer fills until every event is dropped.
+#   Original: sub r2,r2,r4,lsl#3 / add r7,r7,r8 / cmp r2,#2
+#   Patched:  cmp r8,#0 / subsne r2,r2,r4,lsl#3 / addne r7,r7,r8
+#   (the following `ble` is left alone; with r8=0 the cmp sets Z and it exits)
+# See files/patch_qcmap.py for the full derivation.
+#
+# Patch 2 - preserve dnsmasq leases. 1 byte at file offset 0x6A858, turning the
+# 'r' of "rm /var/lib/misc/dnsmasq.leases" into '#'. QCMAP kills and restarts
+# dnsmasq on every WAN reconnect and deletes the lease file with it, so clients
+# lose their addresses; system("#m /var/...") is just a shell comment.
+#
+# Both patches are pure in-place byte swaps of the same length, so revert is a
+# byte-level operation and does NOT need the .orig backup to exist. That
+# matters: `opkg remove` deletes this script, and prerm runs `stop` from here
+# while it is still on disk. A revert that only worked from a stored copy of
+# the binary would be one deleted file away from stranding a patched QCMAP.
 
 QCMAP_BIN="/usr/bin/QCMAP_ConnectionManager"
 QCMAP_TMP="/usr/bin/QCMAP_ConnectionManager.tmp"
-PATCHED=0
+QCMAP_ORIG="/usr/bin/QCMAP_ConnectionManager.orig"
+MOBILEAP_CFG="/etc/mobileap_cfg.xml"
+EXPECTED_SIZE=478100
 
 # --- Patch 1: zero-length netlink fix ---
-P1_OFFSET=116932  # 0x1C4C4
+# 115908 == 0x1C4C4. Releases up to 1.1.0 had 116932 (0x1C8C4) here, 0x400 too
+# far in; the bytes there are a relocation table, so patch 1 always took the
+# "bytes don't match" branch and has never actually been applied on a device.
+P1_OFFSET=115908
 P1_SIZE=12
 P1_ORIG="842142e0087087e0020052e3"
 P1_PATCH="000058e38421521008708710"
@@ -29,99 +46,178 @@ P1_PATCH="000058e38421521008708710"
 P2_OFFSET=436312  # 0x6A858
 P2_SIZE=1
 P2_ORIG="72"      # 'r' in "rm /var/..."
-P2_PATCH="23"      # '#' — makes it a shell comment
+P2_PATCH="23"     # '#' - makes it a shell comment
 
-read_hex() {
-    local file="$1" offset="$2" size="$3"
-    dd if="$file" bs=1 skip="$offset" count="$size" 2>/dev/null | \
-        hexdump -v -e "$size/1 \"%02x\"" 2>/dev/null
+read_hex() {  # file offset len -> lowercase hex, no spaces
+    dd if="$1" bs=1 skip="$2" count="$3" 2>/dev/null | \
+        hexdump -v -e "$3/1 \"%02x\"" 2>/dev/null
 }
 
-apply_patch() {
-    local name="$1" file="$2" offset="$3" size="$4" orig="$5" patch="$6" bytes="$7"
+esc_from_hex() {  # hex-string -> \xNN\xNN...
+    echo "$1" | sed 's/../\\x&/g'
+}
 
-    CURRENT=$(read_hex "$file" "$offset" "$size")
+write_site() {  # file offset hex
+    printf "%b" "$(esc_from_hex "$3")" | \
+        dd of="$1" bs=1 seek="$2" conv=notrunc 2>/dev/null
+}
 
-    if [ "$CURRENT" = "$patch" ]; then
-        echo "qcmap_fix: $name — already patched"
-        return 0
+# site_state file offset len orig patch -> patch | orig | foreign
+site_state() {
+    cur=$(read_hex "$1" "$2" "$3")
+    if   [ "$cur" = "$5" ]; then echo patch
+    elif [ "$cur" = "$4" ]; then echo orig
+    else echo foreign
     fi
+}
 
-    if [ "$CURRENT" != "$orig" ]; then
-        echo "qcmap_fix: $name — skipped (bytes don't match, binary may differ)"
-        return 0
-    fi
+# classify [file] -> patched | stock | partial | unknown
+#   patched : both sites carry the patch
+#   stock   : both sites are original
+#   partial : a mix of ONLY orig/patch - a torn write, safely completable
+#   unknown : a site is neither - a different QCMAP build, refuse to touch it
+classify() {
+    f="${1:-$QCMAP_BIN}"
+    a=$(site_state "$f" "$P1_OFFSET" "$P1_SIZE" "$P1_ORIG" "$P1_PATCH")
+    b=$(site_state "$f" "$P2_OFFSET" "$P2_SIZE" "$P2_ORIG" "$P2_PATCH")
+    case "$a$b" in
+        *foreign*)   echo unknown ;;
+        patchpatch)  echo patched ;;
+        origorig)    echo stock ;;
+        *)           echo partial ;;
+    esac
+}
 
-    printf "$bytes" | dd of="$file" bs=1 seek="$offset" conv=notrunc 2>/dev/null
-
-    VERIFY=$(read_hex "$file" "$offset" "$size")
-    if [ "$VERIFY" = "$patch" ]; then
-        echo "qcmap_fix: $name — applied"
-        PATCHED=1
-        return 0
-    else
-        echo "[ERR] qcmap_fix: $name — verification failed"
+# QCMAP holds the running image open, so the binary is edited through a copy
+# and moved into place - a straight dd would fail with "Text file busy".
+edit_via_copy() {  # "apply" | "revert"
+    rm -f "$QCMAP_TMP"
+    cp "$QCMAP_BIN" "$QCMAP_TMP" || {
+        echo "[ERR] qcmap_fix: cannot copy binary (is /usr full?)"
         return 1
+    }
+    if [ "$1" = apply ]; then
+        [ "$(site_state "$QCMAP_TMP" "$P1_OFFSET" "$P1_SIZE" "$P1_ORIG" "$P1_PATCH")" = orig ] && \
+            write_site "$QCMAP_TMP" "$P1_OFFSET" "$P1_PATCH"
+        [ "$(site_state "$QCMAP_TMP" "$P2_OFFSET" "$P2_SIZE" "$P2_ORIG" "$P2_PATCH")" = orig ] && \
+            write_site "$QCMAP_TMP" "$P2_OFFSET" "$P2_PATCH"
+        want=patched
+    else
+        [ "$(site_state "$QCMAP_TMP" "$P1_OFFSET" "$P1_SIZE" "$P1_ORIG" "$P1_PATCH")" = patch ] && \
+            write_site "$QCMAP_TMP" "$P1_OFFSET" "$P1_ORIG"
+        [ "$(site_state "$QCMAP_TMP" "$P2_OFFSET" "$P2_SIZE" "$P2_ORIG" "$P2_PATCH")" = patch ] && \
+            write_site "$QCMAP_TMP" "$P2_OFFSET" "$P2_ORIG"
+        want=stock
+    fi
+
+    if [ "$(classify "$QCMAP_TMP")" != "$want" ]; then
+        echo "[ERR] qcmap_fix: $1 verify failed on the copy, binary left untouched"
+        rm -f "$QCMAP_TMP"
+        return 1
+    fi
+
+    chmod 755 "$QCMAP_TMP"
+    mv "$QCMAP_TMP" "$QCMAP_BIN" || {
+        echo "[ERR] qcmap_fix: could not move the new binary into place"
+        rm -f "$QCMAP_TMP"
+        return 1
+    }
+    sync
+    return 0
+}
+
+# Nothing on this device respawns QCMAP: rcS.d/S39start_QCMAP_ConnectionManager_le
+# starts it once, and oem_watch's restart block sits behind a counter that is
+# never incremented. So a bare `kill` here would take WiFi and NAT down until
+# the next reboot. Restart it exactly the way S39 does.
+restart_qcmap() {
+    pidof QCMAP_ConnectionManager >/dev/null 2>&1 || return 0
+    start-stop-daemon -K -n QCMAP_ConnectionManager 2>/dev/null
+    i=0
+    while [ "$i" -lt 20 ] && pidof QCMAP_ConnectionManager >/dev/null 2>&1; do
+        sleep 1
+        i=$((i + 1))
+    done
+    start-stop-daemon -S -b -a QCMAP_ConnectionManager "$MOBILEAP_CFG" d 2>/dev/null
+    sleep 1
+    if pidof QCMAP_ConnectionManager >/dev/null 2>&1; then
+        echo "qcmap_fix: QCMAP_ConnectionManager restarted"
+    else
+        echo "[ERR] qcmap_fix: QCMAP_ConnectionManager did not come back -"
+        echo "[ERR]   run /etc/rcS.d/S39start_QCMAP_ConnectionManager_le start or reboot"
+    fi
+}
+
+precheck() {  # binary present and the size we derived the offsets from
+    if [ ! -f "$QCMAP_BIN" ]; then
+        echo "[ERR] qcmap_fix: QCMAP binary not found: $QCMAP_BIN"
+        exit 1
+    fi
+    SIZE=$(wc -c < "$QCMAP_BIN" 2>/dev/null)
+    if [ "$((SIZE + 0))" -ne "$EXPECTED_SIZE" ]; then
+        echo "qcmap_fix: unexpected size $((SIZE + 0)) (want $EXPECTED_SIZE) - skipped"
+        exit 0
     fi
 }
 
 case "$1" in
   start)
-    if [ ! -f "$QCMAP_BIN" ]; then
-        echo "[ERR] QCMAP binary not found: $QCMAP_BIN"
-        exit 1
+    precheck
+    case "$(classify)" in
+      patched)
+        echo "qcmap_fix: already patched"
+        exit 0 ;;
+      unknown)
+        echo "qcmap_fix: patch sites match neither stock nor patched bytes -"
+        echo "  different QCMAP build, refusing to write (skipped)"
+        exit 0 ;;
+      # stock or partial: continue (partial completes a torn write)
+    esac
+
+    # Convenience backup only, and only from a verified-stock binary so we
+    # never store half-patched bytes. Revert does not depend on it.
+    if [ ! -f "$QCMAP_ORIG" ] && [ "$(classify)" = stock ]; then
+        cp "$QCMAP_BIN" "$QCMAP_ORIG" 2>/dev/null && sync && \
+            echo "qcmap_fix: backed up stock binary to $QCMAP_ORIG"
     fi
 
-    # Check if all patches already applied
-    P1_CUR=$(read_hex "$QCMAP_BIN" "$P1_OFFSET" "$P1_SIZE")
-    P2_CUR=$(read_hex "$QCMAP_BIN" "$P2_OFFSET" "$P2_SIZE")
+    edit_via_copy apply || exit 1
+    echo "qcmap_fix: patched (netlink-fix, preserve-leases)"
+    restart_qcmap
+    ;;
 
-    P1_NEED=0; P2_NEED=0
-    [ "$P1_CUR" = "$P1_ORIG" ] && P1_NEED=1
-    [ "$P2_CUR" = "$P2_ORIG" ] && P2_NEED=1
-
-    if [ "$P1_NEED" -eq 0 ] && [ "$P2_NEED" -eq 0 ]; then
-        echo "qcmap_fix: all patches already applied (or skipped)"
+  stop)
+    # Revert to stock bytes. Called by prerm before opkg deletes this script.
+    if [ ! -f "$QCMAP_BIN" ]; then
+        echo "qcmap_fix: $QCMAP_BIN not found, nothing to revert"
         exit 0
     fi
+    case "$(classify)" in
+      stock)
+        echo "qcmap_fix: already stock"
+        exit 0 ;;
+      unknown)
+        echo "[ERR] qcmap_fix: unrecognised patch sites, refusing to revert"
+        exit 0 ;;
+      # patched or partial: continue
+    esac
 
-    # Backup original (once, before any patching)
-    if [ ! -f "${QCMAP_BIN}.orig" ]; then
-        cp "$QCMAP_BIN" "${QCMAP_BIN}.orig"
-        echo "qcmap_fix: backed up original"
-    fi
-
-    # Copy binary to work around "Text file busy" on running ELF
-    cp "$QCMAP_BIN" "$QCMAP_TMP"
-
-    apply_patch "netlink-fix" "$QCMAP_TMP" \
-        "$P1_OFFSET" "$P1_SIZE" "$P1_ORIG" "$P1_PATCH" \
-        '\x00\x00\x58\xe3\x84\x21\x52\x10\x08\x70\x87\x10'
-
-    apply_patch "preserve-leases" "$QCMAP_TMP" \
-        "$P2_OFFSET" "$P2_SIZE" "$P2_ORIG" "$P2_PATCH" \
-        '\x23'
-
-    if [ "$PATCHED" -gt 0 ]; then
-        # Replace binary atomically (mv avoids "Text file busy")
-        chmod 755 "$QCMAP_TMP"
-        mv "$QCMAP_TMP" "$QCMAP_BIN"
-
-        # Restart QCMAP to load patched binary
-        PID=$(pidof QCMAP_ConnectionManager 2>/dev/null || true)
-        if [ -n "$PID" ]; then
-            kill "$PID" 2>/dev/null
-            echo "qcmap_fix: QCMAP restarted (was PID $PID)"
-        fi
-    else
-        rm -f "$QCMAP_TMP"
-    fi
+    edit_via_copy revert || exit 1
+    echo "qcmap_fix: reverted to stock bytes"
+    restart_qcmap
     ;;
-  stop)
-    echo "qcmap_fix: no stop action (patches are persistent)"
+
+  status)
+    if [ ! -f "$QCMAP_BIN" ]; then
+        echo "qcmap_fix: QCMAP binary missing"
+        exit 1
+    fi
+    echo "qcmap_fix: $(classify)"
+    [ -f "$QCMAP_ORIG" ] && echo "qcmap_fix: backup present at $QCMAP_ORIG"
     ;;
+
   *)
-    echo "Usage: $0 {start|stop}" >&2
+    echo "Usage: $0 {start|stop|status}" >&2
     exit 1
     ;;
 esac

@@ -1,0 +1,142 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          miniupnpd
+# Required-Start:    $remote_fs $syslog
+# Required-Stop:     $remote_fs $syslog
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: MiniUPnPd port-forwarding daemon
+### END INIT INFO
+#
+# Derived from upstream linux/miniupnpd.init.d.script (miniupnpd 2.3.11).
+#
+# CONTRACT WITH core_app - DO NOT RENAME, MOVE, OR DROP THE VERBS.
+# The vendor's closed-source /usr/oem/core_app is the ONLY thing that starts
+# or stops this daemon: there is no rcS.d/rc5.d symlink for miniupnpd anywhere
+# on the device. When the user flips the UPnP switch in the stock web UI,
+# jrd_router_upnp_init / jrd_oem_router_set_upnp_switch run exactly:
+#     system("/etc/init.d/miniupnpd start")
+#     system("/etc/init.d/miniupnpd stop")
+# (plain strings in core_app; verified with `strings /usr/oem/core_app`).
+# core_app opens and closes tcp/9966 on bridge0 around those two calls itself,
+# so this script must not touch the INPUT chain.
+# Keep the path, the name and both verbs exactly as they are.
+#
+# WHY THE CHAIN SCRIPTS ARE CALLED HERE
+# miniupnpd's netfilter backend does NOT create its own chains. init_redirect()
+# in netfilter/iptcrdr.c is a stub that only calls iptc_init("nat") to prove
+# netfilter is reachable. The MINIUPNPD / MINIUPNPD-POSTROUTING chains and the
+# jumps into them come from the helper scripts in /etc/miniupnpd. The stock
+# EE71 script is upstream's 2012 revision, which predates those calls, so on
+# stock firmware the chains never exist and every mapping the daemon accepts is
+# silently dropped. Upstream 2.3.11 calls them; so do we.
+# (Upstream 2.3.11 has a typo there: its IPTABLES_REMOVE runs
+# iptables_removeall.sh twice and never ip6tables_removeall.sh, leaking the v6
+# chain and its FORWARD jump on every stop. Fixed below.)
+#
+# Chains created:  filter/MINIUPNPD           + FORWARD jump      v4 and v6
+#                  nat/MINIUPNPD              + PREROUTING jump   v4
+#                  nat/MINIUPNPD-POSTROUTING  + POSTROUTING jump  v4
+#                  mangle/MINIUPNPD           + PREROUTING jump   v4
+# The removeall scripts delete only those chains and their own jumps. They
+# never flush FORWARD - which is exactly what ee71-ipv6's ip6tables_firewall
+# relies on when it refuses to flush FORWARD itself. Neither side may start
+# flushing.
+#
+# DELIBERATE DEVIATIONS FROM UPSTREAM
+#  - No `. /lib/lsb/init-functions`: that file does not exist on this device.
+#    The stock script sourced nothing yet still called log_action_msg and
+#    status_of_proc, so its `status` and usage branches were always broken.
+#  - No `set -e`: a failing chain script (missing ip6tables, iptables without
+#    -w support) must never stop the daemon from starting, and `stop` must
+#    always reach the daemon kill. Exit codes are kept as stock: 0 for the
+#    real verbs, 2 for an unknown one.
+#  - EXTIF is resolved here and passed to the chain scripts with -i. Left to
+#    itself, miniupnpd_functions.sh derives it from the default route, which
+#    is empty whenever core_app enables UPnP while the WAN is down; the chain
+#    would then be created with no jump into it.
+# busybox start-stop-daemon on this device does support the long options used
+# below (--start/--stop/--quiet/--startas/--pidfile/--retry).
+
+ETCPATH=/etc/miniupnpd
+MINIUPNPD=/usr/sbin/miniupnpd
+CONF=$ETCPATH/miniupnpd.conf
+PIDFILE=/var/run/miniupnpd.pid
+ARGS="-f $CONF"
+
+# Stock behaviour: a missing daemon is not an error. core_app calls `start`
+# from a DB flag it keeps regardless of what is installed, and `opkg remove`
+# takes the binary away without telling core_app.
+test -f "$MINIUPNPD" || exit 0
+
+# ext_if: the WAN interface the MINIUPNPD jumps hang off.
+#   1. ext_ifname from the config (what the daemon itself will use)
+#   2. the current default route
+#   3. the EE71 WAN, which is always rmnet_data0
+# core_app rewrites $CONF from /jrd-resource/resource/router/miniupnpd.conf on
+# every boot and that copy carries no ext_ifname, so step 1 often finds
+# nothing - hence the fallbacks.
+ext_if() {
+	_if=$(sed -n 's/^ext_ifname=//p' "$CONF" 2>/dev/null | tail -n 1)
+	[ -n "$_if" ] || _if=$(ip -4 route 2>/dev/null | \
+		sed -n 's/^default .*[[:space:]]dev[[:space:]]\([^ ]*\).*/\1/p' | head -n 1)
+	[ -n "$_if" ] || _if=rmnet_data0
+	echo "$_if"
+}
+
+# chains <init|removeall>
+# The vendor ships these scripts mode 0644, so they must be run through sh
+# rather than executed. $0 inside them still resolves to $ETCPATH, which is
+# where they look for miniupnpd_functions.sh.
+chains() {
+	_extif=$(ext_if)
+	for _fam in iptables ip6tables; do
+		_s="$ETCPATH/${_fam}_$1.sh"
+		if [ ! -f "$_s" ]; then
+			echo "miniupnpd: $_s missing - $_fam MINIUPNPD chain not touched"
+			continue
+		fi
+		sh "$_s" -i "$_extif" >/dev/null 2>&1 || \
+			echo "miniupnpd: $_s failed (check that $_fam supports -w)"
+	done
+}
+
+start_daemon() {
+	start-stop-daemon --start --quiet --pidfile "$PIDFILE" \
+		--startas "$MINIUPNPD" -- $ARGS $LSBNAMES
+}
+
+stop_daemon() {
+	start-stop-daemon --stop --quiet --pidfile "$PIDFILE"
+}
+
+case "$1" in
+  start)
+	chains init
+	start_daemon
+	;;
+  stop)
+	# Daemon first, chains second: a live daemon re-adds rules into chains
+	# that have just been removed.
+	stop_daemon
+	chains removeall
+	;;
+  restart|reload|force-reload)
+	start-stop-daemon --stop --retry 5 --quiet --pidfile "$PIDFILE"
+	chains removeall
+	chains init
+	start_daemon
+	;;
+  status)
+	if pidof miniupnpd >/dev/null 2>&1; then
+		echo "miniupnpd is running (pid $(pidof miniupnpd))"
+	else
+		echo "miniupnpd is not running"
+	fi
+	;;
+  *)
+	echo "Usage: /etc/init.d/miniupnpd {start|stop|restart|reload|force-reload|status}" >&2
+	exit 2
+	;;
+esac
+exit 0
