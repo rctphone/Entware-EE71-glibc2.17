@@ -20,6 +20,11 @@ DROPBEAR_PORT=22
 DROPBEAR_EXTRA_ARGS=
 NO_START=0
 
+# Refuse password logins (dropbear -s); key auth only. Set to 0 in
+# /etc/default/dropbear to allow passwords again — do that BEFORE
+# restarting dropbear, or you lock yourself out if you have no key.
+DROPBEAR_DISABLE_PASSWORD_AUTH=1
+
 # Key types to generate/use (ed25519 preferred, rsa as fallback)
 DROPBEAR_KEYTYPES="ed25519 rsa"
 
@@ -62,6 +67,18 @@ gen_keys() {
   done
 }
 
+get_pw_args() {
+  # An `[ cond ] && assign` here would return 1 when cond is false, and `set -e`
+  # would abort the script before start-stop-daemon runs — so setting
+  # DROPBEAR_DISABLE_PASSWORD_AUTH=0 would stop dropbear from starting at all,
+  # and on `restart` would kill the running daemon without replacing it.
+  # An if-condition is exempt from set -e.
+  PW_ARGS=""
+  if [ "$DROPBEAR_DISABLE_PASSWORD_AUTH" = "1" ]; then
+    PW_ARGS="-s"
+  fi
+}
+
 get_key_args() {
   KEY_ARGS=""
   for ktype in $DROPBEAR_KEYTYPES; do
@@ -70,25 +87,51 @@ get_key_args() {
   done
 }
 
+# IPv4 only. SSH over IPv6 is closed solely by /etc/init.d/ip6tables_firewall
+# (S38), whose INPUT policy is DROP with no tcp/22 accept — dropbear listens on
+# :::22 and this function adds no v6 defence of its own. If that script is ever
+# relaxed or stopped (its `stop` case does `-P INPUT ACCEPT; -F INPUT`), SSH
+# becomes reachable over IPv6 from the WAN with nothing here to stop it.
 fw_open() {
+  # Idempotent: a restart used to call fw_open without fw_close and duplicate
+  # every rule below.
+  fw_close
+
+  # Established traffic. Insert first so these end up BELOW the SYN rules.
   for IFACE in $ALLOW_SSH_INTERFACES; do
     iptables -I INPUT -i "$IFACE" -p tcp --dport "$DROPBEAR_PORT" -j ACCEPT 2>/dev/null || true
   done
-  # DHEat DoS mitigation (CVE-2002-20001): rate-limit new SSH SYN packets
-  # Allow burst of 5, then max 10/minute — must come before per-interface ACCEPT rules
-  iptables -I INPUT -p tcp --dport "$DROPBEAR_PORT" --syn \
-    -m limit --limit 10/minute --limit-burst 5 -j ACCEPT 2>/dev/null || true
-  iptables -I INPUT 2 -p tcp --dport "$DROPBEAR_PORT" --syn -j DROP 2>/dev/null || true
+
+  # Catch-all for new connections. Inserted before the per-interface accepts
+  # below, so it ends up underneath them and only sees SYN packets that
+  # arrived on an interface not in ALLOW_SSH_INTERFACES — i.e. the WAN.
+  iptables -I INPUT -p tcp --dport "$DROPBEAR_PORT" --syn -j DROP 2>/dev/null || true
+
+  # DHEat DoS mitigation (CVE-2002-20001): rate-limit new SSH SYN packets,
+  # burst 5 then 10/minute, PER LAN INTERFACE.
+  # This rule used to have no -i, which put an unconditional ACCEPT for port 22
+  # above the DROP: SSH answered on the carrier-facing rmnet_data0 with
+  # password auth enabled and a root password set. Keep the -i.
+  for IFACE in $ALLOW_SSH_INTERFACES; do
+    iptables -I INPUT -i "$IFACE" -p tcp --dport "$DROPBEAR_PORT" --syn \
+      -m limit --limit 10/minute --limit-burst 5 -j ACCEPT 2>/dev/null || true
+  done
 }
 
 fw_close() {
   for IFACE in $ALLOW_SSH_INTERFACES; do
-    iptables -D INPUT -i "$IFACE" -p tcp --dport "$DROPBEAR_PORT" -j ACCEPT 2>/dev/null || true
+    while iptables -D INPUT -i "$IFACE" -p tcp --dport "$DROPBEAR_PORT" -j ACCEPT 2>/dev/null; do :; done
   done
-  # Remove rate-limiting rules
-  iptables -D INPUT -p tcp --dport "$DROPBEAR_PORT" --syn \
-    -m limit --limit 10/minute --limit-burst 5 -j ACCEPT 2>/dev/null || true
-  iptables -D INPUT -p tcp --dport "$DROPBEAR_PORT" --syn -j DROP 2>/dev/null || true
+  # Rate-limiting rules, current per-interface form
+  for IFACE in $ALLOW_SSH_INTERFACES; do
+    while iptables -D INPUT -i "$IFACE" -p tcp --dport "$DROPBEAR_PORT" --syn \
+      -m limit --limit 10/minute --limit-burst 5 -j ACCEPT 2>/dev/null; do :; done
+  done
+  # ...and the pre-2026.91-2 unbound form, so upgrading over a running daemon
+  # does not leave the WAN-facing ACCEPT behind.
+  while iptables -D INPUT -p tcp --dport "$DROPBEAR_PORT" --syn \
+    -m limit --limit 10/minute --limit-burst 5 -j ACCEPT 2>/dev/null; do :; done
+  while iptables -D INPUT -p tcp --dport "$DROPBEAR_PORT" --syn -j DROP 2>/dev/null; do :; done
 }
 
 case "$1" in
@@ -97,8 +140,9 @@ case "$1" in
 	gen_keys
 	fw_open
 	get_key_args
+	get_pw_args
 	start-stop-daemon -S -x "$DAEMON" -- \
-	  $KEY_ARGS -p "$DROPBEAR_PORT" $DROPBEAR_EXTRA_ARGS
+	  $KEY_ARGS -p "$DROPBEAR_PORT" $PW_ARGS $DROPBEAR_EXTRA_ARGS
 	echo "$NAME."
 	;;
   stop)
@@ -114,8 +158,9 @@ case "$1" in
 	gen_keys
 	fw_open
 	get_key_args
+	get_pw_args
 	start-stop-daemon -S -x "$DAEMON" -- \
-	  $KEY_ARGS -p "$DROPBEAR_PORT" $DROPBEAR_EXTRA_ARGS
+	  $KEY_ARGS -p "$DROPBEAR_PORT" $PW_ARGS $DROPBEAR_EXTRA_ARGS
 	echo "$NAME."
 	;;
   status)
