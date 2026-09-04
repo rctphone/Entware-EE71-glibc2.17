@@ -602,6 +602,56 @@ static bool provision_guest_ap()
     return true;
 }
 
+/* ─── 5 GHz channel geometry ─────────────────────────────────────── */
+/* 40 and 80 MHz on 5 GHz are not "this channel plus more spectrum". Channels
+ * group into fixed pairs — (36,40) (44,48) (52,56) … — and fixed blocks of
+ * four, and EVERY member has to be permitted by the regulatory domain. This
+ * file writes country_code=GB a few lines below, so the domain is ETSI/UK:
+ *
+ *   36-64    UNII-1 / UNII-2A     permitted
+ *   100-140  UNII-2C              permitted
+ *   120-128                       weather radar — not offered by the stock UI
+ *   144                           outside the 5725 MHz band edge
+ *   149-165  UNII-3               not UK channels at all
+ *
+ * So 116 (whose 40 MHz partner is 120) and 140 (whose partner is 144) are
+ * 20 MHz only, and the only complete 80 MHz blocks are 36-48, 52-64, 100-112.
+ * Asking hostapd for a width its channel cannot carry makes it refuse to
+ * start, which on wlan1 means 5 GHz just never comes back.
+ *
+ * None of this showed before because the channel was pinned at 36 by the
+ * caller bug fixed alongside this, and the width never arrived at all — 36 is
+ * the lower half of its pair, so an unconditional [HT40+] happened to be
+ * right for the one channel that ever reached here.
+ *
+ * Returns NULL when the channel has no usable 40 MHz partner. */
+static const char *ht40_capab_for_channel(int ch)
+{
+    static const int lower[] = {36, 44, 52, 60, 100, 108, 132};
+    for (unsigned i = 0; i < sizeof(lower) / sizeof(lower[0]); i++) {
+        if (ch == lower[i])     return "[HT40+][SHORT-GI-40]";
+        if (ch == lower[i] + 4) return "[HT40-][SHORT-GI-40]";
+    }
+    return NULL;
+}
+
+/* 80 MHz additionally needs the centre channel of its block, or hostapd
+ * rejects the config outright ("Invalid vht_oper_centr_freq_seg0_idx"). The
+ * old code set vht_oper_chwidth=1 without it — a dead 5 GHz radio the first
+ * time anyone chose 80 MHz, unreachable until now only because Bandwidth
+ * never reached this function either.
+ * Returns 0 when the channel starts no complete 80 MHz block. */
+static int vht80_seg0_for_channel(int ch)
+{
+    static const int first[]  = { 36,  52, 100};
+    static const int centre[] = { 42,  58, 106};
+    for (unsigned i = 0; i < sizeof(first) / sizeof(first[0]); i++) {
+        if (ch >= first[i] && ch <= first[i] + 12)
+            return centre[i];
+    }
+    return 0;
+}
+
 /* ─── hostapd-wlan1.conf generation ──────────────────────────────── */
 /* Generates /etc/hostapd-wlan1.conf from 5GHz (AP2G_guest) params.
  *
@@ -611,7 +661,17 @@ static bool provision_guest_ap()
  *   SecurityMode → Guest5GSecurityMode (0=OPEN, 3=WPA2-PSK)
  *   Channel      → Guest5GChannel (0=auto → default 36)
  *   SsidHidden   → Guest5GHiddenSSID
- *   Bandwidth    → Guest5GBandwidth (0=auto, 1=20, 2=40, 3=80)
+ *   Bandwidth    → Guest5GBandwidth (0/4=auto → 40, 1=20, 2=40, 3=80)
+ *   WMode        → Guest5GPhyMode (0=auto, 4=802.11a, 5=802.11n, 6=802.11ac)
+ *
+ * Enum authority for WMode and Bandwidth: docs/ee71-wifi-values.md, citing the
+ * stock SPA's EE override block. WMode used to be ignored here while the UI
+ * offered a selector for it, so the control was inert — the values 7/8/9 that
+ * selector sent never existed in any firmware.
+ *
+ * WpaType is deliberately NOT honoured: 802.11n and ac forbid TKIP, so a
+ * 5 GHz AP that is anything but CCMP would drop to 802.11a rates. The pairwise
+ * cipher this tool writes is CCMP whatever the DB says.
  */
 static int generate_hostapd_wlan1(const char *guest_json)
 {
@@ -622,6 +682,7 @@ static int generate_hostapd_wlan1(const char *guest_json)
     int hidden = 0;
     int bandwidth = 0;
     int max_numsta = 15;
+    int wmode = 6;    /* 802.11ac — what this file hard-coded before */
 
     json_get_string(guest_json, "Ssid", ssid, sizeof(ssid));
     json_get_string(guest_json, "WpaKey", key, sizeof(key));
@@ -630,19 +691,45 @@ static int generate_hostapd_wlan1(const char *guest_json)
     hidden   = json_get_int(guest_json, "SsidHidden", hidden);
     bandwidth = json_get_int(guest_json, "Bandwidth", bandwidth);
     max_numsta = json_get_int(guest_json, "max_numsta", max_numsta);
+    wmode    = json_get_int(guest_json, "WMode", wmode);
 
     if (channel == 0) channel = 36;
+    /* max_num_sta=0 tells the driver to admit zero clients — the "WiFi is up
+     * but nobody can connect" failure. Treat it as a missing value, not a
+     * choice. */
+    if (max_numsta < 1 || max_numsta > 32) max_numsta = 15;
 
-    /* Determine HT/VHT capabilities based on bandwidth.
-     * Default (0=auto): 40 MHz — safer, 80MHz may fail if secondary
+    /* 4 = 802.11a (no HT, no VHT), 5 = 802.11n (HT only), 6 = 802.11ac.
+     * 0 is the generic "auto" the device actually stores today and means
+     * "the best available", i.e. the same as ac — as does anything
+     * unrecognised, which keeps the previous hard-coded behaviour. */
+    bool want_n  = (wmode != 4);
+    bool want_ac = (wmode != 4 && wmode != 5);
+
+    /* Determine HT/VHT capabilities from bandwidth, gated on the mode.
+     * Default (0/4 = auto): 40 MHz — safer, 80MHz may fail if secondary
      * channels are occupied (hostapd HT_SCAN failure). */
-    const char *ht_capab;
-    int vht_oper_chwidth;
-    switch (bandwidth) {
-        case 1:  ht_capab = "";                        vht_oper_chwidth = 0; break;
-        case 2:  ht_capab = "[HT40+][SHORT-GI-40]";   vht_oper_chwidth = 0; break;
-        case 3:  ht_capab = "[HT40+][SHORT-GI-40]";   vht_oper_chwidth = 1; break;
-        default: ht_capab = "[HT40+][SHORT-GI-40]";   vht_oper_chwidth = 0; break;
+    const char *ht_capab = NULL;
+    int vht_oper_chwidth = 0;
+    int vht_seg0 = 0;
+    if (want_n) {
+        switch (bandwidth) {
+            case 1: /* 20 MHz — no HT40, no VHT80 */
+                break;
+            case 3: /* 80 MHz — only meaningful with VHT, and only where the
+                     * channel starts an 80 MHz block; otherwise fall back to
+                     * 40 MHz rather than writing a config hostapd rejects. */
+                if (want_ac) {
+                    vht_seg0 = vht80_seg0_for_channel(channel);
+                    if (vht_seg0) vht_oper_chwidth = 1;
+                }
+                ht_capab = ht40_capab_for_channel(channel);
+                break;
+            case 2:
+            default:
+                ht_capab = ht40_capab_for_channel(channel);
+                break;
+        }
     }
 
     FILE *f = fopen(HOSTAPD_CONF_5G, "w");
@@ -663,19 +750,24 @@ static int generate_hostapd_wlan1(const char *guest_json)
         "ap_isolate=0\n"
         "beacon_int=100\n"
         "hw_mode=a\n"
-        "ieee80211n=1\n"
-        "ieee80211ac=1\n"
+        "ieee80211n=%d\n"
+        "ieee80211ac=%d\n"
         "channel=%d\n"
         "country_code=GB\n",
-        ssid, hidden, max_numsta, channel);
+        ssid, hidden, max_numsta, want_n ? 1 : 0, want_ac ? 1 : 0, channel);
 
-    if (ht_capab[0])
+    if (ht_capab)
         fprintf(f, "ht_capab=%s\n", ht_capab);
 
-    fprintf(f,
-        "vht_oper_chwidth=%d\n"
-        "wmm_enabled=1\n",
-        vht_oper_chwidth);
+    /* vht_oper_chwidth means nothing without ieee80211ac, and seg0 must be
+     * present exactly when the width is 80 MHz. */
+    if (want_ac) {
+        fprintf(f, "vht_oper_chwidth=%d\n", vht_oper_chwidth);
+        if (vht_oper_chwidth)
+            fprintf(f, "vht_oper_centr_freq_seg0_idx=%d\n", vht_seg0);
+    }
+
+    fprintf(f, "wmm_enabled=1\n");
 
     if (sec_mode == 3 || sec_mode == 2 || sec_mode == 4) {
         /* WPA2-PSK (or WPA/WPA2) — always use WPA2 with CCMP */
@@ -691,8 +783,11 @@ static int generate_hostapd_wlan1(const char *guest_json)
 
     fclose(f);
     chmod(HOSTAPD_CONF_5G, 0644);
-    printf("[OK] Generated %s (ssid=%s, ch=%d, sec=%d)\n",
-           HOSTAPD_CONF_5G, ssid, channel, sec_mode);
+    printf("[OK] Generated %s (ssid=%s, ch=%d, sec=%d, wmode=%d, bw=%d, "
+           "n=%d, ac=%d, ht=%s, vht=%d)\n",
+           HOSTAPD_CONF_5G, ssid, channel, sec_mode, wmode, bandwidth,
+           want_n ? 1 : 0, want_ac ? 1 : 0, ht_capab ? ht_capab : "-",
+           vht_oper_chwidth);
     return 0;
 }
 

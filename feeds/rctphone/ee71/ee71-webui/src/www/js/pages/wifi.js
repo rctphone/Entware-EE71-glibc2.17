@@ -22,18 +22,150 @@
 
     var SEC_MAP = {0:'OPEN',1:'WEP',2:'WPA-PSK',3:'WPA2-PSK',4:'WPA/WPA2-PSK'};
     var SEC_REV = {'OPEN':0,'WEP':1,'WPA-PSK':2,'WPA2-PSK':3,'WPA/WPA2-PSK':4};
-    var WMODE_2G = {0:'b',1:'g',2:'b/g',3:'b/g/n',4:'n only'};
-    var WMODE_5G = {5:'a',6:'a/n/ac',7:'a/n',8:'n/ac',9:'ac only'};
-    var WMODE_2G_REV = {'b':0,'g':1,'b/g':2,'b/g/n':3,'g/n':3,'n only':4};
-    var WMODE_5G_REV = {'a':5,'a/n/ac':6,'a/n':7,'n/ac':8,'ac only':9};
-    var BW_2G = {0:'20/40',1:'20',2:'40'};
-    var BW_5G = {0:'20/40/80',1:'20',2:'40',3:'80',4:'20/40/80'};
-    var BW_2G_REV = {'20/40':0,'20':1,'40':2};
-    var BW_5G_REV = {'20/40/80':0,'20':1,'40':2,'80':3};
+
+    // --- Enums -------------------------------------------------------------
+    //
+    // ONE table per field, values numeric, and the <select> carries the number
+    // itself — so there is no reverse map to disagree with the forward one.
+    // The pair of tables this replaced disagreed: WMODE_2G_REV mapped both
+    // 'g/n' and 'b/g/n' to 3, so picking "g/n" saved and read back as "b/g/n".
+    // That is the same failure class as the old ENC_SET WPA bug. Do not
+    // reintroduce a second table, and do not "correct" these values from any
+    // source other than the stock SPA.
+    //
+    // Authority for every value below: docs/ee71-wifi-values.md, which cites
+    // the stock SPA's EE override block (build.formatted.js:32205-32240).
+    // Our own older docs carried an invented 5 GHz table (5=a, 6=a/n/ac,
+    // 7=a/n, 8=n/ac, 9=ac); 7/8/9 have never existed in any firmware artefact.
+    //
+    // *_MAP is the READ table — every value the firmware can legitimately
+    // report, so the current setting can always be displayed truthfully.
+    // *_OFFER is the WRITE list — the values this UI is willing to send,
+    // in display order. They differ on purpose: the EE build drops the
+    // generic "auto" (0) from both mode lists, but the shipped device really
+    // does hold Guest5GPhyMode=0, so 0 must be readable without being offered.
+    var WMODE_2G       = {0:'Auto', 1:'802.11 b', 2:'802.11 b/g', 3:'802.11 b/g/n'};
+    var WMODE_2G_OFFER = [3, 2, 1];
+    var WMODE_5G       = {0:'Auto (a/n/ac)', 4:'802.11 a', 5:'802.11 n', 6:'802.11 ac'};
+    var WMODE_5G_OFFER = [6, 5, 4];
+
+    // Bandwidth labels state what the device actually produces, not what the
+    // number looks like it should mean. On 5 GHz the old BW_5G[0] said
+    // "20/40/80" while qcmap_wifi_ctl maps 0 to vht_oper_chwidth=0 — 20/40 —
+    // so choosing "80" showed "20/40/80" and got 40.
+    // 4 is the stock "auto" of the 802.11ac bandwidth list and 0 the "auto" of
+    // the 802.11n one; qcmap_wifi_ctl treats both identically, and 0 is the
+    // value this device is known to store, so 0 is the one we write.
+    var BW_2G = {0:'20/40 (auto)', 1:'20', 2:'40'};
+    var BW_5G = {0:'20/40 (auto)', 1:'20', 2:'40', 3:'80', 4:'20/40 (auto)'};
+
+    // Which widths each standard can ACTUALLY deliver, keyed by WMode.
+    //
+    // Not cosmetic. 802.11a has neither HT nor VHT, so qcmap_wifi_ctl writes
+    // no ht_capab and no vht_oper_chwidth for WMode 4 and the radio runs at 20
+    // whatever the width says; 802.11n has no VHT, so 80 silently becomes 40.
+    // Offering those widths would be a control showing a value the device does
+    // not hold — the exact defect this whole audit exists to remove.
+    //
+    // Stock does the same thing: it swaps BandwidthA / BandwidthN / BandwidthAc
+    // by WMode (build.formatted.js:55146, and :55150 for 2.4 GHz).
+    //
+    // `fallback` is where the width lands when the chosen standard cannot keep
+    // the current one — "auto" wherever it exists, because it is the only value
+    // that cannot over-promise. An unknown mode gets the permissive list, which
+    // mirrors qcmap_wifi_ctl treating an unrecognised WMode as ac.
+    var BW_BY_MODE_5G = {
+        4: {offer: [1],          fallback: 1},   // 802.11a  — 20 only
+        5: {offer: [0, 1, 2],    fallback: 0},   // 802.11n  — no VHT, so no 80
+        6: {offer: [0, 1, 2, 3], fallback: 0},   // 802.11ac
+        0: {offer: [0, 1, 2, 3], fallback: 0},   // auto == ac
+    };
+    var BW_BY_MODE_2G = {
+        1: {offer: [1],    fallback: 1},         // 802.11b   — 20 only
+        2: {offer: [1],    fallback: 1},         // 802.11b/g — 20 only
+        3: {offer: [0, 1], fallback: 0},         // 802.11b/g/n
+        0: {offer: [0, 1], fallback: 0},
+    };
+    function _bwFor(is5g, wmode) {
+        var table = is5g ? BW_BY_MODE_5G : BW_BY_MODE_2G;
+        return table[wmode] != null ? table[wmode] : table[is5g ? 6 : 3];
+    }
+
+    // 5 GHz: auto plus UNII-1 only. Two separate exclusions, both deliberate.
+    //
+    // 149-165 are outside the GB regulatory domain this device sets
+    // (country_code=GB), so hostapd would refuse them outright.
+    //
+    // 52-64 and 100-140 are every DFS channel in ETSI, and we do not offer
+    // them because we do not support them: generate_hostapd_wlan1 writes
+    // `ieee80211d=1` and no `ieee80211h` at all, and `ieee80211h=1` is the
+    // hostapd switch that enables DFS/TPC. So the key that would make a DFS
+    // channel work is definitively not written — this is not "untested".
+    // Choosing one would cost a silent minute of channel-availability check
+    // at best, and leave 5 GHz down until someone SSHes in at worst. The
+    // channel only became reachable at all in this release (it never left
+    // wifi.js before — see _fullParams), so nothing is being taken away.
+    //
+    // This is a UI restriction, not a retreat: the channel geometry in
+    // qcmap_wifi_ctl still covers every GB channel and is what a later DFS
+    // test would build on. A device already sitting on a DFS channel keeps
+    // it — _enumOptions/_channelOptions surface a current value that is not
+    // in this list rather than dropping it.
+    //
+    // Stock offers the DFS channels (build.formatted.js:11222-11240), which
+    // is not evidence for this interface: stock compiles the guest-AP panel
+    // off entirely, so its list was never exercised on wlan1.
+    var CHANNELS_5G = [0,36,40,44,48];
+    var CHANNELS_2G = [0,1,2,3,4,5,6,7,8,9,10,11,12,13];
+
+    function _int(v, def) {
+        if (v == null || v === '') return def;
+        var n = parseInt(v, 10);
+        return isNaN(n) ? def : n;
+    }
+
+    // Return the value only when the device reported one this UI understands;
+    // null otherwise, so the caller can omit the field instead of inventing a
+    // number. Validated against the READ table, so a legitimate firmware value
+    // we do not offer still survives a save untouched.
+    function _enumVal(map, v) {
+        var n = _int(v, null);
+        return (n != null && map[n] != null) ? n : null;
+    }
+
+    // Build a <select> body. If the device currently holds a value that is not
+    // in the offered list, it is added rather than dropped: a <select> with no
+    // matching option silently shows its FIRST option, and the next Save then
+    // writes that. That is how a radio on 802.11b would read as "b/g/n" and be
+    // converted to it by an unrelated save.
+    function _enumOptions(map, offered, current) {
+        var vals = offered.slice();
+        if (current != null && vals.indexOf(current) === -1) vals.unshift(current);
+        return vals.map(function(v) {
+            var label = map[v] != null ? map[v] : ('Unknown (' + v + ')');
+            return '<option value="' + v + '"' + (v === current ? ' selected' : '') +
+                   '>' + escHtml(label) + '</option>';
+        }).join('');
+    }
+
+    function _channelOptions(list, current) {
+        var vals = list.slice();
+        if (current != null && vals.indexOf(current) === -1) vals.push(current);
+        return vals.map(function(ch) {
+            return '<option value="' + ch + '"' + (ch === current ? ' selected' : '') +
+                   '>' + (ch === 0 ? 'Auto' : ch) + '</option>';
+        }).join('');
+    }
 
 
     // Last fetched settings, kept for advanced panel access
     var _wifiSettings = null;
+    // The raw AP2G / 5 GHz sub-objects exactly as GetWlanSettings returned
+    // them. Everything a save must preserve is read from here, never from a
+    // display label: a label round trip cannot represent a value we do not
+    // offer, and turns "unknown" into "the first option".
+    var _raw2g = null;
+    var _raw5g = null;
     var _currentMode = '2g'; // '2g', '5g', or 'dual'
 
     // Detect WiFi mode from settings + CGI status.
@@ -132,6 +264,43 @@
     // SecurityMode 4 (WPA/WPA2) and 2 (WPA) generate broken hostapd config — clamp to safe values
     function _safeSecMode(mode) { return (mode === 0) ? 0 : 3; }
 
+    // max_numsta reaches hostapd's max_num_sta through core_app, and an
+    // omitted field lands there as 0 — which the QCA driver reads as "admit
+    // zero clients", the historic "WiFi is up but nobody can connect" bug.
+    // So it is always sent. A stored 0 is that bug, not a user choice, and is
+    // replaced; anything else the device reports is the user's and is kept.
+    // (This used to be hard-coded to 15, which reset the value on every save.)
+    var MAX_STA_DEFAULT = 15;
+    function _safeMaxSta(v) {
+        var n = _int(v, 0);
+        return (n >= 1 && n <= 32) ? n : MAX_STA_DEFAULT;
+    }
+
+    // WpaType is 0=TKIP, 1=AES/CCMP, 2=auto on BOTH get and set
+    // (docs/ee71-wifi-values.md §4, corroborated by core_app's hostapd writer
+    // at 0x1e87b4). There is no off-by-one — a past "fix" that added one is
+    // what produced the WPA pairwise bug, so do not shift these. AES is only
+    // the fallback for a device that reported nothing usable; it used to be
+    // hard-coded, which silently converted TKIP and Auto on every save.
+    function _safeWpaType(v) {
+        var n = _int(v, 1);
+        return (n === 0 || n === 1 || n === 2) ? n : 1;
+    }
+
+    function _addIf(obj, key, val) { if (val != null) obj[key] = val; }
+
+    // Carry a field through a save only if the device gave us a value we can
+    // vouch for. Omitting beats guessing: an omitted field is at worst
+    // unchanged, whereas a guessed one is a silent write of something the user
+    // never chose.
+    function _carryRadioFields(dst, raw, wmodeMap, bwMap) {
+        _addIf(dst, 'WMode', _enumVal(wmodeMap, raw.WMode));
+        _addIf(dst, 'Channel', _int(raw.Channel, null));
+        _addIf(dst, 'Bandwidth', _enumVal(bwMap, raw.Bandwidth));
+        _addIf(dst, 'SsidHidden',
+               raw.SsidHidden != null ? (_flagOn(raw.SsidHidden) ? 1 : 0) : null);
+    }
+
     // Apply WiFi settings via wifi.cgi → qcmap_wifi_ctl.
     function _applyWifi(params) {
         // Case (b) from _detectMode: the device really is in a single-AP,
@@ -184,9 +353,14 @@
         var s = _wifiSettings || {};
         var sec2g = _safeSecMode(SEC_REV[s.WlanAuthMode] != null ? SEC_REV[s.WlanAuthMode] : 3);
         var sec5g = _safeSecMode(SEC_REV[s.WlanAuthMode_5G] != null ? SEC_REV[s.WlanAuthMode_5G] : 3);
-        var maxSta = 15; // factory default — core_app resets to 0 if omitted
-        var ap2g = { ApStatus: 1, Ssid: s.WlanSSID || '', WpaKey: s.WlanAPPwd || '', SecurityMode: sec2g, WpaType: 1, max_numsta: maxSta };
-        var ap5g = { ApStatus: 0, Ssid: s.WlanSSID_5G || '', WpaKey: s.WlanAPPwd_5G || '', SecurityMode: sec5g, WpaType: 1, max_numsta: maxSta };
+        var r2 = _raw2g || {};
+        var r5 = _raw5g || {};
+        var ap2g = { ApStatus: 1, Ssid: s.WlanSSID || '', WpaKey: s.WlanAPPwd || '', SecurityMode: sec2g,
+                     WpaType: _safeWpaType(r2.WpaType), max_numsta: _safeMaxSta(r2.max_numsta) };
+        var ap5g = { ApStatus: 0, Ssid: s.WlanSSID_5G || '', WpaKey: s.WlanAPPwd_5G || '', SecurityMode: sec5g,
+                     WpaType: _safeWpaType(r5.WpaType), max_numsta: _safeMaxSta(r5.max_numsta) };
+        _carryRadioFields(ap2g, r2, WMODE_2G, BW_2G);
+        _carryRadioFields(ap5g, r5, WMODE_5G, BW_5G);
         if (overrides2g) Object.keys(overrides2g).forEach(function(k) { ap2g[k] = overrides2g[k]; });
         if (overrides5g) Object.keys(overrides5g).forEach(function(k) { ap5g[k] = overrides5g[k]; });
 
@@ -217,8 +391,19 @@
             WpaKey: guestKey,
             SecurityMode: ap5g.SecurityMode,
             WpaType: ap5g.WpaType,
-            max_numsta: maxSta
+            max_numsta: ap5g.max_numsta
         };
+        // wlan1's whole hostapd config is generated from THIS object and
+        // nothing else (qcmap_wifi_ctl generate_hostapd_wlan1). A field left
+        // out of it is not "unchanged" — it falls back to that tool's own
+        // default: channel 36, 20/40, SSID broadcast. So every 5 GHz radio
+        // field has to be copied across, or a save that only renames the SSID
+        // also drags the channel back to 36 and un-hides the network. It is
+        // copied from ap5g rather than r5 so the 5 GHz advanced panel's
+        // overrides (applied to ap5g above) land here too.
+        ['WMode', 'Channel', 'Bandwidth', 'SsidHidden'].forEach(function(k) {
+            _addIf(guest, k, ap5g[k]);
+        });
         return { AP2G: ap2g, AP5G: ap5g, AP2G_guest: guest, AP5G_guest: guest };
     }
 
@@ -245,22 +430,23 @@
                 var guest = settings.AP2G_guest || {};
                 // Use AP2G_guest for 5GHz display when available (it maps to Guest5G* DB fields)
                 var src5g = (guest.Ssid && guest.ApStatus != null) ? guest : ap5g;
+                // Keep the sub-objects themselves. The flat names below stay
+                // because the two band cards read them, but the radio enums
+                // (WMode / Bandwidth / Channel / SsidHidden) are deliberately
+                // NOT flattened into label strings any more: the advanced panel
+                // and _fullParams read _raw2g/_raw5g, so there is one
+                // representation of a value instead of a number and a label
+                // that could drift apart.
+                _raw2g = ap2g;
+                _raw5g = src5g;
                 if (!settings.WlanSSID && ap2g.Ssid) settings.WlanSSID = ap2g.Ssid;
                 if (!settings.WlanAPPwd && ap2g.WpaKey) settings.WlanAPPwd = ap2g.WpaKey;
-                if (settings.WlanChannel == null && ap2g.Channel != null) settings.WlanChannel = String(ap2g.Channel);
                 if (settings.WlanAuthMode == null && ap2g.SecurityMode != null) settings.WlanAuthMode = SEC_MAP[ap2g.SecurityMode] || '';
-                if (!settings.WlanMode && ap2g.WMode != null) settings.WlanMode = WMODE_2G[ap2g.WMode] || '';
-                if (!settings.WlanBandwidth && ap2g.Bandwidth != null) settings.WlanBandwidth = BW_2G[ap2g.Bandwidth] || '';
                 if (!settings.WlanSSID_5G && src5g.Ssid) settings.WlanSSID_5G = src5g.Ssid;
                 if (!settings.WlanAPPwd_5G && src5g.WpaKey) settings.WlanAPPwd_5G = src5g.WpaKey;
-                if (settings.WlanChannel_5G == null && src5g.Channel != null) settings.WlanChannel_5G = String(src5g.Channel);
                 if (settings.WlanAuthMode_5G == null && src5g.SecurityMode != null) settings.WlanAuthMode_5G = SEC_MAP[src5g.SecurityMode] || '';
-                if (!settings.WlanMode_5G && src5g.WMode != null) settings.WlanMode_5G = WMODE_5G[src5g.WMode] || '';
-                if (!settings.WlanBandwidth_5G && src5g.Bandwidth != null) settings.WlanBandwidth_5G = BW_5G[src5g.Bandwidth] || '';
                 if (settings.Wlan2gState == null && ap2g.ApStatus != null) settings.Wlan2gState = String(ap2g.ApStatus);
                 if (settings.Wlan5gState == null && src5g.ApStatus != null) settings.Wlan5gState = String(src5g.ApStatus);
-                if (settings['2GHiddenSSID'] == null && ap2g.SsidHidden != null) settings['2GHiddenSSID'] = String(ap2g.SsidHidden);
-                if (settings['5GHiddenSSID'] == null && src5g.SsidHidden != null) settings['5GHiddenSSID'] = String(src5g.SsidHidden);
             }
 
             _wifiSettings = settings;
@@ -435,60 +621,52 @@
         var title = is5g ? 'Advanced 5 GHz Settings' : 'Advanced 2.4 GHz Settings';
         var prefix = is5g ? 'wa5' : 'wa2';
 
-        var hideSsid = is5g ? (s['5GHiddenSSID'] || s.WlanHideSSID_5G || '0') : (s['2GHiddenSSID'] || s.WlanHideSSID || '0');
-        var hidden = hideSsid === '1' || hideSsid === 1;
+        var raw = (is5g ? _raw5g : _raw2g) || {};
+        var legacyHide = is5g ? (s['5GHiddenSSID'] || s.WlanHideSSID_5G) : (s['2GHiddenSSID'] || s.WlanHideSSID);
+        var hidden = _flagOn(raw.SsidHidden != null ? raw.SsidHidden : legacyHide);
 
-        var mode, modeOpts, channel, channelOpts, bw, bwOpts;
+        var modeMap  = is5g ? WMODE_5G : WMODE_2G;
+        var modeOffer = is5g ? WMODE_5G_OFFER : WMODE_2G_OFFER;
+        var bwMap    = is5g ? BW_5G : BW_2G;
+        var chanList = is5g ? CHANNELS_5G : CHANNELS_2G;
 
-        if (is5g) {
-            mode = s.WlanMode_5G || '';
-            modeOpts = ['a/n/ac','a/n','n/ac','ac only'];
-            channel = s.WlanChannel_5G || '0';
-            channelOpts = [0,36,40,44,48,52,56,60,64,100,104,108,112,116,120,124,128,132,136,140,149,153,157,161,165];
-            bw = s.WlanBandwidth_5G || '';
-            bwOpts = ['20','40','80','20/40/80'];
-        } else {
-            mode = s.WlanMode || '';
-            modeOpts = ['b/g/n','b/g','g/n','n only'];
-            channel = s.WlanChannel || '0';
-            channelOpts = [0,1,2,3,4,5,6,7,8,9,10,11,12,13];
-            bw = s.WlanBandwidth || '';
-            bwOpts = ['20','40','20/40'];
-        }
+        var mode    = _enumVal(modeMap, raw.WMode);
+        var bw      = _enumVal(bwMap, raw.Bandwidth);
+        var channel = _int(raw.Channel, 0);
+        // Constrained by the STORED standard on first render too. If the device
+        // holds a width that standard cannot deliver, _enumOptions still shows
+        // it (selected), so the inconsistency is visible rather than hidden —
+        // and leaving the panel alone preserves it. Touching Standard
+        // re-evaluates and drops it.
+        var bwOffer = _bwFor(is5g, mode).offer;
 
         var fieldsHTML =
             '<label class="check-field"><input type="checkbox" id="' + prefix + '-hide"' + (hidden ? ' checked' : '') + '> Hide SSID</label>' +
             '<div class="float-field"><label>Standard</label>' +
                 '<select id="' + prefix + '-mode">' +
-                    modeOpts.map(function(m) {
-                        return '<option value="' + m + '"' + (mode === m ? ' selected' : '') + '>' + m + '</option>';
-                    }).join('') +
+                    _enumOptions(modeMap, modeOffer, mode) +
                 '</select>' +
             '</div>' +
             '<div class="float-field"><label>Channel</label>' +
                 '<select id="' + prefix + '-channel">' +
-                    channelOpts.map(function(ch) {
-                        return '<option value="' + ch + '"' + (String(channel) === String(ch) ? ' selected' : '') + '>' + (ch === 0 ? 'Auto' : ch) + '</option>';
-                    }).join('') +
+                    _channelOptions(chanList, channel) +
                 '</select>' +
             '</div>' +
-            '<div class="float-field"><label>Channel width</label>' +
+            '<div class="float-field"><label>Channel width (MHz)</label>' +
                 '<select id="' + prefix + '-bw">' +
-                    bwOpts.map(function(b) {
-                        return '<option value="' + b + '"' + (bw === b ? ' selected' : '') + '>' + b + ' MHz</option>';
-                    }).join('') +
+                    _enumOptions(bwMap, bwOffer, bw) +
                 '</select>' +
             '</div>';
 
         _showPanel(title, fieldsHTML, function() {
-            var modeRev = is5g ? WMODE_5G_REV : WMODE_2G_REV;
-            var bwRev = is5g ? BW_5G_REV : BW_2G_REV;
-            var advFields = {
-                Channel: parseInt($('#' + prefix + '-channel').value, 10) || 0,
-                WMode: modeRev[$('#' + prefix + '-mode').value] || 3,
-                Bandwidth: bwRev[$('#' + prefix + '-bw').value] || 0,
-                SsidHidden: $('#' + prefix + '-hide').checked ? 1 : 0
-            };
+            // No `|| 3` / `|| 0` fallbacks here: those turn a legitimate 0 into
+            // something else. The <select> can only hold values this page put
+            // in it, so _int's null is a genuinely broken read and the field is
+            // omitted rather than guessed.
+            var advFields = { SsidHidden: $('#' + prefix + '-hide').checked ? 1 : 0 };
+            _addIf(advFields, 'Channel', _int($('#' + prefix + '-channel').value, null));
+            _addIf(advFields, 'WMode', _int($('#' + prefix + '-mode').value, null));
+            _addIf(advFields, 'Bandwidth', _int($('#' + prefix + '-bw').value, null));
 
             var params = is5g ? _fullParams(null, advFields) : _fullParams(advFields, null);
             App.wrapFormSubmit('#wifi-panel-save', function() {
@@ -498,6 +676,22 @@
                 }).then(_loadWifiSettings);
             }, { pending: 'Applying\u2026', success: 'Advanced settings saved' });
         });
+
+        // Re-evaluate the width list when Standard changes. _showPanel appends
+        // synchronously, so the elements exist by the time it returns.
+        var modeSel = document.getElementById(prefix + '-mode');
+        var bwSel = document.getElementById(prefix + '-bw');
+        if (modeSel && bwSel) {
+            modeSel.addEventListener('change', function() {
+                var rule = _bwFor(is5g, _int(this.value, null));
+                var cur = _int(bwSel.value, null);
+                // Keep the width if the new standard can still deliver it;
+                // otherwise take that standard's fallback. Never leave the
+                // select displaying a width the standard cannot produce.
+                var keep = (cur != null && rule.offer.indexOf(cur) !== -1) ? cur : rule.fallback;
+                bwSel.innerHTML = _enumOptions(bwMap, rule.offer, keep);
+            });
+        }
     }
 
     // --- Slide-in panel (reuses rule-panel CSS) ---
