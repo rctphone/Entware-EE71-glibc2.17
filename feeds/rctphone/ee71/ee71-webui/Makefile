@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=ee71-webui
-PKG_VERSION:=1.9.0
+PKG_VERSION:=1.9.1
 PKG_RELEASE:=1
 
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)
@@ -38,6 +38,20 @@ define Package/ee71-webui
 	+sqlite3 \
 	+hostapd \
 	+jq
+  # Version-pinned because wifi.cgi and qcmap_wifi_ctl changed contract together
+  # in 2.0.0 and neither half is safe against the other's old version:
+  #  - new wifi.cgi + old (1.4.2) binary: the CGI still sends "mode" and the old
+  #    binary still honours it, resurrecting the runtime rewrite of
+  #    mobileap_cfg.xml and factory_mobileap_cfg.xml — the documented root cause
+  #    of "AP-AP reverts after reboot". It also has no stop-guest, so "5 GHz off"
+  #    silently does nothing.
+  #  - old wifi.cgi + new binary: the CGI's rejection of mode 5g is the only
+  #    guard against AP5G.ApStatus=1 combined with guest ApStatus=1 (two 5 GHz
+  #    APs on one radio). The tool now guards this itself, but the old CGI would
+  #    still drive toward it.
+  # DEPENDS handles build-time selection; EXTRA_DEPENDS is what reaches the ipk
+  # Depends: field, where opkg enforces it (include/package-pack.mk:396).
+  EXTRA_DEPENDS:=ee71-qcmap-wifi-ctl (>=2.0.0)
 endef
 
 define Package/ee71-webui/description

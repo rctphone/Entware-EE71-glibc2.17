@@ -87,15 +87,45 @@
         };
     }
 
+    // _currentMode feeds the apply body, and '5g' is not a mode we can send any
+    // more. But there are two very different ways _wifiState() reports '5g',
+    // and they must NOT be collapsed into one answer:
+    //
+    //  a) _cgiStatus is null — the status CGI failed, so wlan_mode is unknown
+    //     and dualConfigured defaulted to false. That is a MISSING READING, not
+    //     evidence of anything. This device is always AP-AP, so 'dual' is the
+    //     right assumption and the save proceeds normally.
+    //
+    //  b) the status call SUCCEEDED and honestly reports wlan_mode !== 'AP-AP'
+    //     with 5 GHz on — a genuinely single-AP, 5 GHz-only device (an
+    //     unprovisioned unit, or one restored from a pre-2026 backup). Here
+    //     'dual' would be a lie: an unrelated save, like renaming an SSID,
+    //     would flip a working single-band device toward dual-band behind the
+    //     user's back. Equally, mapping it to '2g' would move it to 2.4 GHz and
+    //     lose their 5 GHz. Neither is neutral, so we refuse in _applyWifi
+    //     rather than silently pick a band layout for them.
+    //
+    // DO NOT collapse these back into one clamp. Without case (a) one failed
+    // status request latches _currentMode to '5g' for the rest of the page's
+    // life and every later save is refused, including ones with nothing to do
+    // with 5 GHz. The symptom the user reports is "WiFi settings randomly stop
+    // saving", with nothing to connect it to a status request.
     function _detectMode(s, state) {
-        return _wifiState(s, state).mode;
+        var m = _wifiState(s, state).mode;
+        if (m === '5g' && !_cgiStatus) return 'dual';  // (a) unknown, assume AP-AP
+        return m;                                       // (b) trust a real reading
     }
 
-    // Compute mode from desired toggle states
+    // Compute mode from desired toggle states.
+    //
+    // Never returns '5g'. That mode is the 5GAPStatus band-switch — it moves
+    // wlan0 itself to 5 GHz — and on this device wlan1 is already a 5 GHz AP
+    // in AP-AP, so it would put two 5 GHz APs on one radio (the QCA6174 does
+    // 2.4+5, not 5+5). wifi.cgi rejects it outright. 2.4 GHz is therefore not
+    // a real degree of freedom: want2g is accepted for call-site symmetry but
+    // ignored, and the 2.4 GHz switch guards the off case itself.
     function _modeFromToggles(want2g, want5g) {
-        if (want2g && want5g) return 'dual';
-        if (want5g) return '5g';
-        return '2g';
+        return want5g ? 'dual' : '2g';
     }
 
     // Build full WiFi params — firmware resets omitted fields to empty.
@@ -104,12 +134,50 @@
 
     // Apply WiFi settings via wifi.cgi → qcmap_wifi_ctl.
     function _applyWifi(params) {
+        // Case (b) from _detectMode: the device really is in a single-AP,
+        // 5 GHz-only layout, which this UI can no longer express — sending
+        // either 'dual' or '2g' would silently change the user's bands. Refuse,
+        // and point at the band switches, which send an explicit mode via
+        // _modeFromToggles and so remain the way out of this state.
+        //
+        // The guidance lives in the Error's message, not in a _toast() here, on
+        // purpose. App.showNotification is one shared element whose textContent
+        // each call overwrites, and every caller re-toasts on the rejection in
+        // the next microtask — the switch handlers via
+        // _toast('Error: ' + App.errorText(e)) and wrapFormSubmit via its own
+        // handler (app-core.js:385-388). Both read err.message, so a short
+        // internal string here would be the only thing the user ever sees and
+        // the way out would be invisible. Keep this message self-contained and
+        // readable after an "Error: " prefix.
+        if (_currentMode === '5g') {
+            return Promise.reject(new Error(
+                'this device is in a 5 GHz-only band layout that this page ' +
+                'cannot change. Use the 2.4/5 GHz switches to move it to ' +
+                'dual-band first.'));
+        }
         var data = { action: 'apply', mode: _currentMode };
         if (params.AP2G) data.AP2G = params.AP2G;
         if (params.AP5G) data.AP5G = params.AP5G;
         if (params.AP2G_guest) data.AP2G_guest = params.AP2G_guest;
         if (params.AP5G_guest) data.AP5G_guest = params.AP5G_guest;
-        return API.cgiPost('wifi.cgi', data);
+        return API.cgiPost('wifi.cgi', data).then(function(r) {
+            // The device was not provisioned for dual-band (wifi_config.GuestAP
+            // was 0 — the factory value). qcmap_wifi_ctl has just set it to 1,
+            // but QCMAP is running single-AP with no wlan1 interface until
+            // core_app re-asserts the mode at its next start, so 5 GHz cannot
+            // appear before a reboot. Say so rather than reporting plain success.
+            if (r && r.reboot_required) {
+                _toast('Dual-band provisioned — reboot for 5 GHz to start', true);
+            }
+            // wifi.cgi sets this when qcmap_wifi_ctl could not write
+            // wifi_config.GuestAP: 5 GHz is up now but will not survive a
+            // reboot. The caller's own success toast fires after this one, so
+            // say it here or the user is told only "5 GHz on".
+            if (r && r.warning) {
+                _toast(r.warning, true);
+            }
+            return r;
+        });
     }
 
     function _fullParams(overrides2g, overrides5g) {
@@ -122,17 +190,19 @@
         if (overrides2g) Object.keys(overrides2g).forEach(function(k) { ap2g[k] = overrides2g[k]; });
         if (overrides5g) Object.keys(overrides5g).forEach(function(k) { ap5g[k] = overrides5g[k]; });
 
-        // Set ApStatus based on mode
+        // Set ApStatus based on mode.
         // In dual mode: AP2G.ApStatus=1 (2.4G on wlan0), AP5G.ApStatus=0 (not band-switch),
         //               guest.ApStatus=1 (5G on wlan1 via AP2G_guest/AP5G_guest)
-        // In 5g mode:   AP2G.ApStatus=0, AP5G.ApStatus=1 (core_app configures wlan0 as 5G)
-        // In 2g mode:   AP2G.ApStatus=1, AP5G.ApStatus=0
+        // In 2g mode:   AP2G.ApStatus=1, AP5G.ApStatus=0, guest.ApStatus=0
+        //
+        // There is deliberately no '5g' branch any more. It set AP5G.ApStatus=1
+        // — the band-switch that moves wlan0 to 5 GHz — which on this always-AP-AP
+        // device stacks a second 5 GHz AP on the one radio. AP5G.ApStatus stays 0
+        // on every path, so that body can no longer be constructed at all; an
+        // unexpected _currentMode now falls into the safe 2.4 GHz case.
         if (_currentMode === 'dual') {
             ap2g.ApStatus = 1;
             ap5g.ApStatus = 0;
-        } else if (_currentMode === '5g') {
-            ap2g.ApStatus = 0;
-            ap5g.ApStatus = 1;
         } else {
             ap2g.ApStatus = 1;
             ap5g.ApStatus = 0;
@@ -241,8 +311,17 @@
             var want2g = this.checked;
             var cur = _wifiState(_wifiSettings || {}, state);
             var cur5g = cur.configured5g;
-            if (!want2g && !cur5g) {
-                _toast('Cannot disable both bands', true);
+            // 2.4 GHz is wlan0 — the primary AP core_app owns and QCMAP
+            // brings up at boot. Switching it off is not representable here:
+            // with 5 GHz also off it leaves no WiFi at all, and with 5 GHz on
+            // it would mean the 5GAPStatus band-switch stacked on the guest AP
+            // already using 5 GHz (two 5 GHz APs, one radio), which wifi.cgi
+            // now refuses. Fail honestly in the UI instead of sending a
+            // request the CGI will reject.
+            if (!want2g) {
+                _toast(cur5g
+                    ? '2.4 GHz cannot be switched off while 5 GHz is on'
+                    : 'Cannot disable both bands', true);
                 this.checked = true;
                 return;
             }

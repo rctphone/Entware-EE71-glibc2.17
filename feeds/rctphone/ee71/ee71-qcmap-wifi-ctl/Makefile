@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=ee71-qcmap-wifi-ctl
-PKG_VERSION:=1.4.2
+PKG_VERSION:=2.0.0
 PKG_RELEASE:=1
 
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)
@@ -11,20 +11,30 @@ include $(INCLUDE_DIR)/package.mk
 define Package/ee71-qcmap-wifi-ctl
   SECTION:=ee71
   CATEGORY:=EE71
-  TITLE:=WiFi settings + hostapd management tool
-  DEPENDS:=+libstdcpp
+  TITLE:=5GHz (wlan1) hostapd config + restart
+  DEPENDS:=+libstdcpp +sqlite3
 endef
 
 define Package/ee71-qcmap-wifi-ctl/description
-  Manages WiFi settings on the EE71 router:
-  - Generates /etc/hostapd-wlan1.conf for 5GHz (wlan1)
-  - Sends SetWlanSettings IPC to core_app (JSON-RPC 2.0 via libsock_client.so.0)
-  - Provides restart commands for wlan0/wlan1 hostapd
+  The WiFi jobs no stock component on the EE71 does:
+  - Generates /etc/hostapd-wlan1.conf from the Guest5G* settings
+  - Restarts the wlan1 hostapd after core_app's `killall hostapd`
+    (core_app restarts only wlan0; QCMAP never notices wlan1 died)
+  - Sets wifi_config.GuestAP=1 when the guest AP is switched on. That row
+    decides dual-band at boot and has no field in the JSON-RPC wire
+    protocol, so no API call can reach it. Written one-way (never 0) and
+    only when already different, so "5 GHz off" can never make dual-band
+    unrecoverable. See docs/plans/guestap-apmode-semantics.md.
+  - stop-guest: "5 GHz off" as a runtime state, leaving provisioning alone
 
-  Solves the dual-band WiFi problem: SetWlanSettings through
-  core_app triggers QCMAP EnableWLAN which tears down ALL WiFi
-  but only restarts wlan0. This tool generates the wlan1 config
-  BEFORE the restart so QCMAP finds both configs.
+  Also sends the one SetWlanSettings IPC to core_app (JSON-RPC 2.0 via
+  libsock_client.so.0) so core_app owns every DB write and wlan0.
+
+  Deliberately NOT here (2.0.0 removed all of it): WLAN mode switching
+  and mobileap_cfg.xml editing (QCMAP reads the XML only at start and
+  core_app re-asserts the mode at every start, so a runtime edit changed
+  nothing), and wlan0 hostapd restarts (core_app owns wlan0). The device
+  is always AP-AP.
 
   Runtime deps (on device): hostapd, libsock_client.so.0
 endef

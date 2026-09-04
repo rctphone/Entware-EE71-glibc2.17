@@ -7,16 +7,20 @@
 echo "Content-Type: application/json"
 echo ""
 
+# No DB path here on purpose: this script performs no database access at all.
+# Runtime rows go through core_app via the SetWlanSettings IPC, and the one
+# provisioning row (wifi_config.GuestAP) is written by qcmap_wifi_ctl.
 WIFI_CTL="/usr/bin/qcmap_wifi_ctl"
-DB="/jrd-resource/resource/sqlite3/user_info.db3"
 MOBILEAP_CFG="/etc/mobileap_cfg.xml"
 
 . /jrd-resource/resource/webrc/www/cgi-bin/lib/cgi-common.sh
 
-# Bounds for qcmap_wifi_ctl. `apply` rewrites mobileap_cfg.xml, writes
-# hostapd-wlan1.conf, forks a detached watchdog and does one IPC to
-# core_app (5 s internal timeout) — it must not sit on the single-threaded
-# server past this.
+# Bounds for qcmap_wifi_ctl. `apply` writes hostapd-wlan1.conf, forks a
+# detached watchdog and does one IPC to core_app (5 s internal timeout) —
+# it must not sit on the single-threaded server past this. It no longer
+# touches mobileap_cfg.xml: qcmap_wifi_ctl 2.0.0 dropped all WLAN mode
+# switching, because QCMAP parses that file only at its own start and
+# core_app re-asserts the mode at every start regardless.
 WIFI_APPLY_TIMEOUT=20
 WIFI_RESTART_TIMEOUT=25
 WIFI_STATUS_TIMEOUT=5
@@ -34,8 +38,9 @@ WIFI_STATUS_TIMEOUT=5
 #
 # The mapping mirrors what the old writes intended:
 #   dual -> 2GAPStatus=1, Guest5GAPStatus=1   (AP-AP: wlan0 2.4G + wlan1 5G)
-#   2g   -> 2GAPStatus=1, Guest5GAPStatus=0
-#   5g   -> 2GAPStatus=0, 5GAPStatus=1, Guest5GAPStatus=0
+#   2g   -> 2GAPStatus=1, Guest5GAPStatus=0   (+ an explicit stop-guest below)
+# 5g is rejected before reaching here (see the mode validation): it sets
+# 5GAPStatus=1, moving wlan0 to 5 GHz while wlan1 is already there.
 #
 # TWO RULES, both load-bearing:
 #  1. An ApStatus already in the body always wins — mode is only the
@@ -49,18 +54,31 @@ WIFI_STATUS_TIMEOUT=5
 # so in practice this is a no-op; the fix is the removal of the racing
 # writes, not the addition of new ones.
 #
-# Two fields the old code wrote are deliberately NOT written any more:
-#   wifi_config.GuestAP — a capability count (ships as 2), not a boolean;
-#                         writing 1/0 corrupted it.
-#   wifi_info.APMode    — dual-band capability, reported by the stock
-#                         GetWlanSupportMode; not a runtime mode switch.
+# Two fields the old code wrote are NOT written from this script any more.
+# Settled in docs/plans/guestap-apmode-semantics.md:
+#
+#   wifi_config.GuestAP — NOT a capability count, and never 2. It is a small
+#       integer that ships as 0 and is 1 on this unit because a provisioning
+#       script we deleted set it. The earlier claim that it "ships as 2" and
+#       that core_app gates AP-AP on GuestAP == 2 is REFUTED: the live device
+#       has GuestAP = 1 while core_app asserts AP-AP right now, so a == 2 test
+#       could not pass. The 2 came from a field-identity mix-up — the wire name
+#       WlanAPMode covers both GetWlanSettings param 2 (runtime band selection,
+#       wifi_info.APMode) and GetWlanSupportMode param 96 (a static capability
+#       whose value is 2), with qcmap_wlan_mode=2 and wifi_config.Band=2 nearby.
+#       It IS load-bearing at 1, and it is provisioning, not runtime state, so
+#       qcmap_wifi_ctl writes it next to the IPC — one path for the whole mode
+#       change — never this script. It is written one-way (only ever 1), so
+#       switching 5 GHz off can never make dual-band unrecoverable.
+#
+#   wifi_info.APMode    — runtime band state owned by core_app. The stock SPA
+#       never writes it (0 occurrences in either build) and neither do we.
 apply_mode_ap_status() {
     _mode="$1"
     _body="$2"
     case "$_mode" in
         dual) _s2g=1; _s5g=null; _sguest=1 ;;
         2g)   _s2g=1; _s5g=null; _sguest=0 ;;
-        5g)   _s2g=0; _s5g=1;    _sguest=0 ;;
         *)    printf '%s' "$_body"; return 0 ;;
     esac
     printf '%s' "$_body" | jq -c \
@@ -195,12 +213,24 @@ apply)
         exit 0
     fi
 
-    # Validate mode field (if present)
+    # Validate mode field (if present).
+    #
+    # 5g is rejected, not accepted-and-ignored. It means "5GAPStatus=1"
+    # (core_app switches wlan0 itself to 5 GHz) while the device is in
+    # AP-AP with wlan1 already on 5 GHz — two 5 GHz APs on one QCA6174
+    # radio, which does 2.4+5 but not 5+5. One of the two hostapd then
+    # fails to come up and QCMAP can take the whole WLAN down with it.
+    # A mode that cannot work should fail at the edge, loudly, rather
+    # than downstream in the driver.
     MODE=$(normalize_mode)
     if [ -n "$MODE" ]; then
         case "$MODE" in
-            2g|5g|dual) ;;
-            *) echo '{"error":"Invalid mode (use 2g/5g/dual)"}'; exit 0 ;;
+            2g|dual) ;;
+            5g)
+                echo '{"error":"mode 5g is not supported: it would put two 5 GHz APs on one radio. The device is always dual-band (AP-AP); use dual, or 2g to switch 5 GHz off."}'
+                exit 0
+                ;;
+            *) echo '{"error":"Invalid mode (use 2g/dual)"}'; exit 0 ;;
         esac
         BODY=$(printf '%s' "$BODY" | jq -c --arg mode "$MODE" '. + {mode:$mode}')
         # Fold the mode's ApStatus flags in so core_app — not this script —
@@ -213,10 +243,57 @@ apply)
     RET=$?
 
     if [ "$RET" -eq 0 ]; then
+        # qcmap_wifi_ctl prints this marker when it had to flip
+        # wifi_config.GuestAP from 0 to 1. QCMAP is running single-AP at that
+        # moment (no wlan1 vdev), so 5 GHz cannot come up until core_app
+        # re-asserts the mode at its next start. Tell the caller plainly
+        # instead of reporting success for something not yet in effect.
+        REBOOT_HINT=false
+        case "$OUTPUT" in *REBOOT_REQUIRED*) REBOOT_HINT=true ;; esac
+
+        # The settings applied and 5 GHz is up now, but wifi_config.GuestAP
+        # could not be written, so the device will not come up dual-band after
+        # a reboot. Not an error — but never report a bare success for it.
+        WARNING=
+        case "$OUTPUT" in
+            *GUESTAP_FAILED*)
+                WARNING="5 GHz is on now, but the dual-band setting could not be saved; it may not survive a reboot"
+                ;;
+        esac
+
+        # "5 GHz off" is ours to carry out. The apply above sent the guest
+        # section with ApStatus=0, so qcmap_wifi_ctl refreshed
+        # hostapd-wlan1.conf but deliberately did not restart wlan1; core_app
+        # then killed every hostapd and brought back only wlan0. stop-guest
+        # clears whatever survived that (a lingering hostapd_cli, the stale
+        # pid and control socket) and is idempotent, so it is safe here even
+        # when wlan1 is already down.
+        #
+        # Note this is a runtime state only: QCMAP starts wlan1 from its own
+        # XML at the next boot, so 5 GHz returns after a reboot. Persisting
+        # "off" across boots would need a boot script, which is exactly what
+        # this cleanup removed — do not add one back.
+        STOP_FAILED=false
+        if [ "$MODE" = "2g" ]; then
+            STOP_OUT=$(run_timeout "$WIFI_RESTART_TIMEOUT" "$WIFI_CTL" stop-guest 2>&1)
+            # Do not swallow this: the user asked for 5 GHz off, and a silent
+            # failure here would leave it running while we report success.
+            [ $? -eq 0 ] || STOP_FAILED=true
+            OUTPUT="$OUTPUT
+$STOP_OUT"
+        fi
         # Flush core_app's DB write to NAND. Bounded: sync can stall on a
         # busy UBIFS and would otherwise hold the whole server.
         run_timeout 5 sync
-        jq -n --arg detail "$OUTPUT" '{"ok":true,"detail":$detail}'
+        if [ "$STOP_FAILED" = true ]; then
+            jq -n --arg detail "$OUTPUT" \
+                '{"error":"settings applied, but switching 5 GHz off failed","detail":$detail}'
+        else
+            jq -n --arg detail "$OUTPUT" --argjson reboot "$REBOOT_HINT" \
+                --arg warning "$WARNING" \
+                '{"ok":true,"reboot_required":$reboot,"detail":$detail}
+                 + (if $warning == "" then {} else {warning:$warning} end)'
+        fi
     elif [ "$RET" -eq 124 ]; then
         jq -n --arg detail "$OUTPUT" --argjson t "$WIFI_APPLY_TIMEOUT" \
             '{"error":"apply timed out","timeout":$t,"detail":$detail}'
@@ -231,11 +308,14 @@ restart)
         exit 0
     fi
 
+    # guest (wlan1) is the only restartable target. wlan0 belongs to
+    # core_app — qcmap_wifi_ctl 2.0.0 dropped restart-both/restart-primary
+    # so that we are not a second writer of core_app's hostapd.
     TARGET=$(echo "$BODY" | jq -r '.target // empty')
-    TARGET="${TARGET:-both}"
+    TARGET="${TARGET:-guest}"
 
     case "$TARGET" in
-        both|primary|guest)
+        guest)
             OUTPUT=$(run_timeout "$WIFI_RESTART_TIMEOUT" \
                 "$WIFI_CTL" "restart-$TARGET" 2>&1)
             RET=$?
@@ -249,7 +329,7 @@ restart)
             fi
             ;;
         *)
-            jq -n --arg target "$TARGET" '{"error":("invalid target: " + $target + " (use both/primary/guest)")}'
+            jq -n --arg target "$TARGET" '{"error":("invalid target: " + $target + " (use guest)")}'
             ;;
     esac
     ;;

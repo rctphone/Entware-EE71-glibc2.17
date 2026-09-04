@@ -1,5 +1,21 @@
 /*
- * qcmap_wifi_ctl — WiFi settings + hostapd management for EE71
+ * qcmap_wifi_ctl — the two WiFi jobs stock leaves undone on EE71
+ *
+ * The device is always AP-AP: QCMAP reads WlanMode from
+ * /etc/mobileap_cfg.xml at start, launches BOTH hostapd instances itself,
+ * bridges both, and core_app re-asserts the mode into QCMAP at every
+ * start (it derives that mode from a wifi_config row it reads once —
+ * never write those rows from here or from any caller). Nothing here
+ * manages the mode, and nothing here touches wlan0 — core_app owns
+ * /etc/hostapd.conf and the wlan0 hostapd.
+ *
+ * Exactly three things no stock component does:
+ *   1. write /etc/hostapd-wlan1.conf from the Guest5G* settings
+ *   2. bring the wlan1 hostapd back after core_app's `killall hostapd`
+ *      (core_app restarts only wlan0; QCMAP never notices)
+ *   3. set wifi_config.GuestAP=1 when the guest AP is switched on — the
+ *      provisioning row that decides dual-band at boot and that no API
+ *      path can reach (see provision_guest_ap)
  *
  * Commands:
  *   apply '{"AP2G":{...},"AP5G":{...},"AP2G_guest":{...},"AP5G_guest":{...}}'
@@ -13,11 +29,15 @@
  *   AP2G_guest   (WlanAPID 2) — guest AP on 2.4GHz band
  *   AP5G_guest   (WlanAPID 3) — guest AP on 5GHz band (= wlan1 in AP-AP mode)
  * Both AP2G_guest and AP5G_guest map to the same Guest5G* DB fields.
+ * Never send AP5G.ApStatus=1 together with a guest section: that puts two
+ * 5 GHz APs on one radio.
  *
- *   restart-both     — restart wlan0 + wlan1 hostapd
- *   restart-primary  — restart wlan0 hostapd only
  *   restart-guest    — restart wlan1 hostapd only
+ *   stop-guest       — stop wlan1 hostapd ("5 GHz off"), idempotent
  *   status           — check hostapd process status
+ *
+ * A guest section with "ApStatus":0 updates the config file but does not
+ * start wlan1; use stop-guest to actually take it down.
  *
  * Build: cross-compile for ARM (ARMv7-A, soft-float, glibc 2.17)
  * Runtime deps: hostapd, libsock_client.so.0 (all on device)
@@ -43,16 +63,18 @@
 #include <linux/sockios.h>
 
 /* ─── Config paths ───────────────────────────────────────────────── */
+/* HOSTAPD_CONF_2G is read-only here: it identifies core_app's wlan0
+ * hostapd process so the watchdog can tell when it went down and came
+ * back. This tool never writes it and never restarts wlan0. */
 static const char *HOSTAPD_CONF_2G    = "/etc/hostapd.conf";
 static const char *HOSTAPD_CONF_5G    = "/etc/hostapd-wlan1.conf";
-static const char *HOSTAPD_PID_2G     = "/etc/hostapd_ssid1.pid";
 static const char *HOSTAPD_PID_5G     = "/etc/hostapd_ssid2.pid";
 static const char *ENTROPY_FILE       = "/etc/entropy_file1";
 static const char *HOSTAPD_CTRL_DIR   = "/var/run/hostapd";
 static const char *BRIDGE             = "bridge0";
 static const char *MOBILEAP_CFG      = "/etc/mobileap_cfg.xml";
-static const char *MOBILEAP_FACTORY  = "/etc/factory_mobileap_cfg.xml";
 static const char *QCMAP_STA_IFACE    = "/usr/bin/QCMAP_StaInterface";
+static const char *USER_DB            = "/jrd-resource/resource/sqlite3/user_info.db3";
 
 /* ─── Simple JSON value extractor ────────────────────────────────── */
 /* Extract a string value for a given key from JSON.
@@ -438,13 +460,6 @@ static int bridge_addif(const char *bridge, const char *ifname)
     return bridge_if_ioctl(SIOCBRADDIF, bridge, ifname, EEXIST);
 }
 
-static int bridge_delif(const char *bridge, const char *ifname)
-{
-    if (!bridge_hasif(bridge, ifname))
-        return 0;
-    return bridge_if_ioctl(SIOCBRDELIF, bridge, ifname, ENOENT);
-}
-
 static bool hostapd_running(const char *conf_path)
 {
     const char *needles[] = {"hostapd", "-B", conf_path};
@@ -469,9 +484,12 @@ static int stop_hostapd_cli(const char *ifname)
     return terminate_matching_processes(needles, 2, 3000, ifname);
 }
 
-/* ─── WlanMode management (mobileap_cfg.xml) ────────────────────── */
-/* Read current WlanMode from /etc/mobileap_cfg.xml.
- * Returns true if found, writes value to out (e.g. "AP" or "AP-AP"). */
+/* ─── WlanMode (mobileap_cfg.xml) — READ ONLY ───────────────────── */
+/* Reported by `status` so a caller can see which mode QCMAP came up in.
+ * Nothing writes this file here: QCMAP only parses it at process start,
+ * so a runtime edit changes nothing and only desyncs disk from memory,
+ * and core_app re-asserts the mode into QCMAP at every start anyway.
+ * Expect "AP-AP" on this device, always. */
 static bool get_wlan_mode(char *out, int out_sz)
 {
     out[0] = '\0';
@@ -495,102 +513,93 @@ static bool get_wlan_mode(char *out, int out_sz)
     return false;
 }
 
-/* Replace <WlanMode>X</WlanMode> in mobileap_cfg.xml.
- * Atomic: write to .tmp, rename. Returns 0 on success. */
-static int set_wlan_mode(const char *mode)
+/* ─── Provisioning: wifi_config.GuestAP ──────────────────────────── */
+/* GuestAP is the one row that decides whether the device comes up dual-band,
+ * and no API path can set it: the name does not exist in the JSON-RPC wire
+ * protocol at all (0 occurrences in either stock SPA), so SetWlanSettings
+ * cannot carry it. core_app loads it in its bulk schema read at startup and
+ * asserts the WLAN mode from in-memory state well after. Factory value is 0;
+ * this unit is 1 only because a provisioning script we have since deleted set
+ * it on 2026-03-02. With that script gone, nothing writes it — so without this
+ * function the UI cannot enable dual-band at all.
+ * Semantics settled in docs/plans/guestap-apmode-semantics.md.
+ *
+ * Three deliberate properties:
+ *
+ *  1. ONE-WAY. It only ever writes 1, never 0. "5 GHz off" is a runtime state
+ *     (stop-guest), not a provisioning change. The old code wrote 0 here on the
+ *     2g path, which is a plausible mechanism for the long-standing "AP-AP
+ *     reverts after reboot" complaint: turning 5 GHz off once left the device
+ *     unable to come back dual-band the same way it went off. Never again.
+ *
+ *  2. NOT THE RACE WE REMOVED. The writes deleted earlier targeted runtime rows
+ *     (2GAPStatus, Guest5GAPStatus, APMode) that core_app keeps in memory and
+ *     rewrites from its own cache on every SetWlanSettings — so they were lost
+ *     or clobbered core_app's belief. GuestAP is read once at startup and has no
+ *     wire field, so writing it out of band cannot collide with an in-flight
+ *     core_app operation; it simply takes effect at the next core_app start,
+ *     which is exactly the "works after a reboot" semantics we want. It is
+ *     written BEFORE the IPC so core_app is not mid-apply.
+ *
+ *  3. NO-OP WHEN ALREADY PROVISIONED. The UPDATE is guarded by value<>'1', so
+ *     the steady-state cost is one read-only sqlite call and zero NAND writes.
+ *
+ * Not fatal on failure: the settings change itself is still valid, and the next
+ * apply retries. Explicit -batch -noheader -list because sqlite3 3.53 on this
+ * device renders a decorated box table when stdout is a TTY.
+ */
+/* Returns true only when the row is known to read 1 afterwards — either it
+ * already did, or this call set it. Every other outcome (sqlite3 missing, DB
+ * locked, row absent, unparseable output) returns false so the caller can say
+ * so instead of reporting a success the device will not honour at boot.
+ *
+ * busy_timeout matters: core_app holds this DB and writes it on every settings
+ * apply, so SQLITE_BUSY is a live possibility exactly when we run. Without the
+ * timeout sqlite3 gives up instantly and we would silently not provision. */
+static bool provision_guest_ap()
 {
-    FILE *f = fopen(MOBILEAP_CFG, "r");
-    if (!f) {
-        fprintf(stderr, "[ERR] Cannot read %s\n", MOBILEAP_CFG);
-        return 1;
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd),
+        "sqlite3 -batch -noheader -list '%s' "
+        "\"PRAGMA busy_timeout=5000; "
+        "UPDATE wifi_config SET value='1' "
+        "WHERE items='GuestAP' AND value<>'1'; "
+        "SELECT changes() || ':' || "
+        "(SELECT COUNT(*) FROM wifi_config WHERE items='GuestAP');\" 2>&1",
+        USER_DB);
+
+    FILE *p = popen(cmd, "r");
+    if (!p) {
+        fprintf(stderr, "[ERR] Cannot run sqlite3 for GuestAP provisioning: %s\n",
+                strerror(errno));
+        return false;
     }
-    fseek(f, 0, SEEK_END);
-    long sz = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    if (sz <= 0 || sz > 65536) { fclose(f); return 1; }
 
-    char *buf = (char *)malloc(sz + 256);
-    if (!buf) { fclose(f); return 1; }
-    size_t rd = fread(buf, 1, sz, f);
-    fclose(f);
-    buf[rd] = '\0';
+    /* PRAGMA busy_timeout returns a row, so read until the last line. */
+    char line[256], out[256] = {};
+    while (fgets(line, sizeof(line), p))
+        snprintf(out, sizeof(out), "%s", line);
+    int rc = pclose(p);
 
-    /* Find <WlanMode>...</WlanMode> */
-    char *start = strstr(buf, "<WlanMode>");
-    if (!start) { free(buf); fprintf(stderr, "[ERR] <WlanMode> not found in XML\n"); return 1; }
-    char *val_start = start + 10;
-    char *val_end = strstr(val_start, "</WlanMode>");
-    if (!val_end) { free(buf); return 1; }
-
-    /* Build new file content */
-    char tmp_path[256];
-    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", MOBILEAP_CFG);
-    FILE *out = fopen(tmp_path, "w");
-    if (!out) { free(buf); return 1; }
-
-    fwrite(buf, 1, val_start - buf, out);
-    fputs(mode, out);
-    fputs(val_end, out); /* includes </WlanMode> and rest of file */
-    fclose(out);
-    free(buf);
-
-    if (rename(tmp_path, MOBILEAP_CFG) != 0) {
-        unlink(tmp_path);
-        fprintf(stderr, "[ERR] rename %s failed\n", tmp_path);
-        return 1;
+    int changed = 0, present = 0;
+    if (rc != 0 || sscanf(out, "%d:%d", &changed, &present) != 2) {
+        fprintf(stderr, "[ERR] GuestAP provisioning failed "
+                        "(sqlite3 rc=%d, last output '%s')\n", rc, out);
+        return false;
     }
-    printf("[OK] WlanMode set to %s in %s\n", mode, MOBILEAP_CFG);
-
-    /* Also patch factory template so it persists across reboots.
-     * QCMAP regenerates runtime XML from factory at boot. */
-    if (file_exists(MOBILEAP_FACTORY)) {
-        FILE *ff = fopen(MOBILEAP_FACTORY, "r");
-        if (ff) {
-            fseek(ff, 0, SEEK_END);
-            long fsz = ftell(ff);
-            fseek(ff, 0, SEEK_SET);
-            if (fsz > 0 && fsz <= 65536) {
-                char *fbuf = (char *)malloc(fsz + 256);
-                if (fbuf) {
-                    size_t frd = fread(fbuf, 1, fsz, ff);
-                    fbuf[frd] = '\0';
-                    char *fs = strstr(fbuf, "<WlanMode>");
-                    if (fs) {
-                        char *fvs = fs + 10;
-                        char *fve = strstr(fvs, "</WlanMode>");
-                        if (fve) {
-                            char ftmp[256];
-                            snprintf(ftmp, sizeof(ftmp), "%s.tmp", MOBILEAP_FACTORY);
-                            FILE *fo = fopen(ftmp, "w");
-                            if (fo) {
-                                fwrite(fbuf, 1, fvs - fbuf, fo);
-                                fputs(mode, fo);
-                                fputs(fve, fo);
-                                fclose(fo);
-                                rename(ftmp, MOBILEAP_FACTORY);
-                                printf("[OK] WlanMode set to %s in %s\n", mode, MOBILEAP_FACTORY);
-                            }
-                        }
-                    }
-                    free(fbuf);
-                }
-            }
-            fclose(ff);
-        }
+    if (present == 0) {
+        fprintf(stderr, "[ERR] wifi_config.GuestAP row missing from %s — "
+                        "dual-band cannot be provisioned\n", USER_DB);
+        return false;
     }
-    return 0;
-}
-
-/* Stop wlan1 userspace without tearing down the netdev.
- * The interface delete path is fragile on EE71 and can wedge the driver. */
-static void cleanup_wlan1()
-{
-    stop_hostapd_cli("wlan1");
-    stop_hostapd(HOSTAPD_CONF_5G, "wlan1 hostapd");
-    bridge_delif(BRIDGE, "wlan1");
-    unlink(HOSTAPD_PID_5G);
-    unlink("/var/run/hostapd/wlan1");
-    printf("[OK] wlan1 cleaned up\n");
+    if (changed > 0) {
+        /* QCMAP is running single-AP right now (no wlan1 vdev), so the guest
+         * AP cannot be started until core_app re-asserts the mode at its next
+         * start. The marker lets callers tell the user that plainly. */
+        printf("[OK] wifi_config.GuestAP set to 1 (was not 1)\n");
+        printf("REBOOT_REQUIRED\n");
+    }
+    return true;
 }
 
 /* ─── hostapd-wlan1.conf generation ──────────────────────────────── */
@@ -687,70 +696,48 @@ static int generate_hostapd_wlan1(const char *guest_json)
     return 0;
 }
 
-/* ─── Hostapd restart ────────────────────────────────────────────── */
+/* ─── wlan1 hostapd stop ─────────────────────────────────────────── */
+/* "5 GHz off": stop the guest AP's userspace and nothing else.
+ *
+ * Deliberately does NOT touch the WLAN mode, the netdev, or bridge
+ * membership. wlan1 stays in bridge0 as an idle interface with no
+ * beacon and no clients, which is harmless and keeps us out of the
+ * fragile interface-delete path. QCMAP will start wlan1 again at the
+ * next boot from its own XML, so this is a runtime state by design.
+ *
+ * Idempotent: terminate_matching_processes() returns 0 when nothing
+ * matches, and unlink() failures are ignored, so stopping an already
+ * stopped guest AP succeeds quietly. There is deliberately no
+ * file_exists(HOSTAPD_CONF_5G) guard — a missing config is not a
+ * reason to fail at turning something off.
+ */
+static int stop_hostapd_wlan1()
+{
+    printf("[*] Stopping wlan1 hostapd...\n");
+
+    if (stop_hostapd_cli("wlan1") != 0)
+        return 1;
+    if (stop_hostapd(HOSTAPD_CONF_5G, "wlan1 hostapd") != 0)
+        return 1;
+
+    unlink(HOSTAPD_PID_5G);
+    unlink("/var/run/hostapd/wlan1");
+
+    printf("[OK] wlan1 hostapd stopped\n");
+    return 0;
+}
+
+/* ─── wlan1 hostapd restart ──────────────────────────────────────── */
 /* Restart procedure:
- *   1. Kill existing hostapd for the interface
+ *   1. Kill existing hostapd for wlan1
  *   2. Start hostapd with config
  *   3. Wait for control socket readiness
  *   4. Ensure bridge membership
  *   5. Start hostapd_cli (for QCMAP event handling)
+ *
+ * wlan0 has no counterpart here on purpose: core_app owns it, and a
+ * second writer of the same process is how the two ended up fighting.
  */
-static int restart_hostapd_wlan0()
-{
-    printf("[*] Restarting wlan0 hostapd...\n");
-
-    if (!file_exists(HOSTAPD_CONF_2G)) {
-        fprintf(stderr, "[ERR] %s not found\n", HOSTAPD_CONF_2G);
-        return 1;
-    }
-
-    if (stop_hostapd_cli("wlan0") != 0)
-        return 1;
-    if (stop_hostapd(HOSTAPD_CONF_2G, "wlan0 hostapd") != 0)
-        return 1;
-
-    /* Remove stale ctrl interface */
-    unlink(HOSTAPD_PID_2G);
-    unlink("/var/run/hostapd/wlan0");
-
-    char *hostapd_argv[] = {
-        (char *)"hostapd",
-        (char *)"-B",
-        (char *)HOSTAPD_CONF_2G,
-        (char *)"-P",
-        (char *)HOSTAPD_PID_2G,
-        (char *)"-e",
-        (char *)ENTROPY_FILE,
-        NULL
-    };
-    if (spawn_and_wait(hostapd_argv) != 0) {
-        fprintf(stderr, "[ERR] Failed to start wlan0 hostapd\n");
-        return 1;
-    }
-
-    if (wait_hostapd_ready("wlan0", 15000) != 0)
-        return 1;
-
-    char *hostapd_cli_argv[] = {
-        (char *)"hostapd_cli",
-        (char *)"-i",
-        (char *)"wlan0",
-        (char *)"-p",
-        (char *)HOSTAPD_CTRL_DIR,
-        (char *)"-B",
-        (char *)"-a",
-        (char *)QCMAP_STA_IFACE,
-        NULL
-    };
-    if (spawn_and_wait(hostapd_cli_argv, true) != 0) {
-        fprintf(stderr, "[ERR] Failed to start wlan0 hostapd_cli\n");
-        return 1;
-    }
-
-    printf("[OK] wlan0 hostapd restarted\n");
-    return 0;
-}
-
 static int restart_hostapd_wlan1()
 {
     printf("[*] Restarting wlan1 hostapd...\n");
@@ -1000,33 +987,13 @@ static bool wait_for_hostapd_state(const char *conf_path, bool want_running,
 }
 
 /* ─── Apply ──────────────────────────────────────────────────────── */
+/* A "mode" key in the body is accepted and ignored: the device is always
+ * AP-AP and switching it at runtime was never possible (QCMAP reads the
+ * XML only at start, core_app overrides it at its next start). Callers
+ * should stop sending it. */
 static int cmd_apply(const char *json)
 {
     int len;
-
-    /* Extract optional "mode" field: "2g", "5g", or "dual" */
-    char mode[16] = {};
-    json_get_string(json, "mode", mode, sizeof(mode));
-    bool has_mode = mode[0] != '\0';
-    bool want_dual = has_mode && strcmp(mode, "dual") == 0;
-    bool want_5g   = has_mode && strcmp(mode, "5g") == 0;
-    bool want_2g   = has_mode && strcmp(mode, "2g") == 0;
-
-    /* Handle WlanMode transition if mode is specified */
-    if (has_mode) {
-        char cur_mode[32] = {};
-        get_wlan_mode(cur_mode, sizeof(cur_mode));
-        bool is_apap = strcmp(cur_mode, "AP-AP") == 0;
-
-        if (want_dual && !is_apap) {
-            printf("[*] Switching WlanMode AP → AP-AP\n");
-            if (set_wlan_mode("AP-AP") != 0) return 1;
-        } else if (!want_dual && is_apap) {
-            printf("[*] Switching WlanMode AP-AP → AP\n");
-            cleanup_wlan1();
-            if (set_wlan_mode("AP") != 0) return 1;
-        }
-    }
 
     /* Extract AP2G_guest (WlanAPID 2, maps to Guest5G* DB fields) */
     const char *guest = json_get_object(json, "AP2G_guest", &len);
@@ -1060,18 +1027,73 @@ static int cmd_apply(const char *json)
         memcpy(ap5g_buf, ap5g, len);
     }
 
-    /* Step 1: Generate /etc/hostapd-wlan1.conf for dual-band mode.
-     * Skip for single-band (no wlan1 needed). */
-    bool need_wlan1 = want_dual || (!has_mode && eff_guest[0]);
-    if (need_wlan1 && eff_guest[0]) {
+    /* "ApStatus":0 in the guest section means 5 GHz off. Starting the AP
+     * the caller just asked us to switch off would be the tool
+     * contradicting its own input, so only bring wlan1 back when the
+     * guest AP is actually wanted. Stopping it is a separate explicit
+     * call (stop-guest); this only declines to start it. Absent
+     * ApStatus defaults to "on" so existing callers keep working. */
+    bool have_guest = eff_guest[0] != '\0';
+    bool need_wlan1 = have_guest && json_get_int(eff_guest, "ApStatus", 1) != 0;
+
+    /* Validate before any side effect: a rejected request must leave the
+     * device exactly as it was, config file included.
+     *
+     * Refuse AP5G.ApStatus=1 together with a live guest section.
+     *
+     * AP5G.ApStatus=1 is the band switch: core_app moves wlan0 itself to
+     * 5 GHz. With the guest AP also on, wlan1 is already a 5 GHz AP, so
+     * both hostapd want 5 GHz channels on one QCA6174 — which does DBS
+     * 2.4+5, not 5+5. One of them fails to come up and QCMAP's recovery
+     * path takes the whole WLAN down (`/etc/init.d/wlan stop`), not just
+     * the guest.
+     *
+     * wifi.cgi rejects this too, but it is not a trust boundary: this tool
+     * is run by hand and from scripts, and the failure mode is no WiFi at
+     * all. Absent AP5G.ApStatus defaults to 0 — omitting the section is not
+     * a request for the band switch. */
+    if (need_wlan1 && ap5g_buf[0] &&
+        json_get_int(ap5g_buf, "ApStatus", 0) != 0) {
+        fprintf(stderr,
+            "[ERR] Refusing AP5G.ApStatus=1 with the guest AP enabled: that "
+            "puts two 5 GHz APs on one radio and can take the whole WLAN "
+            "down. Send AP5G.ApStatus=0 for dual-band, or drop the guest "
+            "section.\n");
+        return 1;
+    }
+
+    /* Step 1: Generate /etc/hostapd-wlan1.conf whenever the caller sent a
+     * guest section, including one that turns the guest AP off — the file
+     * is what QCMAP starts wlan1 from at the next boot, so it should stay
+     * current either way. A caller that does not want the file touched
+     * simply omits AP2G_guest/AP5G_guest. */
+    if (have_guest) {
         int ret = generate_hostapd_wlan1(eff_guest);
         if (ret != 0) return ret;
     }
 
-    /* Step 2: Spawn wlan1 watchdog for dual-band mode only.
-     * IPC triggers EnableWLAN → rmmod wlan → our process gets killed.
-     * The watchdog is a detached child (setsid) that waits for WiFi
-     * to come back, then starts wlan1 hostapd if needed. */
+    /* Step 1b: if the guest AP is being switched on, make sure the device is
+     * provisioned to come up dual-band after a reboot too. Gated on the same
+     * condition — asking for the 5 GHz AP is what provisions it. A plain 2.4 GHz
+     * change never touches provisioning, and neither does switching 5 GHz off.
+     *
+     * A failure here does not abort the apply: the settings themselves are
+     * still valid and 5 GHz still comes up now. Only persistence across a
+     * reboot is lost, so it is a warning, not an error — but it must be a
+     * *visible* one, or we report success for something the device will not
+     * honour at its next boot. */
+    if (need_wlan1 && !provision_guest_ap())
+        printf("GUESTAP_FAILED\n");
+
+    /* Step 2: Spawn the wlan1 watchdog.
+     * The IPC below makes core_app run `killall hostapd` — which takes
+     * wlan1 down with wlan0 — and then restart wlan0 only. QCMAP does not
+     * notice, so nothing stock brings wlan1 back. The watchdog is a
+     * detached child (setsid) that waits for wlan0 to go and return, then
+     * starts wlan1 hostapd if it is still missing.
+     * This whole step disappears once core_app is patched to kill only
+     * its own hostapd pid. It only covers changes made through this tool;
+     * a stock SetWlanSettings from any other client still kills 5 GHz. */
     if (need_wlan1) {
         pid_t pid = fork();
         if (pid == 0) {
@@ -1142,12 +1164,13 @@ static void usage(const char *prog)
         "Commands:\n"
         "  apply '{\"AP2G\":{...},\"AP5G\":{...},\"AP5G_guest\":{...}}'\n"
         "      Apply WiFi settings: generate hostapd-wlan1.conf,\n"
-        "      IPC to core_app, restart hostapd.\n"
+        "      IPC to core_app, restart wlan1 hostapd.\n"
         "\n"
-        "  restart-both      Restart wlan0 + wlan1 hostapd\n"
-        "  restart-primary   Restart wlan0 hostapd only\n"
         "  restart-guest     Restart wlan1 hostapd only\n"
+        "  stop-guest        Stop wlan1 hostapd (5 GHz off), idempotent\n"
         "  status            Check hostapd process status (JSON)\n"
+        "\n"
+        "wlan0 is core_app's; this tool never restarts it.\n"
         "\n", prog);
 }
 
@@ -1163,16 +1186,11 @@ int main(int argc, char *argv[])
     if (strcmp(cmd, "status") == 0) {
         return cmd_status();
     }
-    if (strcmp(cmd, "restart-both") == 0) {
-        int r1 = restart_hostapd_wlan0();
-        int r2 = restart_hostapd_wlan1();
-        return (r1 || r2) ? 1 : 0;
-    }
-    if (strcmp(cmd, "restart-primary") == 0) {
-        return restart_hostapd_wlan0();
-    }
     if (strcmp(cmd, "restart-guest") == 0) {
         return restart_hostapd_wlan1();
+    }
+    if (strcmp(cmd, "stop-guest") == 0) {
+        return stop_hostapd_wlan1();
     }
     if (strcmp(cmd, "apply") == 0) {
         if (argc < 3) {
