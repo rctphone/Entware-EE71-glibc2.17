@@ -1,0 +1,252 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          apply_core_app_wifi_fix
+# Required-Start:    $remote_fs
+# Default-Start:     S
+# Short-Description: Patch core_app so it stops killing the 5 GHz (wlan1) AP
+### END INIT INFO
+#
+# core_app's hostapd-restart routine (fcn.001ea0a4) runs three broad shell
+# kills that take down BOTH bands, then restarts only wlan0, leaving 5 GHz
+# dead. Those three commands are plain NUL-terminated C strings; we replace
+# each with a call to /etc/hk which kills only wlan0's hostapd/hostapd_cli.
+#
+# The three strings are the ONLY hostapd-kill commands in core_app and are
+# loaded ONLY by fcn.001ea0a4, so this neutralises every core_app teardown
+# path regardless of which SetWlanSettings branch reaches it. QCMAP's own
+# full WLAN teardown lives in a different binary and is untouched.
+#
+# Primary path: this runs in rcS (start level S), BEFORE rc5.d/S65 launches
+# oem_watch (which spawns core_app), so the binary is patched in place while
+# NOT running -- no "Text file busy", no extra disk (in-place dd, no size
+# change), no restart, no WAN blip.
+#
+# Live path (interactive start/stop while running): the real supervisor is
+# oem_watch, not core_app -- rc5.d/S65start_coreapp_le's stop) kills oem_watch
+# FIRST, else it respawns core_app. We mirror that: stop oem_watch, then
+# core_app, abort loudly if core_app cannot be stopped, patch/revert, then
+# relaunch oem_watch (which respawns core_app with the new bytes).
+#
+# Signature is size + three fixed byte windows, NOT a whole-file hash: the
+# stock core_app on this firmware already carries unrelated string patches
+# (e.g. sta_all), so its whole-file SHA256 is not the backup's. Any real
+# firmware change moves these windows and is rejected cleanly.
+
+BIN=/usr/oem/core_app
+HK_SRC=/usr/lib/ee71/hk
+HK_DST=/etc/hk
+ORIG=/cache/core_app.orig          # convenience backup (big; /usr has no room)
+EXPECTED_SIZE=2984320
+OEM_WATCH=/jrd-resource/bin/oem_watch
+
+# site: offset  length  orig_hex  patch_hex  patch_escape
+S1_OFF=2751240; S1_LEN=20
+S1_ORIG=6b696c6c616c6c20686f73746170645f636c6900
+S1_PATCH=7368202f6574632f686b20630000000000000000
+S1_ESC='\x73\x68\x20\x2f\x65\x74\x63\x2f\x68\x6b\x20\x63\x00\x00\x00\x00\x00\x00\x00\x00'
+S2_OFF=2751260; S2_LEN=16
+S2_ORIG=6b696c6c616c6c20686f737461706400
+S2_PATCH=7368202f6574632f686b203000000000
+S2_ESC='\x73\x68\x20\x2f\x65\x74\x63\x2f\x68\x6b\x20\x30\x00\x00\x00\x00'
+S3_OFF=2751364; S3_LEN=20
+S3_ORIG=6b696c6c616c6c202d3920686f73746170640000
+S3_PATCH=7368202f6574632f686b20390000000000000000
+S3_ESC='\x73\x68\x20\x2f\x65\x74\x63\x2f\x68\x6b\x20\x39\x00\x00\x00\x00\x00\x00\x00\x00'
+
+read_hex() {  # file offset len -> lowercase hex, no spaces
+    dd if="$1" bs=1 skip="$2" count="$3" 2>/dev/null | \
+        hexdump -v -e "$3/1 \"%02x\"" 2>/dev/null
+}
+
+esc_from_hex() {  # hex-string -> \xNN\xNN...
+    echo "$1" | sed 's/../\\x&/g'
+}
+
+write_site() {  # offset escape
+    printf "%b" "$2" | dd of="$BIN" bs=1 seek="$1" conv=notrunc 2>/dev/null
+}
+
+install_hk() {
+    if [ -f "$HK_SRC" ]; then
+        cp "$HK_SRC" "$HK_DST" && chmod 755 "$HK_DST"
+    fi
+    [ -f "$HK_DST" ]
+}
+
+# site_state offset len orig patch -> echoes: patch | orig | foreign
+site_state() {
+    cur=$(read_hex "$BIN" "$1" "$2")
+    if   [ "$cur" = "$4" ]; then echo patch
+    elif [ "$cur" = "$3" ]; then echo orig
+    else echo foreign
+    fi
+}
+
+# classify whole binary from its three sites -> patched | stock | partial | unknown
+#   patched : all three PATCH
+#   stock   : all three ORIG
+#   partial : a mix of ONLY ORIG/PATCH (e.g. torn write) -> safely completable
+#   unknown : at least one site is neither (different build) -> refuse
+classify() {
+    a=$(site_state "$S1_OFF" "$S1_LEN" "$S1_ORIG" "$S1_PATCH")
+    b=$(site_state "$S2_OFF" "$S2_LEN" "$S2_ORIG" "$S2_PATCH")
+    c=$(site_state "$S3_OFF" "$S3_LEN" "$S3_ORIG" "$S3_PATCH")
+    case "$a$b$c" in
+        *foreign*) echo unknown; return ;;
+    esac
+    if [ "$a$b$c" = "patchpatchpatch" ]; then echo patched; return; fi
+    if [ "$a$b$c" = "origorigorig" ];    then echo stock;   return; fi
+    echo partial
+}
+
+# apply_patches: idempotent per-site -- only writes sites still at ORIG, so a
+# torn write from a previous interrupted run is completed rather than skipped.
+apply_patches() {
+    [ "$(site_state "$S1_OFF" "$S1_LEN" "$S1_ORIG" "$S1_PATCH")" = orig ] && write_site "$S1_OFF" "$S1_ESC"
+    [ "$(site_state "$S2_OFF" "$S2_LEN" "$S2_ORIG" "$S2_PATCH")" = orig ] && write_site "$S2_OFF" "$S2_ESC"
+    [ "$(site_state "$S3_OFF" "$S3_LEN" "$S3_ORIG" "$S3_PATCH")" = orig ] && write_site "$S3_OFF" "$S3_ESC"
+    sync
+}
+
+revert_patches() {  # per-site: only rewrite sites still at PATCH
+    [ "$(site_state "$S1_OFF" "$S1_LEN" "$S1_ORIG" "$S1_PATCH")" = patch ] && write_site "$S1_OFF" "$(esc_from_hex "$S1_ORIG")"
+    [ "$(site_state "$S2_OFF" "$S2_LEN" "$S2_ORIG" "$S2_PATCH")" = patch ] && write_site "$S2_OFF" "$(esc_from_hex "$S2_ORIG")"
+    [ "$(site_state "$S3_OFF" "$S3_LEN" "$S3_ORIG" "$S3_PATCH")" = patch ] && write_site "$S3_OFF" "$(esc_from_hex "$S3_ORIG")"
+    sync
+}
+
+wait_gone() {  # process-name -> 0 if gone within ~5s, 1 if still alive
+    i=0
+    while [ "$i" -lt 20 ] && pidof "$1" >/dev/null 2>&1; do
+        usleep 250000 2>/dev/null || sleep 1
+        i=$((i + 1))
+    done
+    ! pidof "$1" >/dev/null 2>&1
+}
+
+# supervisor_down: stop oem_watch (the supervisor) FIRST so it cannot respawn
+# core_app, then stop core_app. Sets SUPERVISOR_WAS_UP=1 if we stopped it, so
+# the caller knows to bring it back. Returns non-zero (with a clear message)
+# if core_app cannot be stopped -- the caller must then ABORT, never dd.
+supervisor_down() {
+    SUPERVISOR_WAS_UP=0
+    if ! pidof core_app >/dev/null 2>&1; then
+        return 0            # boot path: nothing running, nothing to do
+    fi
+    SUPERVISOR_WAS_UP=1
+    echo "core_app_wifi_fix: stopping oem_watch (supervisor) then core_app"
+    start-stop-daemon -K -n oem_watch 2>/dev/null
+    wait_gone oem_watch || echo "core_app_wifi_fix: WARNING oem_watch still up"
+    start-stop-daemon -K -n core_app 2>/dev/null
+    if ! wait_gone core_app; then
+        echo "[ERR] core_app_wifi_fix: core_app still running (oem_watch may be"
+        echo "  respawning it); ABORTING without writing the binary"
+        # oem_watch is already dead at this point. Callers abort by exiting, so
+        # returning here would leave core_app alive with no supervisor: nothing
+        # would restart it after the next unrelated crash, until a reboot. Put
+        # the supervisor back before failing. This belongs here rather than in
+        # the callers so no future caller can forget it.
+        supervisor_up
+        return 1
+    fi
+    return 0
+}
+
+supervisor_up() {
+    [ "${SUPERVISOR_WAS_UP:-0}" = 1 ] || return 0
+    echo "core_app_wifi_fix: restarting oem_watch (respawns core_app)"
+    start-stop-daemon -S -b -o -a "$OEM_WATCH" 2>/dev/null
+}
+
+precheck() {  # common: BIN exists, install hk, size ok. echoes state or exits.
+    if [ ! -f "$BIN" ]; then
+        echo "[ERR] core_app_wifi_fix: $BIN not found"; exit 1
+    fi
+    install_hk || echo "[ERR] core_app_wifi_fix: could not install $HK_DST"
+    SIZE=$(wc -c < "$BIN" 2>/dev/null)
+    if [ "$((SIZE + 0))" -ne "$EXPECTED_SIZE" ]; then
+        echo "core_app_wifi_fix: unexpected size $((SIZE + 0)) (want $EXPECTED_SIZE) - skipped"
+        exit 0
+    fi
+}
+
+do_start() {
+    precheck
+    case "$(classify)" in
+        patched)
+            echo "core_app_wifi_fix: already patched"
+            exit 0 ;;
+        unknown)
+            echo "core_app_wifi_fix: kill strings match neither stock nor patched"
+            echo "  layout - different core_app build, refusing to write (skipped)"
+            exit 0 ;;
+        # stock or partial: (continue - partial completes a torn write)
+    esac
+
+    # best-effort convenience backup (revert also works without it, byte-level).
+    # Only from a VERIFIED-stock binary, so we never store half-patched bytes.
+    if [ ! -f "$ORIG" ] && [ "$(classify)" = stock ]; then
+        if cp "$BIN" "$ORIG" 2>/dev/null; then
+            sync
+            echo "core_app_wifi_fix: backed up stock binary to $ORIG"
+        else
+            echo "core_app_wifi_fix: WARNING could not write $ORIG (byte-revert still works)"
+        fi
+    fi
+
+    if ! supervisor_down; then
+        exit 1                      # abort: never dd a running/ respawning ELF
+    fi
+
+    apply_patches
+
+    if [ "$(classify)" = "patched" ]; then
+        echo "core_app_wifi_fix: patched ($BIN)"
+        supervisor_up
+    else
+        echo "[ERR] core_app_wifi_fix: verify failed after write"
+        if [ -f "$ORIG" ]; then
+            cat "$ORIG" > "$BIN" && sync && echo "core_app_wifi_fix: restored stock from $ORIG"
+        fi
+        supervisor_up
+        exit 1
+    fi
+}
+
+do_stop() {   # revert to stock kill strings (the emergency path)
+    if [ ! -f "$BIN" ]; then echo "[ERR] $BIN not found"; exit 1; fi
+    case "$(classify)" in
+        stock)
+            echo "core_app_wifi_fix: already stock"; exit 0 ;;
+        unknown)
+            echo "[ERR] core_app_wifi_fix: unrecognised layout, refusing to revert"
+            exit 1 ;;
+        # patched or partial: continue
+    esac
+
+    if ! supervisor_down; then
+        exit 1                      # abort with a clear reason (see message)
+    fi
+
+    revert_patches
+
+    if [ "$(classify)" = "stock" ]; then
+        echo "core_app_wifi_fix: reverted to stock kill strings"
+        supervisor_up
+    else
+        echo "[ERR] core_app_wifi_fix: revert verify failed"
+        supervisor_up
+        exit 1
+    fi
+}
+
+case "$1" in
+    start) do_start ;;
+    stop)  do_stop ;;
+    status)
+        [ -f "$BIN" ] && echo "core_app_wifi_fix: $(classify)" || echo "core_app missing"
+        [ -f "$HK_DST" ] && echo "helper: $HK_DST present" || echo "helper: $HK_DST MISSING"
+        ;;
+    *) echo "Usage: $0 {start|stop|status}" >&2; exit 1 ;;
+esac
+exit 0

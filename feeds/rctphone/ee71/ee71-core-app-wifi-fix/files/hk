@@ -1,0 +1,41 @@
+#!/bin/sh
+# /etc/hk — kill ONLY wlan0's hostapd / hostapd_cli, sparing wlan1 (5 GHz AP).
+#
+# Installed by ee71-core-app-wifi-fix. The patched core_app calls this in
+# place of its broad `killall hostapd*` commands so that applying 2.4 GHz
+# WiFi settings no longer tears down the 5 GHz guest AP on wlan1.
+#
+#   hk 0   TERM wlan0 hostapd      (pid from /etc/hostapd_ssid1.pid)
+#   hk 9   KILL wlan0 hostapd
+#   hk c   TERM wlan0's hostapd_cli only
+#
+# wlan1 hostapd uses /etc/hostapd_ssid2.pid and is never touched here.
+
+PIDFILE=/etc/hostapd_ssid1.pid
+
+kill_wlan0_hostapd() {
+    # $1 = signal number (15 or 9)
+    P=$(cat "$PIDFILE" 2>/dev/null)
+    case "$P" in
+        ""|*[!0-9]*) return ;;   # empty or non-numeric pid file
+    esac
+    CMD=$(tr '\0' ' ' < "/proc/$P/cmdline" 2>/dev/null)
+    case "$CMD" in
+        *hostapd-wlan1*) return ;;         # never signal wlan1
+        *hostapd*)       kill -"$1" "$P" 2>/dev/null ;;
+    esac
+}
+
+case "$1" in
+    0) kill_wlan0_hostapd 15 ;;
+    9) kill_wlan0_hostapd 9 ;;
+    c)
+        for p in $(pidof hostapd_cli 2>/dev/null); do
+            CMD=$(tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null)
+            case "$CMD" in
+                *wlan0*) kill "$p" 2>/dev/null ;;
+            esac
+        done
+        ;;
+esac
+exit 0
