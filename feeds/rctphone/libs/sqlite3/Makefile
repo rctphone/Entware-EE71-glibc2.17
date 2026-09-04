@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=sqlite3
 PKG_VERSION:=3.53.2
-PKG_RELEASE:=2
+PKG_RELEASE:=3
 
 PKG_SOURCE:=sqlite-autoconf-3530200.tar.gz
 PKG_SOURCE_URL:=https://www.sqlite.org/2026/
