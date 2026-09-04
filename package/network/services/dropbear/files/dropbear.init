@@ -26,8 +26,22 @@ DROPBEAR_KEYTYPES="ed25519 rsa"
 # Host key directory
 DROPBEAR_KEYDIR="/etc/dropbear"
 
-# Interfaces on which to allow SSH traffic via iptables
+# Interfaces on which to allow SSH traffic via iptables/ip6tables
 ALLOW_SSH_INTERFACES="bridge0 ecm0 wlan0"
+
+# Firewalls to program. dropbear binds :: as well as 0.0.0.0, so both families
+# need the same rules; up to 2026.91-4 this script touched iptables only, and
+# SSH's v6 posture rested entirely on /etc/init.d/ip6tables_firewall (S38) —
+# whose INPUT policy is DROP, but whose `stop` case does
+# `-P INPUT ACCEPT; -F INPUT`. That left port 22 reachable over IPv6 from the
+# carrier the moment an unrelated script was stopped.
+#
+# Not probed for, deliberately: every call below already sends stderr to
+# /dev/null and tolerates failure, so on a kernel or build without IPv6
+# netfilter the v6 rules simply do not take, exactly as the v4 rules behave
+# when a chain is missing. A probe would add a second failure mode — an
+# xtables lock held by QCMAP would make it skip IPv6 entirely.
+FW_TOOLS="iptables ip6tables"
 
 set -e
 
@@ -70,51 +84,57 @@ get_key_args() {
   done
 }
 
-# IPv4 only. SSH over IPv6 is closed solely by /etc/init.d/ip6tables_firewall
-# (S38), whose INPUT policy is DROP with no tcp/22 accept — dropbear listens on
-# :::22 and this function adds no v6 defence of its own. If that script is ever
-# relaxed or stopped (its `stop` case does `-P INPUT ACCEPT; -F INPUT`), SSH
-# becomes reachable over IPv6 from the WAN with nothing here to stop it.
+# Ordering with the v6 firewall is unchanged by adding ip6tables here:
+# ip6tables_firewall runs from rcS.d, dropbear from rc5.d, so its `-F INPUT`
+# happens first and these rules go in on top of the chain it built. Re-running
+# `ip6tables_firewall start` afterwards DOES flush them — that is pre-existing
+# behaviour on the v4 side too, and `/etc/init.d/dropbear restart` puts them
+# back.
 fw_open() {
   # Idempotent: a restart used to call fw_open without fw_close and duplicate
   # every rule below.
   fw_close
 
-  # Established traffic. Insert first so these end up BELOW the SYN rules.
-  for IFACE in $ALLOW_SSH_INTERFACES; do
-    iptables -I INPUT -i "$IFACE" -p tcp --dport "$DROPBEAR_PORT" -j ACCEPT 2>/dev/null || true
-  done
+  for FW in $FW_TOOLS; do
+    # Established traffic. Insert first so these end up BELOW the SYN rules.
+    for IFACE in $ALLOW_SSH_INTERFACES; do
+      "$FW" -I INPUT -i "$IFACE" -p tcp --dport "$DROPBEAR_PORT" -j ACCEPT 2>/dev/null || true
+    done
 
-  # Catch-all for new connections. Inserted before the per-interface accepts
-  # below, so it ends up underneath them and only sees SYN packets that
-  # arrived on an interface not in ALLOW_SSH_INTERFACES — i.e. the WAN.
-  iptables -I INPUT -p tcp --dport "$DROPBEAR_PORT" --syn -j DROP 2>/dev/null || true
+    # Catch-all for new connections. Inserted before the per-interface accepts
+    # below, so it ends up underneath them and only sees SYN packets that
+    # arrived on an interface not in ALLOW_SSH_INTERFACES — i.e. the WAN.
+    "$FW" -I INPUT -p tcp --dport "$DROPBEAR_PORT" --syn -j DROP 2>/dev/null || true
 
-  # DHEat DoS mitigation (CVE-2002-20001): rate-limit new SSH SYN packets,
-  # burst 5 then 10/minute, PER LAN INTERFACE.
-  # This rule used to have no -i, which put an unconditional ACCEPT for port 22
-  # above the DROP: SSH answered on the carrier-facing rmnet_data0 with
-  # password auth enabled and a root password set. Keep the -i.
-  for IFACE in $ALLOW_SSH_INTERFACES; do
-    iptables -I INPUT -i "$IFACE" -p tcp --dport "$DROPBEAR_PORT" --syn \
-      -m limit --limit 10/minute --limit-burst 5 -j ACCEPT 2>/dev/null || true
+    # DHEat DoS mitigation (CVE-2002-20001): rate-limit new SSH SYN packets,
+    # burst 5 then 10/minute, PER LAN INTERFACE.
+    # This rule used to have no -i, which put an unconditional ACCEPT for port 22
+    # above the DROP: SSH answered on the carrier-facing rmnet_data0 with
+    # password auth enabled and a root password set. Keep the -i.
+    for IFACE in $ALLOW_SSH_INTERFACES; do
+      "$FW" -I INPUT -i "$IFACE" -p tcp --dport "$DROPBEAR_PORT" --syn \
+        -m limit --limit 10/minute --limit-burst 5 -j ACCEPT 2>/dev/null || true
+    done
   done
 }
 
 fw_close() {
-  for IFACE in $ALLOW_SSH_INTERFACES; do
-    while iptables -D INPUT -i "$IFACE" -p tcp --dport "$DROPBEAR_PORT" -j ACCEPT 2>/dev/null; do :; done
-  done
-  # Rate-limiting rules, current per-interface form
-  for IFACE in $ALLOW_SSH_INTERFACES; do
-    while iptables -D INPUT -i "$IFACE" -p tcp --dport "$DROPBEAR_PORT" --syn \
+  for FW in $FW_TOOLS; do
+    for IFACE in $ALLOW_SSH_INTERFACES; do
+      while "$FW" -D INPUT -i "$IFACE" -p tcp --dport "$DROPBEAR_PORT" -j ACCEPT 2>/dev/null; do :; done
+    done
+    # Rate-limiting rules, current per-interface form
+    for IFACE in $ALLOW_SSH_INTERFACES; do
+      while "$FW" -D INPUT -i "$IFACE" -p tcp --dport "$DROPBEAR_PORT" --syn \
+        -m limit --limit 10/minute --limit-burst 5 -j ACCEPT 2>/dev/null; do :; done
+    done
+    # ...and the pre-2026.91-2 unbound form, so upgrading over a running daemon
+    # does not leave the WAN-facing ACCEPT behind. It only ever existed in
+    # iptables; on ip6tables the delete simply finds nothing.
+    while "$FW" -D INPUT -p tcp --dport "$DROPBEAR_PORT" --syn \
       -m limit --limit 10/minute --limit-burst 5 -j ACCEPT 2>/dev/null; do :; done
+    while "$FW" -D INPUT -p tcp --dport "$DROPBEAR_PORT" --syn -j DROP 2>/dev/null; do :; done
   done
-  # ...and the pre-2026.91-2 unbound form, so upgrading over a running daemon
-  # does not leave the WAN-facing ACCEPT behind.
-  while iptables -D INPUT -p tcp --dport "$DROPBEAR_PORT" --syn \
-    -m limit --limit 10/minute --limit-burst 5 -j ACCEPT 2>/dev/null; do :; done
-  while iptables -D INPUT -p tcp --dport "$DROPBEAR_PORT" --syn -j DROP 2>/dev/null; do :; done
 }
 
 case "$1" in
