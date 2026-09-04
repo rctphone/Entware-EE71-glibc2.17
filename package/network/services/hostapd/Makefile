@@ -15,6 +15,23 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=hostapd
+# Version: staying on this pin deliberately. hostap_2_12 (831364bf, tagged
+#          2026-08-07) exists and our pin is a clean-fast-forward ancestor of
+#          it, but the 1,387-commit delta contains **zero CVEs** and no
+#          denial-of-service commits. The reason it looks empty is that this
+#          pin is master from thirteen months after 2.11, i.e. already well
+#          inside the 2.11->2.12 window: the ChangeLog's SAE password-identifier
+#          DoS fix (8a3351055, 2024-10-30) is an ancestor of it and its guard
+#          string is in our binary. Of ~27 memory-safety fixes in the delta,
+#          all land in code this build does not compile - IEEE80211BE, MESH,
+#          DPP, PASN, SAE_PK, OWE, P2P and EPPKE are absent from the actual
+#          compile line - or in wpa_supplicant station paths an AP never runs.
+#          Two apparent exceptions were read at source level and do not apply:
+#          4d668d52e needs a root-run hostapd_cli MIB query against an 802.1X
+#          session (this device is PSK), and 025af1c2e crashes only callers
+#          passing NULL tokens, which is PASN and wpa_supplicant, not the AP
+#          path. Rebase cost would be 15 of 61 patches, ~7 of them real work.
+#          Revisit if a CVE lands in the AP path or if OWE/DPP is ever wanted.
 PKG_RELEASE:=4
 
 PKG_SOURCE_URL:=https://w1.fi/hostap.git
