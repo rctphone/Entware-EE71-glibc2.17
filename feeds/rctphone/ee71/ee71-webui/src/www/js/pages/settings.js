@@ -226,6 +226,8 @@
                     '<div class="form-group">' +
                         '<label><input type="checkbox" id="s-pwr-led"' + (p.led_off_no_client == 1 ? ' checked' : '') + '> LEDs off when no clients</label>' +
                     '</div>' +
+                    '<p class="text-muted text-small">These are stored directly in the device database. ' +
+                        'core_app caches them at startup, so a change takes effect after a reboot.</p>' +
                     '<div class="form-actions">' +
                         '<button ' + actionAttr('setPowerSave') + ' id="s-save-power">Save</button>' +
                     '</div>' +
@@ -244,12 +246,22 @@
             wifi_off_time: (parseInt($('#s-pwr-wifioff-time').value) || 10) * 60,
             led_off_no_client: $('#s-pwr-led').checked ? 1 : 0,
         };
+        // power.cgi writes the sqlite rows directly and says so: core_app keeps
+        // these values in memory and never re-reads the table, so a save
+        // persists but does not apply until core_app restarts. The CGI reports
+        // that in `restart_required` and `note` (power.cgi:153-162); showing a
+        // bare "saved" here would claim something the CGI explicitly denies.
+        // `success: false` suppresses wrapFormSubmit's own toast so the CGI's
+        // wording is the one the user sees.
         App.wrapFormSubmit('#s-save-power', function() {
             return API.cgiPost('power.cgi', params).then(function(r) {
                 if (r && r.error) throw new Error(r.error);
+                var note = (r && r.note) || 'Power settings saved';
+                App.showNotification(note, (r && r.restart_required) ? 'info' : 'success',
+                    (r && r.restart_required) ? 8000 : undefined);
                 return r;
             });
-        }, { success: 'Power settings saved' });
+        }, { success: false });
     }
 
     // --- SIM tab ---

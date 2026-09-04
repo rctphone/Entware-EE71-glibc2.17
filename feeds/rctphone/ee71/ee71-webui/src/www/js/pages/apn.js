@@ -4,6 +4,25 @@
 
     var _apnList = [], _editingAPN = null;
 
+    // AuthType comes straight from the stock profile form
+    // (build.formatted.js:10304). Value 3 was missing from both the option list
+    // and the display map, so a profile stored as PAP & CHAP showed as a bare
+    // "3" and any edit of it silently downgraded the authentication to None.
+    var AUTH_TYPES = [
+        ['0', 'None'],
+        ['1', 'PAP'],
+        ['2', 'CHAP'],
+        ['3', 'PAP & CHAP']
+    ];
+
+    function _authLabel(v) {
+        var key = String(v == null ? 0 : v);
+        for (var i = 0; i < AUTH_TYPES.length; i++) {
+            if (AUTH_TYPES[i][0] === key) return AUTH_TYPES[i][1];
+        }
+        return key;
+    }
+
     function _isEmptyApnValue(value) {
         var raw = value == null ? '' : String(value).trim();
         return !raw || raw.toLowerCase() === 'null';
@@ -100,7 +119,7 @@
                     html += '<tr' + (isDefault ? ' class="text-bold"' : '') + '>' +
                         '<td>' + escHtml(p.ProfileName || '') + (isBroken ? ' <span class="text-danger">(broken)</span>' : '') + '</td>' +
                         '<td>' + escHtml(p.APN || '') + '</td>' +
-                        '<td>' + escHtml(p.AuthType == 0 ? 'None' : p.AuthType == 1 ? 'PAP' : p.AuthType == 2 ? 'CHAP' : String(p.AuthType || '')) + '</td>' +
+                        '<td>' + escHtml(_authLabel(p.AuthType)) + '</td>' +
                         '<td>' + (isDefault ? 'Yes' : '') + '</td>' +
                         '<td>' +
                             '<button class="btn-small" ' + actionAttr('apnEdit', [i]) + '>Edit</button> ' +
@@ -119,7 +138,11 @@
                 '</div>' +
                 '<div class="form-row">' +
                     '<div class="form-group"><label>Auth Type</label>' +
-                        '<select id="apn-auth"><option value="0">None</option><option value="1">PAP</option><option value="2">CHAP</option></select>' +
+                        '<select id="apn-auth">' +
+                            AUTH_TYPES.map(function(a) {
+                                return '<option value="' + a[0] + '">' + a[1] + '</option>';
+                            }).join('') +
+                        '</select>' +
                     '</div>' +
                     '<div class="form-group"><label>Username</label><input type="text" id="apn-user" placeholder=""></div>' +
                     '<div class="form-group"><label>Password</label><input type="text" id="apn-pass" placeholder=""></div>' +
@@ -143,7 +166,7 @@
         if (form) form.open = true;
         $('#apn-name').value = p.ProfileName || '';
         $('#apn-apn').value = p.APN || '';
-        $('#apn-auth').value = String(p.AuthType || 0);
+        $('#apn-auth').value = String(p.AuthType == null ? 0 : p.AuthType);
         $('#apn-user').value = p.UserName || '';
         $('#apn-pass').value = p.Password || '';
         _editingAPN = i;
@@ -169,16 +192,25 @@
         if (!name) return App.renderFieldError('#apn-name', 'Profile name is required');
         if (!apn) return App.renderFieldError('#apn-apn', 'APN is required');
 
+        var editing = _editingAPN !== null;
+        var existing = editing ? (_apnList[_editingAPN] || {}) : {};
+
         var params = {
             ProfileName: name,
             APN: apn,
-            AuthType: ($('#apn-auth') || {}).value || '0',
+            AuthType: parseInt(($('#apn-auth') || {}).value, 10) || 0,
             UserName: ($('#apn-user') || {}).value || '',
             Password: ($('#apn-pass') || {}).value || '',
         };
-        var editing = _editingAPN !== null;
+        // DailNumber and PdpType are real profile fields (both appear in the
+        // core_app profile parameter table, and stock posts its whole formData
+        // on EditProfile) but this form does not expose them. Echo whatever the
+        // profile already holds so editing a profile does not erase them.
+        if (existing.DailNumber != null) params.DailNumber = existing.DailNumber;
+        if (existing.PdpType != null) params.PdpType = existing.PdpType;
+
         var method = editing ? 'EditProfile' : 'AddNewProfile';
-        if (editing) params.ProfileID = parseInt(_apnList[_editingAPN].ProfileID, 10);
+        if (editing) params.ProfileID = parseInt(existing.ProfileID, 10);
 
         App.wrapFormSubmit('#apn-submit', function() {
             return API.webapi(method, params).then(_loadAPN);

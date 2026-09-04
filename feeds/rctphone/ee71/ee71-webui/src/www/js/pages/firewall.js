@@ -511,40 +511,78 @@
         }, { success: 'Filter mode saved' });
     }
 
-    // --- MAC Filter (unchanged) ---
+    // --- MAC Filter ---
+    //
+    // The API is filter_policy + two parallel lists, exactly as the stock SPA
+    // drives it (build.formatted.js:53905-54000): GetMacFilterSettings returns
+    // {filter_policy, MacAllowList, MacDenyList} and SetMacFilterSettings takes
+    // all three back. filter_policy is 0=disabled, 1=whitelist (MacAllowList),
+    // 2=blacklist (MacDenyList) — the order in the stock option table
+    // (build.formatted.js:10920) is disabled/blacklist/whitelist, which is why
+    // 2 is the blacklist and not the whitelist.
+    //
+    // Both lists are always sent back so that editing one never truncates the
+    // other, and the policy is read through String() because core_app returns
+    // it as a number and a strict compare against '1' would otherwise fail and
+    // silently render "Disabled".
+
+    var _mfPolicy = '0';
+    var _mfAllowList = [];
+    var _mfDenyList = [];
+
+    function _mfActiveList() {
+        return _mfPolicy === '1' ? _mfAllowList : _mfDenyList;
+    }
+
+    // Stock stores these as bare strings; tolerate an object form rather than
+    // rendering "[object Object]" if a firmware wraps them.
+    function _macText(m) {
+        return typeof m === 'string' ? m : ((m && (m.MacAddress || m.Address)) || '');
+    }
+
+    // Both lists travel on every write; `allow`/`deny` default to the cached
+    // copies so a mode-only save cannot truncate either of them.
+    function _saveMacFilterSettings(policy, allow, deny) {
+        return API.webapi('SetMacFilterSettings', {
+            filter_policy: parseInt(policy, 10) || 0,
+            MacAllowList: allow || _mfAllowList,
+            MacDenyList: deny || _mfDenyList
+        });
+    }
 
     function _loadMacFilter() {
         var tab = $('#fw-tab-macfilter');
         if (!tab) return Promise.resolve();
 
-        return Promise.all([
-            API.webapi('GetMacFilterSettings').catch(function() { return null; }),
-            API.webapi('GetMacFilterObjectSettings').catch(function() { return null; }),
-        ]).then(function(results) {
-            var filterSt = results[0], filterObj = results[1];
-            var mode = filterSt ? (filterSt.MacFilterMode || '0') : '0';
-            var entries = (filterObj && filterObj.MacFilterList) ? filterObj.MacFilterList : [];
+        return API.webapi('GetMacFilterSettings').then(function(data) {
+            data = data || {};
+            _mfPolicy = data.filter_policy != null ? String(data.filter_policy) : '0';
+            _mfAllowList = Array.isArray(data.MacAllowList) ? data.MacAllowList.slice() : [];
+            _mfDenyList = Array.isArray(data.MacDenyList) ? data.MacDenyList.slice() : [];
+
+            var entries = _mfActiveList();
+            var listLabel = _mfPolicy === '1' ? 'Allowed MAC addresses' : 'Blocked MAC addresses';
 
             tab.innerHTML = '<div class="card">' +
                 '<h3>MAC Address Filter</h3>' +
                 '<div class="form-group">' +
                     '<label>Filter Mode</label>' +
                     '<select id="mf-mode">' +
-                        '<option value="0"' + (mode === '0' ? ' selected' : '') + '>Disabled</option>' +
-                        '<option value="1"' + (mode === '1' ? ' selected' : '') + '>Whitelist (allow only listed)</option>' +
-                        '<option value="2"' + (mode === '2' ? ' selected' : '') + '>Blacklist (block listed)</option>' +
+                        '<option value="0"' + (_mfPolicy === '0' ? ' selected' : '') + '>Disabled</option>' +
+                        '<option value="1"' + (_mfPolicy === '1' ? ' selected' : '') + '>Whitelist (allow only listed)</option>' +
+                        '<option value="2"' + (_mfPolicy === '2' ? ' selected' : '') + '>Blacklist (block listed)</option>' +
                     '</select>' +
+                    '<p class="text-muted text-small">Each mode keeps its own list. Switching mode does not move addresses between them.</p>' +
                 '</div>' +
                 '<div class="form-actions mb-2">' +
                     '<button id="mf-save-mode" ' + actionAttr('saveMacFilterMode') + '>Save Mode</button>' +
                 '</div>' +
-                '<h3>MAC Addresses</h3>' +
+                '<h3>' + listLabel + '</h3>' +
                 '<div id="mf-list">' +
                     (entries.length === 0 ? '<p class="text-muted">No entries</p>' :
-                    '<table class="data-table"><thead><tr><th>MAC Address</th><th>Name</th><th></th></tr></thead><tbody>' +
-                    entries.map(function(e, i) {
-                        return '<tr><td class="text-mono">' + escHtml(e.MacAddress || '') + '</td>' +
-                            '<td>' + escHtml(e.DeviceName || '') + '</td>' +
+                    '<table class="data-table"><thead><tr><th>MAC Address</th><th></th></tr></thead><tbody>' +
+                    entries.map(function(mac, i) {
+                        return '<tr><td class="text-mono">' + escHtml(_macText(mac)) + '</td>' +
                             '<td><button class="toggle-btn" ' + actionAttr('delMacFilter', [i]) + '>' + icon('ic-delete') + '</button></td></tr>';
                     }).join('') + '</tbody></table>') +
                 '</div>' +
@@ -553,81 +591,115 @@
                         '<label>Add MAC</label>' +
                         '<input type="text" id="mf-mac" placeholder="AA:BB:CC:DD:EE:FF" maxlength="17">' +
                     '</div>' +
-                    '<div class="form-group">' +
-                        '<label>Name (optional)</label>' +
-                        '<input type="text" id="mf-name" placeholder="Device name">' +
-                    '</div>' +
                 '</div>' +
                 '<div class="form-actions">' +
                     '<button id="mf-add" ' + actionAttr('addMacFilter') + '>Add</button>' +
                 '</div>' +
             '</div>';
-        }).catch(function() {});
+        }).catch(function(e) {
+            tab.innerHTML = '<div class="card"><h3>MAC Address Filter</h3>' +
+                '<p class="text-danger">Error: ' + escHtml((e && e.message) || 'failed to load') + '</p></div>';
+        });
     }
 
     function _saveMacFilterMode() {
-        var mode = $('#mf-mode').value;
+        var mode = ($('#mf-mode') || {}).value || '0';
         App.wrapFormSubmit('#mf-save-mode', function() {
-            return API.webapi('SetMacFilterSettings', { MacFilterMode: mode }).then(_loadMacFilter);
+            return _saveMacFilterSettings(mode).then(_loadMacFilter);
         }, { success: 'MAC filter mode saved' });
     }
 
     function _addMacFilter() {
         App.clearFieldErrors('#fw-tab-macfilter');
         var mac = (($('#mf-mac') || {}).value || '').trim();
-        var name = (($('#mf-name') || {}).value || '').trim();
         if (!/^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/.test(mac)) {
             return App.renderFieldError('#mf-mac', 'Expected a MAC address like AA:BB:CC:DD:EE:FF');
         }
+        mac = mac.toUpperCase();
+
+        var list = _mfActiveList();
+        for (var i = 0; i < list.length; i++) {
+            if (_macText(list[i]).toUpperCase() === mac) {
+                return App.renderFieldError('#mf-mac', 'That address is already in the list');
+            }
+        }
+        // Build the new list off to the side: a failed save must not leave the
+        // cached copy holding an address the device never accepted.
+        var next = list.concat([mac]);
+
         App.wrapFormSubmit('#mf-add', function() {
-            return API.webapi('SetMacFilterObjectSettings', {
-                MacAddress: mac.toUpperCase(),
-                DeviceName: name,
-                Action: 'add'
-            }).then(_loadMacFilter);
+            return _saveMacFilterSettings(_mfPolicy, _mfPolicy === '1' ? next : null,
+                _mfPolicy === '1' ? null : next).then(_loadMacFilter);
         }, { pending: 'Adding\u2026', success: 'MAC filter entry added' });
     }
 
     function _delMacFilter(index) {
         App.confirmDialog('Remove this MAC filter entry?', function() {
             App.wrapFormSubmit(null, function() {
-                return API.webapi('SetMacFilterObjectSettings', {
-                    Index: String(index),
-                    Action: 'delete'
-                }).then(_loadMacFilter);
+                var next = _mfActiveList().slice();
+                next.splice(index, 1);
+                return _saveMacFilterSettings(_mfPolicy, _mfPolicy === '1' ? next : null,
+                    _mfPolicy === '1' ? null : next).then(_loadMacFilter);
             }, { key: 'mf-del', success: 'MAC filter entry removed' });
         }, null, { title: 'Remove entry', confirmText: 'Remove', danger: true });
     }
 
     // --- Feature 7: URL Filter ---
 
+    // The URL filter has exactly two policies on this firmware: 0 = disabled and
+    // 2 = blacklist. The stock option table (build.formatted.js:10942) lists no
+    // whitelist, so the old "Allow only listed URLs" = 1 option sent a value the
+    // firmware has no case for, while "Block listed URLs" = 0 quietly turned the
+    // filter off. UrlAllowList still exists in the API and is carried through
+    // untouched so nothing already stored there is lost.
+
+    var _ufPolicy = '0';
+    var _ufDenyList = [];
+    var _ufAllowList = [];
+
+    function _urlText(u) {
+        return typeof u === 'string' ? u : ((u && (u.Url || u.url)) || '');
+    }
+
+    function _saveUrlFilter(policy, denyList) {
+        return API.webapi('SetUrlFilterSettings', {
+            filter_policy: parseInt(policy, 10) || 0,
+            UrlDenyList: denyList || _ufDenyList,
+            UrlAllowList: _ufAllowList
+        });
+    }
+
     function _loadUrlFilter() {
         var el = $('#fw-tab-urlfilter');
         if (!el) return Promise.resolve();
 
         return API.webapi('getUrlFilterSettings').then(function(data) {
-            var policy = data.filter_policy || '0';
-            var denyList = data.UrlDenyList || [];
-            var allowList = data.UrlAllowList || [];
-            var activeList = policy === '1' ? allowList : denyList;
+            data = data || {};
+            // String() because core_app returns filter_policy as a number and a
+            // strict compare against '2' would otherwise never match.
+            _ufPolicy = data.filter_policy != null ? String(data.filter_policy) : '0';
+            _ufDenyList = Array.isArray(data.UrlDenyList) ? data.UrlDenyList.slice() : [];
+            _ufAllowList = Array.isArray(data.UrlAllowList) ? data.UrlAllowList.slice() : [];
 
             var html = '<div class="card">' +
                 '<h3>URL Filter</h3>' +
                 '<div class="form-group">' +
                     '<label>Filter Policy</label>' +
                     '<select id="uf-policy">' +
-                        '<option value="0"' + (policy === '0' ? ' selected' : '') + '>Block listed URLs</option>' +
-                        '<option value="1"' + (policy === '1' ? ' selected' : '') + '>Allow only listed URLs</option>' +
+                        '<option value="0"' + (_ufPolicy === '0' ? ' selected' : '') + '>Disabled</option>' +
+                        '<option value="2"' + (_ufPolicy === '2' ? ' selected' : '') + '>Blacklist (block listed URLs)</option>' +
                     '</select>' +
+                '</div>' +
+                '<div class="form-actions mb-2">' +
+                    '<button id="uf-save-policy" ' + actionAttr('fwSaveUrlPolicy') + '>Save Policy</button>' +
                 '</div>';
 
-            if (activeList.length === 0) {
+            if (_ufDenyList.length === 0) {
                 html += '<p class="text-muted">No URLs configured</p>';
             } else {
                 html += '<table class="data-table"><thead><tr><th>URL</th><th></th></tr></thead><tbody>';
-                activeList.forEach(function(u, i) {
-                    var url = typeof u === 'string' ? u : (u.Url || u.url || '');
-                    html += '<tr><td>' + escHtml(url) + '</td>' +
+                _ufDenyList.forEach(function(u, i) {
+                    html += '<tr><td>' + escHtml(_urlText(u)) + '</td>' +
                         '<td><button class="btn-icon" ' + actionAttr('fwDelUrl', [i]) + '>' + icon('ic-delete') + '</button></td></tr>';
                 });
                 html += '</tbody></table>';
@@ -651,31 +723,30 @@
         });
     }
 
+    // The policy dropdown used to reach the device only as a passenger on an
+    // add or a delete, so choosing a policy on its own did nothing.
+    function _fwSaveUrlPolicy() {
+        var policy = ($('#uf-policy') || {}).value || '0';
+        App.wrapFormSubmit('#uf-save-policy', function() {
+            return _saveUrlFilter(policy).then(_loadUrlFilter);
+        }, { success: 'URL filter policy saved' });
+    }
+
     function _fwAddUrl() {
         App.clearFieldErrors('#fw-tab-urlfilter');
         var inp = $('#uf-url');
         var policy = ($('#uf-policy') || {}).value || '0';
         if (!inp || !inp.value.trim()) return App.renderFieldError('#uf-url', 'Enter a URL or domain');
+        var url = inp.value.trim();
+
+        for (var i = 0; i < _ufDenyList.length; i++) {
+            if (_urlText(_ufDenyList[i]) === url) {
+                return App.renderFieldError('#uf-url', 'That URL is already in the list');
+            }
+        }
 
         App.wrapFormSubmit('#uf-add', function() {
-            // Re-fetch current settings, add the URL, save the whole list back.
-            return API.webapi('getUrlFilterSettings').then(function(data) {
-                var denyList = data.UrlDenyList || [];
-                var allowList = data.UrlAllowList || [];
-                var url = inp.value.trim();
-
-                if (policy === '1') {
-                    allowList.push(url);
-                } else {
-                    denyList.push(url);
-                }
-
-                return API.webapi('SetUrlFilterSettings', {
-                    filter_policy: policy,
-                    UrlDenyList: denyList,
-                    UrlAllowList: allowList
-                });
-            }).then(_loadUrlFilter);
+            return _saveUrlFilter(policy, _ufDenyList.concat([url])).then(_loadUrlFilter);
         }, { pending: 'Adding\u2026', success: 'URL added to the filter list' });
     }
 
@@ -684,22 +755,9 @@
 
         App.confirmDialog('Remove this URL from the filter list?', function() {
             App.wrapFormSubmit(null, function() {
-                return API.webapi('getUrlFilterSettings').then(function(data) {
-                    var denyList = data.UrlDenyList || [];
-                    var allowList = data.UrlAllowList || [];
-
-                    if (policy === '1') {
-                        allowList.splice(index, 1);
-                    } else {
-                        denyList.splice(index, 1);
-                    }
-
-                    return API.webapi('SetUrlFilterSettings', {
-                        filter_policy: policy,
-                        UrlDenyList: denyList,
-                        UrlAllowList: allowList
-                    });
-                }).then(_loadUrlFilter);
+                var next = _ufDenyList.slice();
+                next.splice(index, 1);
+                return _saveUrlFilter(policy, next).then(_loadUrlFilter);
             }, { key: 'uf-del', success: 'URL removed' });
         }, null, { title: 'Remove URL', confirmText: 'Remove', danger: true });
     }
@@ -769,6 +827,7 @@
     App._delIpFilter = _delIpFilter;
     App._deleteAllIPF = _deleteAllIPF;
     App._saveIpFilterPolicy = _saveIpFilterPolicy;
+    App._fwSaveUrlPolicy = _fwSaveUrlPolicy;
     App._fwAddUrl = _fwAddUrl;
     App._fwDelUrl = _fwDelUrl;
     App._saveMacFilterMode = _saveMacFilterMode;

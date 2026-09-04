@@ -12,6 +12,11 @@
         { label: 'Yandex', v1: '77.88.8.8', v2: '77.88.8.1' },
     ];
 
+    // DHCPLeaseTime is expressed in hours; these are the only values the stock
+    // UI offers (build.formatted.js:10043 `DHCPLeaseTime: [[1],[6],[12],[24]]`,
+    // rendered with an "ids_lanSettings_hours" suffix).
+    var LEASE_HOURS = [1, 6, 12, 24];
+
     var MASKS = [
         ['255.255.255.0', '/24'],
         ['255.255.255.128', '/25'],
@@ -124,19 +129,63 @@
         }).catch(function() {});
     }
 
-    function _poolSize(startIP, endIP) {
-        if (!startIP || !endIP) return 101;
-        var s = startIP.split('.').map(Number);
-        var e = endIP.split('.').map(Number);
-        if (s.length !== 4 || e.length !== 4) return 101;
-        return Math.max(1, (e[3] - s[3]) + 1);
+    // The pool used to be measured in the last octet alone, which is only right
+    // for /24 and narrower — the mask dropdown offers up to /16, where a pool
+    // can legitimately span several octets. All of the arithmetic below is done
+    // on the full 32-bit address instead. `>>> 0` keeps every intermediate
+    // unsigned: JavaScript's bitwise operators are signed, so an address in
+    // 128.0.0.0/1 or a /16 mask would otherwise come out negative.
+
+    function _ipToInt(ip) {
+        var p = String(ip || '').split('.');
+        if (p.length !== 4) return null;
+        var v = 0;
+        for (var i = 0; i < 4; i++) {
+            var n = Number(p[i]);
+            if (!isFinite(n) || n < 0 || n > 255) return null;
+            v = ((v << 8) | n) >>> 0;
+        }
+        return v;
     }
 
-    function _endIPFromPool(startIP, size) {
-        var parts = startIP.split('.').map(Number);
-        if (parts.length !== 4) return startIP;
-        parts[3] = Math.min(254, parts[3] + size - 1);
-        return parts.join('.');
+    function _intToIp(v) {
+        v = v >>> 0;
+        return [(v >>> 24) & 255, (v >>> 16) & 255, (v >>> 8) & 255, v & 255].join('.');
+    }
+
+    // First and last address a DHCP pool may use inside `mask`, anchored on the
+    // router's own address: network and broadcast are both excluded.
+    function _subnetRange(routerIP, mask) {
+        var ip = _ipToInt(routerIP), m = _ipToInt(mask);
+        if (ip === null || m === null || m === 0xFFFFFFFF) return null;
+        var net = (ip & m) >>> 0;
+        var bcast = (net | (~m >>> 0)) >>> 0;
+        if (bcast - net < 2) return null;
+        return { first: (net + 1) >>> 0, last: (bcast - 1) >>> 0 };
+    }
+
+    function _poolSize(startIP, endIP) {
+        var s = _ipToInt(startIP), e = _ipToInt(endIP);
+        if (s === null || e === null || e < s) return 101;
+        return (e - s) + 1;
+    }
+
+    function _endIPFromPool(startIP, size, routerIP, mask) {
+        var s = _ipToInt(startIP);
+        if (s === null) return startIP;
+        var end = s + Math.max(1, size) - 1;
+        var range = _subnetRange(routerIP, mask);
+        if (range && end > range.last) end = range.last;
+        if (end < s) end = s;
+        return _intToIp(end);
+    }
+
+    // Largest pool that still fits between `startIP` and the end of the subnet.
+    function _maxPoolSize(startIP, routerIP, mask) {
+        var s = _ipToInt(startIP);
+        var range = _subnetRange(routerIP, mask);
+        if (s === null || !range || s > range.last) return 254;
+        return (range.last - s) + 1;
     }
 
     // --- DHCP slide-in panel ---
@@ -146,12 +195,20 @@
         var dns = _dnsData || {};
         var startIP = lan.StartIPAddress || '';
         var endIP = lan.EndIPAddress || '';
+        var routerIP = lan.IPv4IPAddress || '';
+        var mask = lan.SubnetMask || '255.255.255.0';
         var poolSize = _poolSize(startIP, endIP);
-        var leaseHours = parseInt(lan.DHCPLeaseTime || 24, 10);
-        var leaseSec = leaseHours * 3600;
+        var maxPool = _maxPoolSize(startIP, routerIP, mask);
+        var leaseHours = parseInt(lan.DHCPLeaseTime, 10);
+        if (!(leaseHours > 0)) leaseHours = 12;
 
-        var curDns1 = dns.DNSAddress1 || lan.DNSAddress1 || '';
-        var curDns2 = dns.DNSAddress2 || lan.DNSAddress2 || '';
+        // GetLanSettings is the authority: the stock LAN page reads the whole
+        // object from it and posts the same object straight back to
+        // SetLanSettings (mobile build.formatted.js:66137-66152), DNS fields
+        // included. getDNSInfo is only a fallback for a firmware that leaves
+        // them out of GetLanSettings.
+        var curDns1 = lan.DNSAddress1 || dns.DNSAddress1 || '';
+        var curDns2 = lan.DNSAddress2 || dns.DNSAddress2 || '';
 
         // Find matching preset
         var presetIdx = -1;
@@ -172,11 +229,22 @@
             '</div>' +
             '<div class="float-field">' +
                 '<label>Address pool size</label>' +
-                '<input type="number" id="lan-pool-size" value="' + poolSize + '" min="1" max="254">' +
+                '<input type="number" id="lan-pool-size" value="' + poolSize + '" min="1" max="' + maxPool + '">' +
             '</div>' +
+            // DHCPLeaseTime is in HOURS, and the firmware takes only these four
+            // values (stock formOptions, build.formatted.js:10043). The field
+            // used to be a free seconds entry that was divided by 3600 on save,
+            // so 600 was rounded to 0, forced to 1, and read back as 3600.
             '<div class="float-field">' +
-                '<label>Lease time, sec</label>' +
-                '<input type="number" id="lan-lease" value="' + leaseSec + '" min="60" max="2592000">' +
+                '<label>Lease time</label>' +
+                '<select id="lan-lease">' +
+                    LEASE_HOURS.map(function(h) {
+                        return '<option value="' + h + '"' + (h === leaseHours ? ' selected' : '') + '>' +
+                            h + (h === 1 ? ' hour' : ' hours') + '</option>';
+                    }).join('') +
+                    (LEASE_HOURS.indexOf(leaseHours) === -1 ?
+                        '<option value="' + leaseHours + '" selected>' + leaseHours + ' hours (current)</option>' : '') +
+                '</select>' +
             '</div>' +
             '<div class="float-field">' +
                 '<label>DNS preset</label>' +
@@ -238,22 +306,79 @@
         }
     }
 
+    // Every LAN save carries all of these, with the edited ones merged in, so a
+    // save from one half of the page cannot drop what the other half set — the
+    // pool and the DNS servers used to vanish from an IP/mask save, and the
+    // IP/mask from a DHCP save. The stock LAN page achieves the same by posting
+    // the entire GetLanSettings response back to SetLanSettings verbatim (mobile
+    // build.formatted.js:66137-66152).
+    //
+    // This is a whitelist and not that verbatim echo on purpose. Echoing the
+    // whole response would also write back fields the page never shows and the
+    // user cannot control (the stock response shape carries MacAddress,
+    // VPNPassthrough and DHCPLeaseTimeType), and a field the device reports in
+    // one form but accepts in another is a way to corrupt the LAN config —
+    // which is a way to lose the router. Nine of the names below sit together
+    // in one contiguous string cluster in core_app (offsets 2553016-2553143),
+    // i.e. one struct. `host_name` does NOT: it occurs elsewhere, beside
+    // snake_case names that look like a different subsystem. It is kept because
+    // it was already being sent before this whitelist existed -- this is
+    // pre-existing behaviour, not a claim that it belongs to that table.
+    // Every name is a field this page displays and the user can set.
+    var LAN_FIELDS = [
+        'host_name', 'IPv4IPAddress', 'SubnetMask', 'DHCPServerStatus',
+        'StartIPAddress', 'EndIPAddress', 'DHCPLeaseTime',
+        'DNSMode', 'DNSAddress1', 'DNSAddress2'
+    ];
+
+    function _lanPayload(changes) {
+        var params = {};
+        var base = _lanData || {};
+        for (var i = 0; i < LAN_FIELDS.length; i++) {
+            var k = LAN_FIELDS[i];
+            if (base[k] !== undefined) params[k] = base[k];
+        }
+        for (var c in changes) {
+            if (changes.hasOwnProperty(c)) params[c] = changes[c];
+        }
+        return params;
+    }
+
     function _saveDhcp() {
         App.clearFieldErrors('#rule-panel-overlay');
+
+        var lan = _lanData || {};
+        var routerIP = lan.IPv4IPAddress || '';
+        var mask = lan.SubnetMask || '255.255.255.0';
 
         var startIP = (($('#lan-dhcp-start') || {}).value || '').trim();
         if (!_isIPv4(startIP)) {
             return App.renderFieldError('#lan-dhcp-start', 'Enter a valid IPv4 address, e.g. 192.168.1.100');
         }
 
-        var poolSize = parseInt(($('#lan-pool-size') || {}).value, 10);
-        if (isNaN(poolSize) || poolSize < 1 || poolSize > 254) {
-            return App.renderFieldError('#lan-pool-size', 'Pool size must be between 1 and 254');
+        var range = _subnetRange(routerIP, mask);
+        var startInt = _ipToInt(startIP);
+        if (range && (startInt < range.first || startInt > range.last)) {
+            return App.renderFieldError('#lan-dhcp-start',
+                'The pool must start inside ' + _intToIp(range.first) + ' - ' + _intToIp(range.last));
+        }
+        // The router's own address is inside the range and is usually range.first,
+        // so it passes the check above. Handing it out to a client would give two
+        // machines the same IP and take the web UI with it.
+        if (startInt === _ipToInt(routerIP)) {
+            return App.renderFieldError('#lan-dhcp-start',
+                'The pool cannot start at the router\'s own address (' + routerIP + ')');
         }
 
-        var leaseSec = parseInt(($('#lan-lease') || {}).value, 10);
-        if (isNaN(leaseSec) || leaseSec < 60) {
-            return App.renderFieldError('#lan-lease', 'Lease time must be at least 60 seconds');
+        var maxPool = _maxPoolSize(startIP, routerIP, mask);
+        var poolSize = parseInt(($('#lan-pool-size') || {}).value, 10);
+        if (isNaN(poolSize) || poolSize < 1 || poolSize > maxPool) {
+            return App.renderFieldError('#lan-pool-size', 'Pool size must be between 1 and ' + maxPool);
+        }
+
+        var leaseHours = parseInt(($('#lan-lease') || {}).value, 10);
+        if (isNaN(leaseHours) || leaseHours < 1) {
+            return App.renderFieldError('#lan-lease', 'Choose a lease time');
         }
 
         var dns1 = (($('#lan-dns1') || {}).value || '').trim();
@@ -261,23 +386,23 @@
         if (dns1 && !_isIPv4(dns1)) return App.renderFieldError('#lan-dns1', 'Enter a valid IPv4 address or leave blank');
         if (dns2 && !_isIPv4(dns2)) return App.renderFieldError('#lan-dns2', 'Enter a valid IPv4 address or leave blank');
 
-        var params = {
+        // DNS travels inside SetLanSettings as DNSMode/DNSAddress1/DNSAddress2 —
+        // the names GetLanSettings hands back, and the only DNS parameter names
+        // core_app contains. The old setDNSInfo{PrimaryDNS,SecondaryDNS} call
+        // used the key names from the (unrelated) wired-WAN page: neither
+        // "PrimaryDNS" nor "SecondaryDNS" appears anywhere in the core_app
+        // binary, so that write could not have taken effect.
+        var params = _lanPayload({
             StartIPAddress: startIP,
-            EndIPAddress: _endIPFromPool(startIP, poolSize),
-            DHCPLeaseTime: String(Math.max(1, Math.round(leaseSec / 3600))),
-        };
+            EndIPAddress: _endIPFromPool(startIP, poolSize, routerIP, mask),
+            DHCPLeaseTime: leaseHours,
+            DNSMode: (dns1 || dns2) ? 1 : 0,
+            DNSAddress1: dns1,
+            DNSAddress2: dns2
+        });
 
         App.wrapFormSubmit('#lan-panel-save', function() {
             return API.webapi('SetLanSettings', params).then(function() {
-                return API.webapi('setDNSInfo', {
-                    DNSMode: (dns1 || dns2) ? '1' : '0',
-                    PrimaryDNS: dns1,
-                    SecondaryDNS: dns2,
-                }).catch(function() {
-                    // Address/lease changes did land; only the DNS override failed.
-                    App.showNotification('DHCP saved, but the DNS override could not be applied', 'error');
-                });
-            }).then(function() {
                 _hidePanel();
                 return _loadLan();
             });
@@ -327,18 +452,44 @@
             return App.renderFieldError('#lan-ip', 'Enter a valid IPv4 address, e.g. 192.168.1.1');
         }
 
+        var mask = ($('#lan-mask') || {}).value || '255.255.255.0';
+        var range = _subnetRange(ip, mask);
+        if (!range) {
+            return App.renderFieldError('#lan-mask', 'That mask leaves no usable addresses');
+        }
+        var ipInt = _ipToInt(ip);
+        if (ipInt < range.first || ipInt > range.last) {
+            return App.renderFieldError('#lan-ip',
+                'That is the network or broadcast address of ' + mask + ', not a host address');
+        }
+
         var dhcpMode = '1';
         var radios = document.querySelectorAll('input[name="dhcp-mode"]');
         for (var i = 0; i < radios.length; i++) {
             if (radios[i].checked) { dhcpMode = radios[i].value; break; }
         }
 
-        var params = {
+        var params = _lanPayload({
             host_name: hostname,
             IPv4IPAddress: ip,
-            SubnetMask: ($('#lan-mask') || {}).value,
-            DHCPServerStatus: dhcpMode,
-        };
+            SubnetMask: mask,
+            DHCPServerStatus: parseInt(dhcpMode, 10) || 0,
+        });
+
+        // The payload carries the whole LAN object, so a pool left over from the
+        // previous subnet would be sent back as if it were still valid. Move it
+        // into the new range whenever the address or mask has taken it outside.
+        var poolStart = _ipToInt(params.StartIPAddress);
+        var poolEnd = _ipToInt(params.EndIPAddress);
+        if (poolStart === null || poolEnd === null ||
+            poolStart < range.first || poolEnd > range.last || poolEnd < poolStart) {
+            var size = (poolStart !== null && poolEnd !== null && poolEnd >= poolStart)
+                ? (poolEnd - poolStart) + 1 : 101;
+            var newStart = Math.min(range.first + 99, range.last);
+            if (newStart === ipInt) newStart = Math.min(newStart + 1, range.last);
+            params.StartIPAddress = _intToIp(newStart);
+            params.EndIPAddress = _endIPFromPool(params.StartIPAddress, size, ip, mask);
+        }
 
         App.wrapFormSubmit('#lan-save', function() {
             return API.webapi('SetLanSettings', params).then(function() {

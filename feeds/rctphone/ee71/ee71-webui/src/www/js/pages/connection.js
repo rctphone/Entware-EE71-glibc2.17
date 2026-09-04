@@ -262,6 +262,19 @@
     // --- Network tab ---
 
     var _netSearchTimer = null;
+    // NetworkMode enum, from the EE-specific override the stock SPA applies to
+    // this device (build.formatted.js:32211 —  the same block that sets
+    // titleName = "4GEE WiFi Mini"). The generic table is
+    // [0 auto, 1 2G, 2 3G, 3 4G]; on the EE71 the override cuts it to the two
+    // values below, so 2G-only and 3G-only are not offered. The previous option
+    // list used strings ('auto', '0302', '03', ...) that match nothing the API
+    // returns, which is why a 4G-only device always rendered as "Auto".
+    var NETWORK_MODES = [
+        ['0', 'Auto'],
+        ['3', '4G only (LTE)']
+    ];
+    var NETWORK_MODE_VALUES = NETWORK_MODES.map(function(m) { return m[0]; });
+
     var _connPdpType = '3'; // cached from GetConnectionSettings
 
     function _loadNetwork() {
@@ -284,7 +297,6 @@
             var netSelMode = ns.NetselectionMode != null ? String(ns.NetselectionMode) : '0';
             var connMode = cs.ConnectMode != null ? String(cs.ConnectMode) : '1';
             var roaming = cs.RoamingConnect || '0';
-            var idleTime = cs.IdleTime != null ? cs.IdleTime : '0';
             var pdpType = String(cs.PdpType != null ? cs.PdpType : '3');
             _connPdpType = pdpType;
             var connected = connSt && (connSt.ConnectionStatus === 2 || connSt.ConnectionStatus === '2');
@@ -295,28 +307,26 @@
                     '<div class="form-group">' +
                         '<label>Preferred Mode</label>' +
                         '<select id="m-netmode">' +
-                            '<option value="auto"' + (currentMode === 'auto' || currentMode === '0' ? ' selected' : '') + '>Auto (4G/3G/2G)</option>' +
-                            '<option value="4g3g"' + (currentMode === '4g3g' || currentMode === '0302' ? ' selected' : '') + '>4G + 3G</option>' +
-                            '<option value="4g"' + (currentMode === '4g' || currentMode === '03' ? ' selected' : '') + '>4G Only (LTE)</option>' +
-                            '<option value="3g"' + (currentMode === '3g' || currentMode === '02' ? ' selected' : '') + '>3G Only (WCDMA)</option>' +
-                            '<option value="2g"' + (currentMode === '2g' || currentMode === '01' ? ' selected' : '') + '>2G Only (GSM)</option>' +
+                            NETWORK_MODES.map(function(m) {
+                                return '<option value="' + m[0] + '"' +
+                                    (currentMode === m[0] ? ' selected' : '') + '>' + m[1] + '</option>';
+                            }).join('') +
+                            (NETWORK_MODE_VALUES.indexOf(currentMode) === -1 ?
+                                '<option value="' + escHtml(currentMode) + '" selected>Unknown (' + escHtml(currentMode) + ')</option>' : '') +
                         '</select>' +
-                        '<p class="text-muted text-small">Changing preferred mode is disabled until the router enum values are verified.</p>' +
-                    '</div>' +
-                    '<div class="form-actions">' +
-                        '<button disabled title="Waiting for verified NetworkMode enum">Apply Mode</button>' +
                     '</div>' +
                 '</div>' +
 
-                // Operator Selection (Feature 3)
+                // Operator Selection
                 '<div class="card mt-2">' +
                     '<h3>Operator Selection</h3>' +
                     '<div class="form-group">' +
-                        '<label><input type="radio" name="netsel" id="m-netsel-auto" value="0"' + (netSelMode === '0' || netSelMode === 0 ? ' checked' : '') + '> Automatic</label>' +
-                        '<label><input type="radio" name="netsel" id="m-netsel-manual" value="1"' + (netSelMode === '1' || netSelMode === 1 ? ' checked' : '') + '> Manual</label>' +
+                        '<label><input type="radio" name="netsel" id="m-netsel-auto" value="0"' + (netSelMode !== '1' ? ' checked' : '') + '> Automatic</label>' +
+                        '<label><input type="radio" name="netsel" id="m-netsel-manual" value="1"' + (netSelMode === '1' ? ' checked' : '') + '> Manual</label>' +
                     '</div>' +
                     '<div class="form-actions">' +
-                        '<button ' + actionAttr('connSearchNet') + '>Search Networks</button>' +
+                        '<button ' + actionAttr('connSetMode') + ' id="m-save-netmode">Apply</button>' +
+                        '<button class="btn-outline" ' + actionAttr('connSearchNet') + '>Search Networks</button>' +
                     '</div>' +
                     '<div id="m-netsearch"></div>' +
                 '</div>' +
@@ -330,10 +340,6 @@
                             '<option value="1"' + (connMode === '1' || connMode === 1 ? ' selected' : '') + '>Auto</option>' +
                             '<option value="0"' + (connMode === '0' || connMode === 0 ? ' selected' : '') + '>Manual</option>' +
                         '</select>' +
-                    '</div>' +
-                    '<div class="form-group">' +
-                        '<label>Idle Timeout (min)</label>' +
-                        '<input type="number" id="m-idle" value="' + (parseInt(idleTime, 10) || 0) + '" min="0" max="120">' +
                     '</div>' +
                     '<div class="form-group">' +
                         '<label>IP Type</label>' +
@@ -480,12 +486,17 @@
     }
 
     // Feature 5: Connection settings
+    // "IdleTime" is not a parameter this firmware has. The string occurs in no
+    // device binary — not core_app, not webs, not config_manager, not any
+    // library under /usr/lib — so GetConnectionSettings can never return it and
+    // SetConnectionSettings can never store it. The field therefore always
+    // displayed 0 whatever was entered, and the stock SPA has no idle-timeout
+    // control either. Removed rather than left to lie; add it back only with a
+    // firmware that names the parameter.
     function _connSaveConn() {
         var pdp = parseInt($('#m-pdptype').value, 10);
-        var idle = parseInt($('#m-idle').value, 10) || 0;
         var params = {
             ConnectMode: parseInt($('#m-connmode').value, 10),
-            IdleTime: idle,
             RoamingConnect: $('#m-roaming').checked ? 1 : 0,
             PdpType: isNaN(pdp) ? 3 : pdp
         };
@@ -529,11 +540,32 @@
             { title: 'Reset counters', confirmText: 'Reset', danger: true });
     }
 
+    // Stock sends NetworkMode and NetselectionMode together in one
+    // SetNetworkSettings call (build.formatted.js:53087-53094), and follows a
+    // switch to manual with a network search. The operator radios previously had
+    // no handler at all: NetselectionMode only ever moved as a side effect of
+    // "Search Networks" and "Back to Auto".
     function _connSetMode() {
-        App.showNotification(
-            'Changing the preferred mode is disabled until the router NetworkMode enum values are verified.',
-            'info', 6000);
+        var mode = ($('#m-netmode') || {}).value || '0';
+        var sel = '0';
+        var radios = document.querySelectorAll('input[name="netsel"]');
+        for (var i = 0; i < radios.length; i++) {
+            if (radios[i].checked) { sel = radios[i].value; break; }
+        }
+
+        App.wrapFormSubmit('#m-save-netmode', function() {
+            return API.webapi('SetNetworkSettings', {
+                NetworkMode: parseInt(mode, 10) || 0,
+                NetselectionMode: parseInt(sel, 10) || 0
+            }).then(function() {
+                // Manual selection is only meaningful once a scan has produced a
+                // list to pick from, which is what stock does here too.
+                if (sel === '1') return _connSearchNet();
+                return _loadNetwork();
+            });
+        }, { pending: 'Applying\u2026', success: 'Network settings applied' });
     }
+
 
     App.registerPage('connection', renderConnection);
     App._connSetMode = _connSetMode;
