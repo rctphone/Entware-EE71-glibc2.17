@@ -16,6 +16,11 @@ RUN printf '#!/bin/sh\necho "Python 2.7.18"\n' > /usr/bin/python2.7 \
     && chmod 755 /usr/bin/python2.7 \
     && ln -sf /usr/bin/python2.7 /usr/bin/python2
 
+# python3-cryptography is a build-time host dependency of ca-certificates:
+# Debian's mozilla/certdata2pem.py does `from cryptography import x509` to warn
+# about expired roots. OpenWrt carries a patch dropping that import, but it is
+# not reaching the source here, so the module has to be present. Distro package
+# rather than pip: reproducible, and no network needed at build time.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     gawk \
@@ -25,6 +30,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-distutils \
     python-is-python3 \
+    python3-cryptography \
     rsync \
     file \
     wget \
