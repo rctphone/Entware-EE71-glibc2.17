@@ -47,18 +47,20 @@
         var diffMs = now - d;
         if (diffMs < 0) return dateStr;
         var diffMin = Math.floor(diffMs / 60000);
-        var diffHr = Math.floor(diffMin / 60);
-        if (diffMin < 1) return 'just now';
-        if (diffMin < 60) return diffMin + ' min ago';
-        if (diffHr < 24) {
-            var rm = diffMin % 60;
-            return rm > 0 ? diffHr + 'h ' + rm + 'm ago' : diffHr + 'h ago';
-        }
         var today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
         var msgDay = new Date(d.getFullYear(), d.getMonth(), d.getDate());
         var dayDiff = Math.round((today - msgDay) / 86400000);
+        // Relative wording only for the last two hours; after that a person
+        // wants the clock time, not arithmetic. Same day -> "HH:MM",
+        // previous day -> "Yesterday", anything older -> the date alone.
+        if (diffMin < 1) return 'just now';
+        if (diffMin < 60) return diffMin + ' min ago';
+        if (diffMin < 120 && dayDiff === 0) {
+            var rm = diffMin % 60;
+            return rm > 0 ? '1h ' + rm + 'm ago' : '1h ago';
+        }
+        if (dayDiff === 0) return m[4] + ':' + m[5];
         if (dayDiff === 1) return 'Yesterday';
-        if (dayDiff < 7) return dayDiff + ' days ago';
         var dd = (d.getDate() < 10 ? '0' : '') + d.getDate();
         var mm = (d.getMonth() < 9 ? '0' : '') + (d.getMonth() + 1);
         return dd + '.' + mm + '.' + d.getFullYear();
