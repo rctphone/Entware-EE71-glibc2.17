@@ -20,10 +20,12 @@ DROPBEAR_PORT=22
 DROPBEAR_EXTRA_ARGS=
 NO_START=0
 
-# Refuse password logins (dropbear -s); key auth only. Set to 0 in
-# /etc/default/dropbear to allow passwords again — do that BEFORE
-# restarting dropbear, or you lock yourself out if you have no key.
-DROPBEAR_DISABLE_PASSWORD_AUTH=1
+# Refuse password logins (dropbear -s). Default OFF on purpose: a freshly
+# flashed or factory-reset device has no authorized_keys, and shipping -s by
+# default would make SSH unreachable on first contact with no way in.
+# The postinst turns it on automatically once a key is actually installed,
+# and you can set it either way in /etc/default/dropbear.
+DROPBEAR_DISABLE_PASSWORD_AUTH=0
 
 # Key types to generate/use (ed25519 preferred, rsa as fallback)
 DROPBEAR_KEYTYPES="ed25519 rsa"

@@ -12,7 +12,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=dropbear
 PKG_VERSION:=2026.91
-PKG_RELEASE:=2
+PKG_RELEASE:=3
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.bz2
 PKG_SOURCE_URL:= \
@@ -283,6 +283,29 @@ fi
 if [ ! -f /etc/dropbear/dropbear_ed25519_host_key ]; then
     /usr/bin/dropbearkey -t ed25519 -f /etc/dropbear/dropbear_ed25519_host_key
 fi
+endef
+
+# Refusing password logins is right once key auth works and wrong before it
+# does — a device with no authorized_keys and -s has no way in over SSH at all.
+# So the package default is "passwords allowed" and this turns it off only
+# after finding a key actually installed. Idempotent, and never overrides a
+# choice already written to /etc/default/dropbear.
+define Package/dropbear/postinst
+#!/bin/sh
+[ -n "$${IPKG_INSTROOT}" ] && exit 0
+DEF=/etc/default/dropbear
+grep -q '^[[:space:]]*DROPBEAR_DISABLE_PASSWORD_AUTH=' "$$DEF" 2>/dev/null && exit 0
+for f in /root/.ssh/authorized_keys /home/root/.ssh/authorized_keys; do
+    [ -s "$$f" ] || continue
+    grep -qE '^[[:space:]]*(ssh|ecdsa|sk-)' "$$f" || continue
+    mkdir -p "$$(dirname "$$DEF")"
+    echo "DROPBEAR_DISABLE_PASSWORD_AUTH=1" >> "$$DEF"
+    echo "dropbear: key auth found in $$f, password logins disabled"
+    echo "dropbear: set DROPBEAR_DISABLE_PASSWORD_AUTH=0 in $$DEF to allow them"
+    exit 0
+done
+echo "dropbear: no authorized_keys found, password logins left enabled"
+exit 0
 endef
 
 $(eval $(call BuildPackage,dropbear))
