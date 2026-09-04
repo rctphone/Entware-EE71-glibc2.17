@@ -1,0 +1,8 @@
+source     qcacld-2.0 c26933bef5225b3f7b65753cc852b46ac8d878bd
+version    QWLAN_VERSIONSTR 4.2.25.8
+kernel     3.10.49 (config from the device's /proc/config.gz)
+compiler   gcc 4.9.4
+vermagic   3.10.49 preempt mod_unload ARMv7 
+options    none (stock: every flag derived from the kernel .config)
+size       3629564 bytes
+sha256     f268ab9bb08340d92985aa74cdb8fba836be1bdc5275a2f7ceac86bb777f4df9

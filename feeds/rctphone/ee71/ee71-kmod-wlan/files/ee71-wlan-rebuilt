@@ -1,0 +1,144 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          ee71-wlan-rebuilt
+# Required-Start:
+# Default-Start:
+# Short-Description: Switch the WiFi driver between the stock and rebuilt wlan.ko
+### END INIT INFO
+#
+# Installing ee71-kmod-wlan changes nothing. This is the deliberate second step
+# that puts the rebuilt driver in the boot path, and the one that takes it out.
+#
+# It rewrites one line of the vendor's /etc/init.d/wlan - the only thing on the
+# device that loads this driver, called by QCMAP_ConnectionManager as
+# `/etc/init.d/wlan start ap,ap` at boot and on every WiFi settings change.
+# The stock wlan.ko is never touched, moved or overwritten, so restoring it
+# needs no backup of it: it is still the file the stock line points at.
+#
+# Reverting is a byte-exact reverse of the substitution and reads no backup
+# file, so it works whether or not anything else is still on the device.
+
+set -e
+
+DIR=/usr/lib/ee71
+GZ="${DIR}/wlan-rebuilt.ko.gz"
+LOADER="${DIR}/wlan_load"
+BUILDINFO="${DIR}/wlan-rebuilt.buildinfo"
+
+WLAN_INIT=/etc/init.d/wlan
+STOCK_LINE='        insmod $MODULE_BASE/extra/wlan.ko $@'
+PATCHED_LINE='        /usr/lib/ee71/wlan_load $@'
+
+# Whole-line exact match through awk, not a sed regex: the line is full of $
+# and /, and the cost of a loose pattern here is a router with no WiFi.
+subst() {
+	old="$1"
+	new="$2"
+	tmp="${WLAN_INIT}.ee71.tmp"
+	awk -v old="${old}" -v new="${new}" \
+		'$0 == old { print new; next } { print }' \
+		"${WLAN_INIT}" > "${tmp}"
+	if ! grep -Fqx "${new}" "${tmp}"; then
+		rm -f "${tmp}"
+		echo "[ERR] substitution produced no change - refusing to install it" >&2
+		return 1
+	fi
+	chmod 0755 "${tmp}"
+	mv "${tmp}" "${WLAN_INIT}"
+	sync
+}
+
+is_patched() { grep -Fqx "${PATCHED_LINE}" "${WLAN_INIT}"; }
+is_stock()   { grep -Fqx "${STOCK_LINE}"   "${WLAN_INIT}"; }
+
+apply_hint() {
+	echo "  apply now:  ${WLAN_INIT} stop && ${WLAN_INIT} start ap,ap"
+	echo "  or reboot.  Check with: dmesg | grep wlan_load"
+}
+
+do_enable() {
+	if [ ! -f "${GZ}" ]; then
+		echo "[ERR] ${GZ} missing - is ee71-kmod-wlan installed?" >&2
+		exit 1
+	fi
+	if [ ! -x "${LOADER}" ]; then
+		echo "[ERR] ${LOADER} missing or not executable" >&2
+		exit 1
+	fi
+
+	if is_patched; then
+		echo "already enabled - it takes effect at the next WiFi start"
+		apply_hint
+		return 0
+	fi
+	if ! is_stock; then
+		echo "[ERR] ${WLAN_INIT} does not contain the expected stock line:" >&2
+		echo "[ERR]   ${STOCK_LINE}" >&2
+		echo "[ERR] refusing to patch an init script this is not written for" >&2
+		exit 1
+	fi
+
+	subst "${STOCK_LINE}" "${PATCHED_LINE}"
+	echo "enabled - the rebuilt driver is used from the next WiFi start"
+	apply_hint
+	echo "  If WiFi does not come back, get in over ADB and run:"
+	echo "              $0 disable"
+}
+
+do_disable() {
+	if ! is_patched; then
+		if is_stock; then
+			echo "already disabled (${WLAN_INIT} is stock)"
+			return 0
+		fi
+		echo "[ERR] ${WLAN_INIT} is neither stock nor patched by this package" >&2
+		echo "[ERR] leaving it alone" >&2
+		exit 1
+	fi
+	subst "${PATCHED_LINE}" "${STOCK_LINE}"
+	echo "disabled - the stock driver is used from the next WiFi start"
+	echo "  whatever is loaded now stays loaded until then; reboot or run:"
+	echo "              ${WLAN_INIT} stop && ${WLAN_INIT} start ap,ap"
+}
+
+do_status() {
+	if is_patched; then
+		echo "boot path:  rebuilt (${WLAN_INIT} calls ${LOADER})"
+	elif is_stock; then
+		echo "boot path:  stock"
+	else
+		echo "boot path:  UNKNOWN - ${WLAN_INIT} matches neither form"
+	fi
+
+	if grep -q '^wlan ' /proc/modules 2>/dev/null; then
+		echo "wlan.ko:    loaded - 'dmesg | grep wlan_load' says which one"
+	else
+		echo "wlan.ko:    not loaded"
+	fi
+
+	if [ -f "${GZ}" ]; then
+		echo "module:     ${GZ}"
+	else
+		echo "module:     MISSING (${GZ})"
+	fi
+	if [ -f "${BUILDINFO}" ]; then
+		echo "built from:"
+		sed 's/^/  /' "${BUILDINFO}"
+	fi
+}
+
+case "$1" in
+	enable)  do_enable ;;
+	disable) do_disable ;;
+	# prerm calls 'stop'; keep it a synonym so removing the package reverts.
+	stop)    do_disable ;;
+	# Deliberately not an alias for 'enable': nothing should switch the WiFi
+	# driver just because something ran every script in /etc/init.d.
+	start)   do_status ;;
+	status)  do_status ;;
+	*)
+		echo "Usage: $0 { enable | disable | status }" >&2
+		exit 1
+		;;
+esac
+exit 0
