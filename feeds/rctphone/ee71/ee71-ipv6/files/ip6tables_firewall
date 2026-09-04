@@ -1,10 +1,51 @@
 #!/bin/sh
-# IPv6 firewall for EE71 — INPUT DROP policy (mirrors IPv4 whitelist)
+# IPv6 firewall for EE71 — INPUT and FORWARD DROP policy (mirrors IPv4 whitelist)
 # Must run BEFORE QCMAP (S39) so firewall is up before IPv6 activates
+#
+# INPUT protects the router itself. FORWARD protects the LAN clients: they
+# autoconfigure globally routable addresses out of the carrier /64 that radish
+# mirrors onto bridge0, and there is no NAT on v6 to hide behind, so an ACCEPT
+# policy leaves every laptop and phone directly reachable from the internet.
+# Nothing else sets a FORWARD policy — QCMAP leaves it at ACCEPT.
+#
+# INPUT is ours alone, so it is flushed and rebuilt. FORWARD is SHARED and is
+# therefore never flushed:
+#   - /etc/init.d/miniupnpd creates the MINIUPNPD chain and its FORWARD jump
+#     with `-N MINIUPNPD && -I FORWARD ...`. The `&&` means a later `start`
+#     will NOT restore the jump if the chain already exists, so flushing
+#     FORWARD here would silently and permanently kill UPnP IPv6 pinholes.
+#   - vpn_apply (ee71-webui) inserts its LAN leak guard at FORWARD position 1
+#     and appends tunnel ACCEPTs; it removes them again by exact spec, never
+#     by flushing.
+# Our FORWARD rules are therefore check-then-add (idempotent) and ACCEPT-only,
+# so re-running is safe and nothing we add can shadow either of the above.
+
+# All carrier PDN interfaces: rmnet_data0..7 and rmnet_ipa0. Same pattern the
+# TTL fix uses for "the cellular side".
+WAN_IFACE_PATTERN="rmnet+"
+
+# 6in4 fallback tunnel device. Administratively down and unused here, but it is
+# a routable IPv6 entry point the moment anything brings it up, and it is not
+# matched by WAN_IFACE_PATTERN.
+TUNNEL6_IFACE_PATTERN="sit+"
+
+# ensure_rule <chain> <rule spec...> — append only if not already present
+ensure_rule() {
+    _chain="$1"
+    shift
+    ip6tables -C "$_chain" "$@" 2>/dev/null || ip6tables -A "$_chain" "$@"
+}
 
 case "$1" in
   start)
-    # Flush existing INPUT rules (preserve FORWARD — QCMAP/radish manages those)
+    if ! ip6tables -L -n >/dev/null 2>&1; then
+        echo "[ERR] ip6tables_firewall: ip6tables unusable, refusing to touch the firewall" >&2
+        exit 1
+    fi
+
+    # ---- INPUT: traffic terminating on the router ----
+
+    # Flush existing INPUT rules — this chain is ours, rebuild it deterministically
     ip6tables -F INPUT
 
     # Policy: DROP all incoming by default
@@ -36,19 +77,88 @@ case "$1" in
     # DHCPv6 client (UDP 546) — needed if carrier uses DHCPv6 / prefix delegation
     ip6tables -A INPUT -p udp --dport 546 -j ACCEPT
 
-    echo "ip6tables_firewall: INPUT DROP policy active"
+    # ---- FORWARD: traffic transiting the router (LAN clients) ----
+    #
+    # Rules are added BEFORE the policy is tightened. If any step fails the
+    # chain is left more open, never less: a half-applied run degrades to the
+    # previous ACCEPT behaviour instead of blackholing the LAN.
+
+    # Return traffic for connections the LAN opened. IPv6 conntrack is built
+    # into this kernel (no module to load) and tracks forwarded flows.
+    ensure_rule FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT
+
+    # 6in4 is not a trusted source — deny it explicitly, since the LAN rule
+    # below is expressed as "not from the carrier".
+    ensure_rule FORWARD -i "$TUNNEL6_IFACE_PATTERN" -j DROP
+
+    # Everything not arriving from the carrier may be forwarded: LAN to the
+    # internet, LAN to a VPN tunnel, and LAN client to LAN client.
+    #
+    # Written as a negation on the WAN side on purpose. bridge-nf-call-ip6tables
+    # is 1 on this device, so bridged client-to-client IPv6 (including NDP and
+    # MLD between clients) traverses this chain too, and whether br_netfilter
+    # presents bridge0 or the member port (wlan0/wlan1/ecm0) as the input
+    # device is a kernel-internal detail we should not have to be right about.
+    # "Not from rmnet+" is correct either way, and survives a LAN interface
+    # rename. It also covers tunnel-to-LAN, which vpn_apply accepts explicitly
+    # anyway.
+    ensure_rule FORWARD ! -i "$WAN_IFACE_PATTERN" -j ACCEPT
+
+    # ICMPv6 error types must transit in BOTH directions (RFC 4890 section 4.3).
+    # packet-too-big in particular carries PMTU discovery: dropping it does not
+    # break connectivity outright, it strands large packets and shows up as
+    # sites that hang after the first screenful. RELATED covers most of these,
+    # but not once the inner flow has been evicted from the conntrack table.
+    #
+    # NDP/MLD are deliberately absent: they are link-local, hop-limit 255, and
+    # never routed. Between LAN clients they are bridged, and the rule above
+    # already covers that.
+    ensure_rule FORWARD -p icmpv6 --icmpv6-type destination-unreachable -j ACCEPT
+    ensure_rule FORWARD -p icmpv6 --icmpv6-type packet-too-big -j ACCEPT
+    ensure_rule FORWARD -p icmpv6 --icmpv6-type time-exceeded -j ACCEPT
+    ensure_rule FORWARD -p icmpv6 --icmpv6-type parameter-problem -j ACCEPT
+
+    # Everything else — i.e. unsolicited inbound from the carrier to a LAN
+    # client — falls through to the policy. No explicit DROP rule: a terminating
+    # rule here would sit above the tunnel ACCEPTs that vpn_apply appends later.
+    # Inbound echo-request is intentionally not forwarded; LAN hosts are not
+    # pingable from the internet. Add
+    #   ip6tables -A FORWARD -p icmpv6 --icmpv6-type echo-request -j ACCEPT
+    # if you want them to be.
+    ip6tables -P FORWARD DROP
+
+    echo "ip6tables_firewall: INPUT DROP + FORWARD DROP policy active"
     ;;
   stop)
+    # Deliberately asymmetric.
+    #
+    # INPUT is opened, because that is what stop exists for: recovering access
+    # to the router when a rule locked us out.
+    #
+    # FORWARD is left exactly as start left it — policy DROP, rules intact.
+    # Opening it would re-expose every LAN client to the internet, which is a
+    # far bigger blast radius than the router's own listeners, and it would do
+    # so invisibly. Flushing it while leaving the policy at DROP would be worse
+    # still: LAN IPv6 would die outright. So stop touches neither.
     ip6tables -P INPUT ACCEPT
     ip6tables -F INPUT
-    echo "ip6tables_firewall: INPUT ACCEPT (firewall disabled)"
+    echo "ip6tables_firewall: INPUT ACCEPT (router firewall disabled)"
+    echo "ip6tables_firewall: FORWARD left at DROP - LAN clients stay protected."
+    echo "ip6tables_firewall: to open it too: ip6tables -P FORWARD ACCEPT"
     ;;
   restart)
-    $0 stop
+    # start alone, NOT stop+start: start is idempotent, and routing a restart
+    # through stop would open INPUT for the duration and leave it open if start
+    # then failed.
     $0 start
     ;;
+  status)
+    ip6tables -L INPUT -n -v --line-numbers
+    echo
+    ip6tables -L FORWARD -n -v --line-numbers
+    ;;
   *)
-    echo "Usage: $0 {start|stop|restart}" >&2
+    echo "Usage: $0 {start|stop|restart|status}" >&2
     exit 1
     ;;
 esac

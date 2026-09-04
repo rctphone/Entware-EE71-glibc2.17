@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=ee71-ipv6
-PKG_VERSION:=2.1.0
+PKG_VERSION:=2.2.0
 PKG_RELEASE:=1
 
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)
@@ -27,7 +27,15 @@ define Package/ee71-ipv6/description
   - Bridge IPv6: assigns prefix::1 to bridge0
 
   IPv6 infrastructure:
-  - ip6tables INPUT DROP firewall (S38, before QCMAP)
+  - ip6tables INPUT + FORWARD DROP firewall (S38, before QCMAP)
+  2.2.0 adds the FORWARD half. Until then the policy was ACCEPT and nothing
+  else set it (QCMAP does not, contrary to the old comment in the script), so
+  once the PDP type became IPv4v6 every LAN client was reachable from the
+  internet on every port at its autoconfigured global address — there is no
+  NAT on v6 to hide behind. The chain is now default DROP with stateful
+  return traffic, LAN-sourced forwarding, and RFC 4890 transit ICMPv6.
+  FORWARD is shared with miniupnpd's MINIUPNPD jump and vpn_apply's leak
+  guard, so our rules are check-then-add and the chain is never flushed.
   The boot-time dnsmasq AAAA filter was removed in 2.1.0: it blocked the
   init chain for 42 s, and its SIGHUP could never apply filter-AAAA anyway
   (dnsmasq re-reads hosts and leases on SIGHUP, never its config file).
