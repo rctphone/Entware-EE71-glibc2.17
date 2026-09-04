@@ -1,8 +1,16 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=curl
+# PINNED. 8.17.0 is the LAST curl that builds against OpenSSL 1.1.1:
+# docs/DEPRECATE.md in 8.22.0 records "OpenSSL 1.1.1 and older (removed in
+# 8.18.0)", and m4/curl-openssl.m4 now hard-fails with
+#   configure: error: OpenSSL 3.0.0 or greater required.
+# Confirmed by building 8.22.0 in this tree on 2026-09-04; it dies at configure.
+# There is no 8.17.x point release, so this is the ceiling until OpenSSL moves,
+# and OpenSSL cannot move: the vendor binaries link libcrypto.so.1.1 by soname.
+# Do not bump this without changing that first.
 PKG_VERSION:=8.17.0
-PKG_RELEASE:=2
+PKG_RELEASE:=3
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.xz
 PKG_SOURCE_URL:=https://curl.se/download/
@@ -52,7 +60,13 @@ CONFIGURE_ARGS += \
 	--disable-ldaps --disable-mqtt --disable-pop3 \
 	--disable-rtsp --disable-smb --disable-smtp \
 	--disable-telnet --disable-tftp \
-	--enable-http --enable-threaded-resolver
+	--enable-http --enable-threaded-resolver \
+	--disable-websockets
+# WebSockets are the one protocol this "HTTP/HTTPS only" build still compiled
+# in, and they default to on. Nothing on the device speaks ws://, and since
+# curl is pinned at 8.17.0 (see above) CVE-2026-11586 — a peer forcing
+# unbounded memory growth through automatic PONG replies — can never be fixed
+# here by upgrading. Compiling the code out is the only lever left.
 
 define Build/InstallDev
 	$(INSTALL_DIR) $(1)/usr/include/curl
