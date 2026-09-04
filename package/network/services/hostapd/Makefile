@@ -3,14 +3,19 @@
 # Copyright (C) 2006-2021 OpenWrt.org
 #
 # EE71: Synced with upstream Entware (2025-08-26 git snapshot).
-# Stripped: wpad multicall, mesh, openssl/wolfssl/mbedtls TLS variants,
+# Stripped: wpad multicall, mesh, wolfssl/mbedtls TLS variants,
 #           eapol-test, ubus/ucode/udebug dependencies.
 # Adapted: libnl-tiny → libnl, glibc 2.17 compat (no getrandom).
+# Crypto:   OpenSSL, not hostapd's internal TLS. SAE (WPA3-Personal) needs
+#           elliptic-curve crypto and the internal backend has none — only
+#           crypto_openssl.c and crypto_wolfssl.c implement crypto_ec_*.
+#           This is also why upstream sets CONFIG_SAE=y per SSL variant
+#           rather than in files/hostapd-*.config.
 
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=hostapd
-PKG_RELEASE:=3
+PKG_RELEASE:=4
 
 PKG_SOURCE_URL:=https://w1.fi/hostap.git
 PKG_SOURCE_PROTO:=git
@@ -43,12 +48,13 @@ LOCAL_AND_LIB_VARIANT=$(patsubst hostapd-%,%,\
 		      $(BUILD_VARIANT)\
 		      ))
 
-LOCAL_VARIANT=$(patsubst %-internal,%,\
+LOCAL_VARIANT=$(patsubst %-openssl,%,\
+	      $(patsubst %-internal,%,\
 	      $(LOCAL_AND_LIB_VARIANT)\
-	      )
+	      ))
 
-# EE71: internal TLS only
-SSL_VARIANT:=internal
+# EE71: OpenSSL crypto only (needed for SAE — see header)
+SSL_VARIANT:=openssl
 
 CONFIG_VARIANT:=$(LOCAL_VARIANT)
 
@@ -72,6 +78,17 @@ DRIVER_MAKEOPTS= \
 	CONFIG_IEEE80211AX=$(HOSTAPD_IEEE80211AX) \
 	CONFIG_MBO=$(CONFIG_WPA_MBO_SUPPORT)
 
+# EE71: SAE (WPA3-Personal). Deliberately just SAE — upstream's full-openssl
+# variant also turns on OWE/DPP/SUITEB192/MESH, which this device has no use
+# for and /usr has no room for.
+# CONFIG_TLS here is a make command-line variable, so it overrides the
+# CONFIG_TLS=internal that files/hostapd-full.config still carries — that is
+# upstream's mechanism, not an oversight. -lcrypto/-lssl are added further
+# down, after the -L that makes them findable.
+ifeq ($(SSL_VARIANT),openssl)
+  DRIVER_MAKEOPTS += CONFIG_TLS=openssl CONFIG_SAE=y
+endif
+
 ifneq ($(LOCAL_TYPE),hostapd)
   ifdef CONFIG_WPA_RFKILL_SUPPORT
     DRIVER_MAKEOPTS += NEED_RFKILL=y
@@ -80,34 +97,38 @@ endif
 
 DRV_DEPENDS:=+libnl
 
+ifeq ($(SSL_VARIANT),openssl)
+  SSL_DEPENDS:=+libopenssl
+endif
+
 
 define Package/hostapd
   SECTION:=net
   CATEGORY:=Network
   SUBMENU:=WirelessAPD
-  TITLE:=IEEE 802.1x Authenticator (full, internal TLS)
+  TITLE:=IEEE 802.1x Authenticator (full, OpenSSL)
   URL:=https://w1.fi/hostapd/
-  DEPENDS:=$(DRV_DEPENDS)
-  VARIANT:=full-internal
+  DEPENDS:=$(DRV_DEPENDS) $(SSL_DEPENDS)
+  VARIANT:=full-openssl
 endef
 
 define Package/hostapd/description
  This package contains a full featured IEEE 802.1x/WPA/EAP/RADIUS
- Authenticator (internal TLS, no external crypto library).
+ Authenticator, built against OpenSSL and with SAE (WPA3-Personal).
 endef
 
 define Package/wpa-supplicant
   SECTION:=net
   CATEGORY:=Network
   SUBMENU:=WirelessAPD
-  TITLE:=WPA Supplicant (full, internal TLS)
+  TITLE:=WPA Supplicant (full, OpenSSL)
   URL:=https://w1.fi/wpa_supplicant/
-  DEPENDS:=$(DRV_DEPENDS)
-  VARIANT:=supplicant-full-internal
+  DEPENDS:=$(DRV_DEPENDS) $(SSL_DEPENDS)
+  VARIANT:=supplicant-full-openssl
 endef
 
 define Package/wpa-supplicant/description
- WPA Supplicant with full feature set (internal TLS).
+ WPA Supplicant with full feature set, built against OpenSSL and with SAE.
 endef
 
 define Package/hostapd/config
@@ -180,11 +201,17 @@ TARGET_CPPFLAGS := \
 	-I$(STAGING_DIR)/usr/include/libnl3 \
 	-I$(PKG_BUILD_DIR)/src/crypto \
 	$(TARGET_CPPFLAGS) \
+	$(if $(filter openssl,$(SSL_VARIANT)),-I$(STAGING_DIR)/usr/include) \
 	-DCONFIG_LIBNL20 \
 	-D_GNU_SOURCE \
 	$(if $(CONFIG_WPA_MSG_MIN_PRIORITY),-DCONFIG_MSG_MIN_PRIORITY=$(CONFIG_WPA_MSG_MIN_PRIORITY))
 
 TARGET_LDFLAGS += -L$(STAGING_DIR)/usr/lib -lm -lnl-3 -lnl-genl-3
+# Must come after the -L above: this tree's TARGET_LDFLAGS carries no -L of
+# its own, and ld resolves each -l against the search path seen so far.
+ifeq ($(SSL_VARIANT),openssl)
+  TARGET_LDFLAGS += -lcrypto -lssl
+endif
 
 ifdef CONFIG_WPA_ENABLE_WEP
     DRIVER_MAKEOPTS += CONFIG_WEP=y
