@@ -10,7 +10,11 @@
 # added lines with /opt paths before applying them.
 #
 
-ifdef CONFIG_EE71_SKIP_OPT_PATCHES
+# Unconditional. This used to be guarded by `ifdef CONFIG_EE71_SKIP_OPT_PATCHES`,
+# but that symbol is declared in no Config.in, so kconfig dropped it from every
+# expanded config and the guard was never once true. Rather than declare a
+# symbol for it, the guard is gone: /usr-only is an absolute rule here, so there
+# is no configuration in which we would want these patches applied.
 
 # Check if a patch file adds /opt paths (lines starting with +)
 # Returns non-empty if the patch should be SKIPPED
@@ -50,5 +54,3 @@ define Build/Patch/Default
 	$(call PatchDir,$(PKG_BUILD_DIR),$(PATCH_DIR)-$(KERNVER),)
 	$(if $(QUILT),touch $(PKG_BUILD_DIR)/.quilt_used)
 endef
-
-endif # CONFIG_EE71_SKIP_OPT_PATCHES
