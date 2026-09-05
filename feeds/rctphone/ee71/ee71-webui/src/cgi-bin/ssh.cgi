@@ -174,6 +174,28 @@ save)
             json_err "port must be a number between 1 and 65535"
             exit 0 ;;
     esac
+
+    # Strip leading zeros so the daemon and the firewall rule agree on the same
+    # literal, then BOUND THE LENGTH before any arithmetic runs.
+    #
+    # The length check is the point. `[ "$n" -gt 65535 ]` on a number ash
+    # cannot represent exits 2 with "out of range", not 1 — and inside an
+    # `if A || B` that is falsy, so the range test passed everything above
+    # about 19 digits. Measured on the device: 99999999999999999999 sailed
+    # through and would have been written to /etc/default/dropbear, which
+    # dropbear.init sources as root.
+    #
+    # That is the SAME defect as the original `[ "abc" -lt 1 ]` guard, which
+    # also exited 2 and was also read as false. Fixing the first form without
+    # fixing the second only raised the length of input needed. A port is at
+    # most five digits, so checking that first makes the arithmetic safe by
+    # construction rather than by hoping the operand is representable.
+    PORT=$(printf '%s' "$PORT" | sed 's/^0*//')
+    [ -n "$PORT" ] || PORT=0
+    if [ "${#PORT}" -gt 5 ]; then
+        json_err "port must be a number between 1 and 65535"
+        exit 0
+    fi
     if [ "$PORT" -lt 1 ] || [ "$PORT" -gt 65535 ]; then
         json_err "port must be a number between 1 and 65535"
         exit 0
@@ -216,6 +238,12 @@ save)
 
     DEF=/etc/default/dropbear
     touch "$DEF" 2>/dev/null
+    # Keep the previous file so a failed start can be undone. Without this a
+    # value that passes validation but that dropbear refuses leaves SSH down
+    # and the config changed - the caller asked to move the port, not to lose
+    # the device.
+    DEF_BAK="${DEF}.rollback"
+    cp -f "$DEF" "$DEF_BAK" 2>/dev/null
     DEF_TMP="${DEF}.new"
     grep -v '^[[:space:]]*DROPBEAR_PORT=' "$DEF" 2>/dev/null > "$DEF_TMP"
     printf 'DROPBEAR_PORT="%s"\n' "$LISTEN_ARG" >> "$DEF_TMP"
@@ -235,10 +263,20 @@ save)
     # success while SSH was gone and the firewall had no rule for either port.
     # Check the daemon is actually there before saying so.
     if ! pidof dropbear >/dev/null 2>&1; then
-        json_err "dropbear did not come up on $LISTEN_ARG - SSH is down; \
-reconnect over ADB and run /etc/init.d/dropbear start"
+        # Put the old configuration back and try again, rather than reporting a
+        # failure and leaving the owner locked out of their own router.
+        if [ -f "$DEF_BAK" ]; then
+            mv -f "$DEF_BAK" "$DEF"
+            run_timeout 15 /etc/init.d/dropbear start >/dev/null 2>&1
+        fi
+        if pidof dropbear >/dev/null 2>&1; then
+            json_err "dropbear refused $LISTEN_ARG - the previous setting has been restored and SSH is back up"
+        else
+            json_err "dropbear refused $LISTEN_ARG and did not come back on the previous setting - SSH is down; reconnect over ADB and run /etc/init.d/dropbear start"
+        fi
         exit 0
     fi
+    rm -f "$DEF_BAK"
     jq -n --argjson port "$PORT" --arg listen "$LISTEN" \
         '{"ok":true,"port":$port,"listen":$listen}'
     ;;
