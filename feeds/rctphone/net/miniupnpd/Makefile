@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=miniupnpd
 PKG_VERSION:=2.3.11
-PKG_RELEASE:=3
+PKG_RELEASE:=4
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_URL:=https://miniupnp.tuxfamily.org/files/
@@ -80,11 +80,26 @@ define Package/miniupnpd/conffiles
 /etc/miniupnpd/miniupnpd.conf
 endef
 
+# The netfilter chain scripts go in /etc/miniupnpd because they source each
+# other through `. $(dirname "$$0")/miniupnpd_functions.sh`, so they must sit
+# together, and the init script resolves them relative to ETCPATH.
+#
+# Without them the daemon runs and does nothing: miniupnpd's netfilter backend
+# does not create its own chains, so every port mapping it accepts is silently
+# a no-op, and it logs "chain MINIUPNPD not found" every ten minutes forever.
+# That is exactly what 2.3.11-3 and everything before it shipped - the init
+# script has always looked for these scripts, and the package has never
+# installed them.
 define Package/miniupnpd/install
 	$(INSTALL_DIR) $(1)/usr/sbin
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/miniupnpd $(1)/usr/sbin/
 	$(INSTALL_DIR) $(1)/etc/miniupnpd
 	$(INSTALL_DATA) ./files/miniupnpd.conf $(1)/etc/miniupnpd/
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/netfilter/miniupnpd_functions.sh $(1)/etc/miniupnpd/
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/netfilter/iptables_init.sh $(1)/etc/miniupnpd/
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/netfilter/iptables_removeall.sh $(1)/etc/miniupnpd/
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/netfilter/ip6tables_init.sh $(1)/etc/miniupnpd/
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/netfilter/ip6tables_removeall.sh $(1)/etc/miniupnpd/
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./files/miniupnpd.init $(1)/etc/init.d/miniupnpd
 endef

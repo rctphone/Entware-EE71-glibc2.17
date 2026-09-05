@@ -88,16 +88,27 @@ ext_if() {
 # The vendor ships these scripts mode 0644, so they must be run through sh
 # rather than executed. $0 inside them still resolves to $ETCPATH, which is
 # where they look for miniupnpd_functions.sh.
+# Complains through logger as well as stdout. An init script's stdout at boot
+# goes nowhere anybody reads, which is how "the chain scripts are not installed
+# at all" survived every release up to 2.3.11-3: the daemon came up, the
+# message was printed into the void, and the only visible symptom was
+# "chain MINIUPNPD not found" in the daemon's own log every ten minutes.
+say() {
+	echo "miniupnpd: $*"
+	logger -t miniupnpd "$*" 2>/dev/null || true
+}
+
 chains() {
 	_extif=$(ext_if)
 	for _fam in iptables ip6tables; do
 		_s="$ETCPATH/${_fam}_$1.sh"
 		if [ ! -f "$_s" ]; then
-			echo "miniupnpd: $_s missing - $_fam MINIUPNPD chain not touched"
+			say "$_s missing - $_fam MINIUPNPD chain not touched;" \
+			    "UPnP mappings will be accepted and silently do nothing"
 			continue
 		fi
 		sh "$_s" -i "$_extif" >/dev/null 2>&1 || \
-			echo "miniupnpd: $_s failed (check that $_fam supports -w)"
+			say "$_s failed (check that $_fam supports -w)"
 	done
 }
 
@@ -110,8 +121,22 @@ stop_daemon() {
 	start-stop-daemon --stop --quiet --pidfile "$PIDFILE"
 }
 
+# core_app rewrites miniupnpd.conf with `sed -i`, and BusyBox sed -i writes a
+# sibling temp file named miniupnpd.confXXXXXX before renaming it over the
+# original. When that is interrupted the temp survives, and they accumulate:
+# 15 of them, 75 KB, were found on a device that had never been cleaned.
+#
+# Only files untouched for an hour are removed, so a sed that is running right
+# now cannot have its temp deleted out from under it. Failure is ignored - this
+# is tidying, and it must never stop the daemon starting.
+sweep_stale_conf_temps() {
+	find "$ETCPATH" -maxdepth 1 -name 'miniupnpd.conf??????' -type f \
+		-mmin +60 -exec rm -f {} \; 2>/dev/null || true
+}
+
 case "$1" in
   start)
+	sweep_stale_conf_temps
 	chains init
 	start_daemon
 	;;
