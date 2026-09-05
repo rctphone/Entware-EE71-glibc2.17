@@ -10,6 +10,26 @@ AUTH_KEYS="/etc/dropbear/authorized_keys"
 
 . /jrd-resource/resource/webrc/www/cgi-bin/lib/cgi-common.sh
 
+# One authorized_keys line: accepted key types only.
+#
+# Must be called per LINE, never on a whole blob. Shell `case` globs match
+# across newlines, so `case "$BLOB" in ssh-ed25519\ *)` succeeds when only the
+# FIRST line is a key and everything after it is arbitrary — which is how
+# add_key used to validate one line and then append all of them.
+valid_key_line() {
+    case "$1" in
+        ssh-ed25519\ *|ssh-rsa\ *|ecdsa-sha2-*|sk-*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# True when $1 contains a newline. `wc -l` counts newline characters, so a
+# single unterminated line gives 0. Avoids embedding a literal newline in a
+# case pattern, which is easy to get subtly wrong in ash.
+has_newline() {
+    [ "$(printf '%s' "$1" | wc -l | tr -d ' ')" -gt 0 ]
+}
+
 # --- Parse action ---
 case "$REQUEST_METHOD" in
 GET)
@@ -143,11 +163,18 @@ add_key)
         printf '{"error":"key required"}'
         exit 0
     fi
-    # Validate key format
-    case "$KEY" in
-        ssh-ed25519\ *|ssh-rsa\ *|ecdsa-sha2-*|sk-*) ;;
-        *) printf '{"error":"invalid key format (must start with ssh-ed25519, ssh-rsa, ecdsa-sha2-, or sk-)"}'; exit 0 ;;
-    esac
+    # One key per request. Without this, a .key holding embedded newlines
+    # passed validation on its first line and was then appended whole, so
+    # every following line landed in authorized_keys unchecked.
+    if has_newline "$KEY"; then
+        json_err "one key per request — the key must not contain newlines"
+        exit 0
+    fi
+
+    if ! valid_key_line "$KEY"; then
+        printf '{"error":"invalid key format (must start with ssh-ed25519, ssh-rsa, ecdsa-sha2-, or sk-)"}'
+        exit 0
+    fi
 
     # Append to authorized_keys
     mkdir -p "$(dirname "$AUTH_KEYS")" 2>/dev/null
@@ -200,14 +227,50 @@ remove_key)
 restore-keys)
     # Restore authorized_keys from backup
     KEYS=$(echo "$BODY" | jq -r '.keys // empty')
-    if [ -n "$KEYS" ]; then
-        mkdir -p /etc/dropbear
-        printf '%s\n' "$KEYS" > /etc/dropbear/authorized_keys
-        chmod 600 /etc/dropbear/authorized_keys
-        printf '{"ok":true}'
-    else
+    if [ -z "$KEYS" ]; then
         printf '{"error":"no keys provided"}'
+        exit 0
     fi
+
+    # A restore is legitimately multi-line, so unlike add_key it cannot just
+    # refuse newlines - every line has to be checked instead. Blank lines and
+    # comments are kept; anything else must be a key we recognise.
+    #
+    # Validate into a temp file and move it into place only if the whole set
+    # passes, so a bad restore cannot leave authorized_keys half-written -
+    # which for this file means locking the owner out or letting a rejected
+    # key through in the same breath.
+    mkdir -p /etc/dropbear
+    RK_TMP=/etc/dropbear/.authorized_keys.new
+    : > "$RK_TMP"
+    chmod 600 "$RK_TMP" 2>/dev/null
+    RK_LINE=0
+    RK_BAD=""
+    printf '%s\n' "$KEYS" > "$RK_TMP.raw"
+    # Redirected, not piped: a `while ... | ...` would run in a subshell and
+    # RK_BAD would be lost the moment the loop ended.
+    while IFS= read -r line; do
+        RK_LINE=$((RK_LINE + 1))
+        case "$line" in
+            ''|'#'*) continue ;;
+        esac
+        if ! valid_key_line "$line"; then
+            RK_BAD="$RK_LINE"
+            break
+        fi
+    done < "$RK_TMP.raw"
+
+    if [ -n "$RK_BAD" ]; then
+        rm -f "$RK_TMP" "$RK_TMP.raw"
+        json_err "line $RK_BAD is not a recognised key — nothing was written"
+        exit 0
+    fi
+
+    mv -f "$RK_TMP.raw" "$RK_TMP"
+    chmod 600 "$RK_TMP" 2>/dev/null
+    mv -f "$RK_TMP" /etc/dropbear/authorized_keys
+    chmod 600 /etc/dropbear/authorized_keys
+    printf '{"ok":true}'
     ;;
 
 *)
