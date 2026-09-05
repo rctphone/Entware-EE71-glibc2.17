@@ -3,18 +3,21 @@
 # Copyright (C) 2006-2013 OpenWrt.org
 #
 
-# Entware specifics: keep version (kernels are too old)
-# header (uapi/)linux/ila.h since Linux 4.3
+# Entware pins this because the kernels it targets are too old for the UAPI
+# headers newer libnl wants: (uapi/)linux/ila.h only exists from Linux 4.3, and
+# we build against 3.10.44 headers. 3.12.0 started including it, so instead of
+# staying behind we bundle the header the way libnl already bundles every other
+# post-3.10 one — see patches/100-bundle-linux-ila-header.patch.
 
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=libnl
-PKG_VERSION:=3.11.0
+PKG_VERSION:=3.12.0
 PKG_RELEASE:=1
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_URL:=https://github.com/thom311/libnl/releases/download/libnl$(subst .,_,$(PKG_VERSION))
-PKG_HASH:=2a56e1edefa3e68a7c00879496736fdbf62fc94ed3232c0baba127ecfa76874d
+PKG_HASH:=fc51ca7196f1a3f5fdf6ffd3864b50f4f9c02333be28be4eeca057e103c0dd18
 
 PKG_LICENSE:=LGPL-2.1
 PKG_LICENSE_FILES:=COPYING
