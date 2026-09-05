@@ -29,6 +29,8 @@
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 NAME=charger_limit
 PIDFILE=/var/run/charger_limit.pid
+STAMPFILE=/var/run/charger_limit.stamp
+LIMIT_STATE=""
 
 # Defaults, overridable in /etc/default/charger_limit
 CHARGER_INPUT_LIMIT_MA=500
@@ -149,10 +151,14 @@ target_ma() {
 # seconds.
 apply_limit() {
 	cur=$(i2c_get "$CHG_BUS" "$CHG_ADDR" 0x00)
-	case "$cur" in 0x*) ;; *) return 1 ;; esac
+	case "$cur" in
+		0x*) ;;
+		*) LIMIT_STATE="cannot read REG00 from ${CHG_ADDR:-?} on i2c-${CHG_BUS:-?}"
+		   return 1 ;;
+	esac
 
 	if [ $(( (cur & 0x80) >> 7 )) -eq 1 ]; then
-		logger -t "$NAME" "EN_HIZ is set (REG00 $cur) - input suspended by the driver, not touching it" 2>/dev/null
+		LIMIT_STATE="EN_HIZ set (REG00 $cur) - input suspended by the driver, not touching it"
 		return 0
 	fi
 
@@ -161,18 +167,26 @@ apply_limit() {
 
 	# Only ever lower. If the vendor driver has already programmed something
 	# at or below the cap, leave it alone - it may know something we do not.
-	[ "$cur_code" -le "$want_code" ] && return 0
+	if [ "$cur_code" -le "$want_code" ]; then
+		LIMIT_STATE="holding at $(code_to_ma $cur_code)mA"
+		return 0
+	fi
 
 	# Compare and swap: if the register moved between the read above and here,
 	# our idea of bits 7:5 is stale. Drop this pass rather than write it.
 	recheck=$(i2c_get "$CHG_BUS" "$CHG_ADDR" 0x00)
 	if [ "$recheck" != "$cur" ]; then
+		LIMIT_STATE="REG00 moved under us ($cur -> $recheck), skipping this pass"
 		return 0
 	fi
 
 	new=$(printf '0x%02x' $(( (cur & 0x60) | want_code )))
-	i2c_set "$CHG_BUS" "$CHG_ADDR" 0x00 "$new" || return 1
-	logger -t "$NAME" "input limit $(code_to_ma $cur_code)mA -> $(code_to_ma $want_code)mA (REG00 $cur -> $new)"
+	if ! i2c_set "$CHG_BUS" "$CHG_ADDR" 0x00 "$new"; then
+		LIMIT_STATE="write to REG00 failed"
+		return 1
+	fi
+	LIMIT_STATE="input limit $(code_to_ma $cur_code)mA -> $(code_to_ma $want_code)mA (REG00 $cur -> $new)"
+	logger -t "$NAME" "$LIMIT_STATE" 2>/dev/null || true
 	return 0
 }
 
@@ -181,9 +195,27 @@ apply_limit() {
 # it. So a one-shot write survives until the cable is replugged, and a slow
 # poll is enough to cover that. Ten seconds of one i2c byte read is not
 # something this device will notice.
+# Logs only on a CHANGE of outcome, and stamps a heartbeat.
+#
+# Two reasons. syslogd here runs with a 64 KB ring (-C64), so a line every ten
+# seconds during a sustained EN_HIZ - a thermal throttle, a weak port - would
+# wipe the entire log in about an hour, destroying exactly the charger history
+# anyone would want. And the previous loop swallowed its own failures: it could
+# fail every pass forever while saying nothing at all, which is how a watcher
+# that did nothing went unnoticed.
 watch_loop() {
+	_last=""
 	while :; do
 		apply_limit
+		_now="$LIMIT_STATE"
+		if [ "$_now" != "$_last" ]; then
+			logger -t "$NAME" "$_now" 2>/dev/null || true
+			_last="$_now"
+		fi
+		# Heartbeat: proof the loop is running AND reaching the chip, which is
+		# what `status` reports. A live pid is not the same as a working
+		# watcher.
+		date +%s > "$STAMPFILE" 2>/dev/null || true
 		sleep "$CHARGER_POLL_SECONDS"
 	done
 }
@@ -192,6 +224,15 @@ case "$1" in
 	# Internal: the body start-stop-daemon re-execs. Not in the usage line
 	# because it is not something to run by hand.
 	__watch)
+		# precheck FIRST. start-stop-daemon -b execs, so this process does not
+		# inherit CHG_BUS/CHG_ADDR from the shell that ran `start` - the old
+		# `watch_loop &` was a fork and did. Without this the loop called
+		# i2cget with empty arguments every ten seconds forever, logged
+		# nothing because i2c_get swallows stderr, and `status` still reported
+		# "watcher: running". The cap survived only because the one-shot
+		# apply_limit in `start` runs before the exec; the next USB replug
+		# would have put 1500 mA back with nothing to undo it.
+		precheck || exit 1
 		watch_loop
 		;;
 	start)
@@ -222,9 +263,13 @@ case "$1" in
 		;;
 	stop)
 		if [ -f "$PIDFILE" ]; then
-			kill "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null
+			start-stop-daemon -K -p "$PIDFILE" 2>/dev/null || \
+				kill "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null
 			rm -f "$PIDFILE"
 		fi
+		# Clear the heartbeat too, so a stopped watcher cannot leave a fresh
+		# timestamp behind for status to read as healthy.
+		rm -f "$STAMPFILE"
 		# The register is deliberately left as it is. Restoring 1500 mA would
 		# re-create the fault, and the vendor driver reprograms it on the next
 		# USB attach anyway.
@@ -237,8 +282,24 @@ case "$1" in
 		echo "REG00:      $cur  -> input limit $(code_to_ma $(( cur & 0x1F )))mA"
 		echo "port says:  $(port_limit_ma 2>/dev/null || echo '?')mA"
 		echo "cap:        $(target_ma)mA"
+		# A live pid is not a working watcher. This reported "running" for a
+		# loop that had been calling i2cget with empty arguments since boot and
+		# had never once reached the chip, so it now reports the heartbeat the
+		# loop writes after each pass.
 		if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null; then
-			echo "watcher:    running (pid $(cat "$PIDFILE"))"
+			_st=$(cat "$STAMPFILE" 2>/dev/null)
+			case "$_st" in
+				''|*[!0-9]*)
+					echo "watcher:    pid $(cat "$PIDFILE") is alive but has NEVER completed a pass"
+					echo "            (it is not reaching the chip - check 'logread | grep $NAME')" ;;
+				*)
+					_age=$(( $(date +%s) - _st ))
+					if [ "$_age" -gt $(( CHARGER_POLL_SECONDS * 3 )) ]; then
+						echo "watcher:    pid $(cat "$PIDFILE") alive but last pass ${_age}s ago - STALLED"
+					else
+						echo "watcher:    running (pid $(cat "$PIDFILE"), last pass ${_age}s ago)"
+					fi ;;
+			esac
 		else
 			echo "watcher:    not running"
 		fi
