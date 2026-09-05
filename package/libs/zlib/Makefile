@@ -67,11 +67,25 @@ ifeq ($(CONFIG_ZLIB_OPTIMIZE_SPEED),y)
 	TARGET_CFLAGS := $(filter-out -O%,$(TARGET_CFLAGS)) -O3
 endif
 
-# 1.3.2 rewrote the CMake build. ZLIB_BUILD_EXAMPLES became ZLIB_BUILD_TESTING
-# and still defaults to ON, so say no: the examples are host-run test programs
-# that nothing here installs. The -DARMv8= line that used to sit here went with
-# it — no zlib release ever defined that option, so it only ever set an unused
-# cache variable.
+# OpenWrt passes -DARMv8=<ON if __ARM_NEON__> here and we do not, which is the
+# one place this Makefile deliberately differs from theirs. ARMv8 is not a zlib
+# option; it is declared by OpenWrt's own patches/004, which swaps inflate.c and
+# inffast.c for contrib/arm/ copies with NEON chunkcopy. Our patches/ is empty,
+# so the flag would feed nothing — but the reason we do not simply import their
+# three patches is worth writing down, because our toolchain does define
+# __ARM_NEON__ and the ARM path would engage:
+#
+#   contrib/arm/inflate.c is a fork of a pre-1.3.0 inflate (21 K&R parameter
+#   declarations, inflateSync from before the 1.3.1 bit-buffer fix) that upstream
+#   has never resynced. Taking it would put back the uninitialised-heap read this
+#   very bump removes — its inflateCopy copies the whole 1U << wbits window
+#   instead of state->whave. crc32.c and gzwrite.c are not swapped, so
+#   CVE-2026-27171 and the gzprintf overflow survive either way; what is at stake
+#   is the inflate-side hardening against a NEON inflate speedup.
+#
+# ZLIB_BUILD_TESTING is ours too, and merely saves build time: 1.3.2 renamed
+# ZLIB_BUILD_EXAMPLES to it and it still defaults to ON, and nothing installs
+# the test programs.
 CMAKE_OPTIONS += \
 	-DZLIB_BUILD_TESTING=OFF
 
