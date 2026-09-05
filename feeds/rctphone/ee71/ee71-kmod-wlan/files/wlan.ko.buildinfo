@@ -1,8 +1,10 @@
 source     qcacld-2.0 c26933bef5225b3f7b65753cc852b46ac8d878bd
+patches    64e6bdda4d3ef835 0001-fragattacks-pn-continuity.patch 0002-fragattacks-eapol-intra-bss.patch 
 version    QWLAN_VERSIONSTR 4.2.25.8
 kernel     3.10.49 (config from the device's /proc/config.gz)
+kernel src LNX.LE.5.1 0527bff80a2a99644af3496d996bf31b8923dc2a
 compiler   gcc 4.9.4
 vermagic   3.10.49 preempt mod_unload ARMv7 
 options    none (stock: every flag derived from the kernel .config)
-size       3629564 bytes
-sha256     f268ab9bb08340d92985aa74cdb8fba836be1bdc5275a2f7ceac86bb777f4df9
+size       3631636 bytes
+sha256     9797924fc9a6efce4b7fd5586caeabb2ad60d88a700f4dc9fff3e0ae8d4a5958

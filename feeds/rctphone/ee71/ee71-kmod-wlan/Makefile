@@ -4,7 +4,7 @@ PKG_NAME:=ee71-kmod-wlan
 # qcacld-2.0 QWLAN_VERSIONSTR of the source this was built from - the same
 # version string the stock module on the device carries.
 PKG_VERSION:=4.2.25.8
-PKG_RELEASE:=1
+PKG_RELEASE:=2
 
 include $(INCLUDE_DIR)/package.mk
 
@@ -28,27 +28,29 @@ define Package/ee71-kmod-wlan/description
   change the driver source. If the rebuilt module does not load, the router
   comes up with no WiFi - no 2.4 GHz, no 5 GHz.
 
-  KNOWN SECURITY REGRESSION - READ BEFORE ENABLING. This build is upstream
-  4.2.25.8 exactly. The vendor's module reports the same version but is NOT
-  that source: TCL cherry-picked later fixes on top without ever bumping
-  QWLAN_VERSIONSTR. The vendor module therefore contains security fixes this
-  one does not, confirmed by symbols present there and absent here:
+  FragAttacks mitigations are carried. Upstream 4.2.25.8 predates them; the
+  vendor's module reports the same version but is not that source, because TCL
+  cherry-picked later fixes on top without ever bumping QWLAN_VERSIONSTR. The
+  two commits whose absence made this build a security regression are applied
+  as build-time patches from docker/kernel-modules/patches/qcacld/:
 
-      ol_rx_pn_strict_chk                  fragment PN continuity
-      ol_cfg_rx_host_duplicate_check       defrag duplicate detection
-      ol_cfg_rx_host_defrag_timeout_check  defrag timeout
-      __adf_nbuf_data_is_eapol_pkt         EAPOL check on intra-BSS forwarding
+      c3bf4f5b  fragment PN continuity, defrag duplicate + timeout checks
+      09d426dd  EAPOL sanity check on intra-BSS forwarding
 
-  Those are the March 2021 FragAttacks batch - CVE-2020-24586/24587/24588 -
-  plus the plaintext-injection check. This build predates all of them. The
-  giveaway that it is a source difference and not a compiler one: this module
-  still has ol_cfg_rx_host_defrag_timeout_duplicate_check, the single pre-2021
-  function that those commits split into the two ol_cfg_rx_host_* above.
+  CVE-2020-24586 / 24587 / 24588 plus the plaintext-injection check. Verified
+  against the vendor module as oracle rather than by inspection: all four
+  symbols (ol_rx_pn_strict_chk, ol_cfg_rx_host_duplicate_check,
+  ol_cfg_rx_host_defrag_timeout_check, __adf_nbuf_data_is_eapol_pkt) are now
+  present, and ol_cfg_rx_host_defrag_timeout_duplicate_check - the single
+  pre-2021 function those commits split into two - is gone, which is how you
+  tell the pick landed rather than merely applied.
 
-  So enabling this trades away four mitigations against an attacker within
-  WiFi range. It is a fine tool for reproducing and studying the driver; it is
-  not currently an upgrade over what the device ships, and it should not be
-  left enabled on a router anyone depends on until those fixes are carried.
+  ONE KNOWN DIFFERENCE REMAINS. The vendor module defines ol_pktlog_init and
+  this one does not, because that function is not in 4.2.25.8 at all - it is
+  another TCL backport, not yet identified to a commit. Everything else in the
+  symbol delta (32 symbols) is inlining: those functions are present in the
+  4.2.25.8 source and differ only in whether GCC 4.8.1 (vendor) or 4.9.4
+  (ours) chose to inline them.
 
   Installing the package does NOT switch drivers. It only puts files on the
   device. Switching is a separate, deliberate step:
@@ -93,7 +95,9 @@ define Package/ee71-kmod-wlan/description
   nvm_tlv_3.0.bin) live on the /firmware partition, are board-specific, and are
   not touched by any of this.
 
-  Built by docker/kernel-modules/build.sh with BUILD_WLAN=1; build options live
+  Built by docker/kernel-modules/build.sh with BUILD_WLAN=1. Exact source
+  revision, patch set, kernel revision, compiler and vermagic are recorded in
+  /usr/lib/ee71/wlan-rebuilt.buildinfo. Build options live
   in QCACLD_KBUILD_EXTRA at the top of that script. Analysis:
   docs/wlan-ko-analysis.md
 endef
