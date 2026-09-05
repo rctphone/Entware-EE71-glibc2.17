@@ -30,6 +30,25 @@ has_newline() {
     [ "$(printf '%s' "$1" | wc -l | tr -d ' ')" -gt 0 ]
 }
 
+# True when the file names at least one usable key. Blank lines and comments
+# do not count - "# nothing" is not a key.
+has_usable_key() {
+	[ -f "$1" ] || return 1
+	grep -qvE '^[[:space:]]*($|#)' "$1"
+}
+
+# This device authenticates with keys only: dropbear runs with -s, from
+# DROPBEAR_EXTRA_ARGS in /etc/default/dropbear, so password login is off. An
+# authorized_keys with no keys in it is therefore a PERMANENT lockout,
+# recoverable only over ADB with the case open. Both paths that can empty the
+# file ask this first, and both take {"force":true} for someone who means it.
+would_lock_out() {
+	# $1: path to the candidate file. Locked out iff it holds no usable key
+	# AND passwords are disabled.
+	has_usable_key "$1" && return 1
+	grep -q '^[[:space:]]*DROPBEAR_EXTRA_ARGS=.*-s' /etc/default/dropbear 2>/dev/null
+}
+
 # --- Parse action ---
 case "$REQUEST_METHOD" in
 GET)
@@ -55,7 +74,17 @@ status)
     PORT=22
     if [ -n "$PID" ]; then
         PORT=$(cat /proc/"$(echo $PID | awk '{print $1}')"/cmdline 2>/dev/null | tr '\0' '\n' | grep -A1 '^-p$' | tail -1)
-        [ -z "$PORT" ] && PORT=22
+        # dropbear's -p takes [address:]port, and `save` writes exactly that
+        # form. Keep only the port: the whole value used to go to
+        # `jq --argjson port`, which demands valid JSON, so as soon as a listen
+        # address was configured jq exited non-zero and printed nothing - the
+        # CGI returned headers with an EMPTY BODY and the panel's JSON.parse
+        # threw. The two halves disagreed: save wrote addr:port, status could
+        # only read a bare integer.
+        PORT="${PORT##*:}"
+        case "$PORT" in
+            ''|*[!0-9]*) PORT=22 ;;
+        esac
     fi
 
     # Key fingerprints — build array with jq
@@ -272,6 +301,13 @@ remove_key)
     done < "$AUTH_KEYS"
 
     if [ "$REMOVED" = "1" ]; then
+        FORCE=$(echo "$BODY" | jq -r '.force // empty')
+        if [ "$FORCE" != "true" ] && would_lock_out "$TMP"; then
+            rm -f "$TMP"
+            json_err "refusing: that is the last key, and password login is off (-s) — you would be locked out with only ADB left. Send force:true if you mean it."
+            exit 0
+        fi
+        chmod 600 "$TMP" 2>/dev/null
         mv "$TMP" "$AUTH_KEYS"
         chmod 600 "$AUTH_KEYS" 2>/dev/null
         printf '{"ok":true}'
@@ -325,6 +361,17 @@ restore-keys)
 
     mv -f "$RK_TMP.raw" "$RK_TMP"
     chmod 600 "$RK_TMP" 2>/dev/null
+
+    # Every line passing the format check does not mean any key survived:
+    # blanks and comments are kept deliberately, so {"keys":"# nothing"} got
+    # this far and was moved over the live file.
+    RK_FORCE=$(echo "$BODY" | jq -r '.force // empty')
+    if [ "$RK_FORCE" != "true" ] && would_lock_out "$RK_TMP"; then
+        rm -f "$RK_TMP"
+        json_err "refusing: that restore contains no keys, and password login is off (-s) — you would be locked out with only ADB left. Send force:true if you mean it."
+        exit 0
+    fi
+
     mv -f "$RK_TMP" /etc/dropbear/authorized_keys
     chmod 600 /etc/dropbear/authorized_keys
     printf '{"ok":true}'

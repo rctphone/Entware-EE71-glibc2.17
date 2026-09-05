@@ -67,7 +67,14 @@ find_charger() {
 }
 
 precheck() {
-	if ! $BB i2cget --help 2>&1 | grep -qi i2c; then
+	# `busybox --list`, not `busybox i2cget --help`. BusyBox answers an unknown
+	# applet with "<name>: applet not found" - which CONTAINS the string i2c
+	# when the name is i2cget, so the old grep passed on precisely the BusyBox
+	# that lacks the applet. Verified: `busybox i2cNOPE --help` prints
+	# "i2cNOPE: applet not found". The check that was meant to produce a
+	# helpful message produced none, and the user got "could not program REG00"
+	# pointing at the chip instead of at the missing tool.
+	if ! $BB --list 2>/dev/null | grep -qx i2cget; then
 		echo "[ERR] this BusyBox has no i2c applets" >&2
 		echo "      the stock 1.20.2 predates them - install ours (1.36.1)" >&2
 		return 1
@@ -235,7 +242,20 @@ case "$1" in
 		else
 			echo "watcher:    not running"
 		fi
-		echo "VBUS drops: $(dmesg | grep -c 'power_good is 0') since boot"
+		# dmesg is a fixed ring buffer, so "since boot" is a lie the moment it
+		# wraps - and it does: at uptime 9443 s on this device NOT ONE charger
+		# line survived, so the count read 0 whether the fix was working or the
+		# evidence had simply scrolled away. Report whether the evidence is
+		# still there before reporting the number.
+		_pg=$(dmesg | grep -c 'power_good is 0')
+		_any=$(dmesg | grep -ci bq25601)
+		if [ "$_any" -eq 0 ]; then
+			echo "VBUS drops: unknown - no charger lines left in the dmesg ring"
+			echo "            (it has wrapped; 'logread | grep charger_limit'"
+			echo "             shows what this watcher itself has done)"
+		else
+			echo "VBUS drops: $_pg in what dmesg still holds"
+		fi
 		;;
 	restart)
 		"$0" stop

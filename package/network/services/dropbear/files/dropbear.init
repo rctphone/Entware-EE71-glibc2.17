@@ -171,7 +171,14 @@ case "$1" in
 	;;
   restart|force-reload)
 	echo -n "Restarting $DESC: "
-	start-stop-daemon -K -x "$DAEMON"
+	# `|| true` matters: this script runs under `set -e`, and BusyBox
+	# start-stop-daemon -K exits 1 when there was nothing to kill (verified on
+	# the device: rc=1 for a daemon that is not running). Without it, `restart`
+	# on a STOPPED dropbear aborted right here and never reached gen_keys,
+	# fw_open or the start - so the one command this file's own comments offer
+	# as the recovery for flushed firewall rules did nothing in exactly the
+	# case you would reach for it.
+	start-stop-daemon -K -x "$DAEMON" || true
 	sleep 1
 	gen_keys
 	fw_open
