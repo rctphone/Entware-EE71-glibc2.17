@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=miniupnpd
 PKG_VERSION:=2.3.11
-PKG_RELEASE:=7
+PKG_RELEASE:=8
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_URL:=https://miniupnp.tuxfamily.org/files/
@@ -122,10 +122,37 @@ endef
 
 # Stop the daemon and tear down the MINIUPNPD chains while the script that
 # knows how to do it is still on disk. opkg deletes it right after this.
+# Where prerm tells postinst that the daemon was up. Same shape as
+# ee71-kmod-wlan, and for the same reason: opkg runs prerm on an UPGRADE as
+# well as a removal, so a prerm that stops a service and no postinst to start
+# it means every upgrade silently leaves the service down. Here it left
+# miniupnpd stopped with its netfilter chains removed - observed after the
+# 2.3.11-6 -> -7 upgrade, which is how this was found.
+MINIUPNPD_MARKER:=/var/run/miniupnpd.restart-after-upgrade
+
 define Package/miniupnpd/prerm
 #!/bin/sh
 [ -n "$${IPKG_INSTROOT}" ] && exit 0
+rm -f $(MINIUPNPD_MARKER)
+# Remember it was running, but only for an upgrade - a removal should leave it
+# stopped. opkg calls us as `prerm upgrade <version>` in the first case.
+if [ "$$1" = upgrade ] && pidof miniupnpd >/dev/null 2>&1; then
+	: > $(MINIUPNPD_MARKER)
+fi
 [ -x /etc/init.d/miniupnpd ] && /etc/init.d/miniupnpd stop 2>/dev/null
+exit 0
+endef
+
+define Package/miniupnpd/postinst
+#!/bin/sh
+[ -n "$${IPKG_INSTROOT}" ] && exit 0
+# Bring it back only if prerm found it running. A fresh install leaves it to
+# core_app, which starts it when UPnP is enabled - installing a package must
+# not switch a service on.
+if [ -f $(MINIUPNPD_MARKER) ]; then
+	rm -f $(MINIUPNPD_MARKER)
+	[ -x /etc/init.d/miniupnpd ] && /etc/init.d/miniupnpd start 2>/dev/null
+fi
 exit 0
 endef
 
@@ -140,6 +167,10 @@ endef
 define Package/miniupnpd/postrm
 #!/bin/sh
 [ -n "$${IPKG_INSTROOT}" ] && exit 0
+# NOT on an upgrade: opkg runs the OLD package's postrm there too, between
+# prerm and the new postinst, so an unguarded rm here deletes the marker prerm
+# just wrote. That exact mistake cost a release in ee71-kmod-wlan.
+[ "$$1" = upgrade ] || rm -f $(MINIUPNPD_MARKER)
 if [ ! -f /etc/init.d/miniupnpd ] && [ -f /etc/init.d/miniupnpd.stock ]; then
 	mv /etc/init.d/miniupnpd.stock /etc/init.d/miniupnpd && \
 		chmod 755 /etc/init.d/miniupnpd && \
