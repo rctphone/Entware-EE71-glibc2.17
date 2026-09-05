@@ -1,7 +1,27 @@
 # Entware specifics: added -DHAVE_GETENTROPY=OFF
-# EE71: pinned to 2.13.x — last series with SONAME libxml2.so.2
-# (2.14+ bumped soname to libxml2.so.16, breaking OEM binary compat)
 # Based on Entware commit c04cb877 (2.13.6 structure)
+#
+# EE71: pinned to 2.13.9, the last release with SONAME libxml2.so.2, and 2.13.9
+# is the end of that series — there is nothing left to bump to inside it.
+#
+# This package is not an addition to the firmware, it is a replacement: the
+# stock system ships /usr/lib/libxml2.so.2 -> libxml2.so.2.9.1, and this
+# package's only payload is /usr/lib/libxml2.so.2 plus its real file, so
+# installing it overwrites the OEM library in place. The stock daemon
+# /usr/bin/ipacm, started at boot by /etc/init.d/start_ipacm_le, has
+# libxml2.so.2 in its DT_NEEDED; so does /usr/bin/xmllint.
+#
+# From 2.14 upstream bumped the SONAME to libxml2.so.16. A 2.14+ package would
+# therefore ship libxml2.so.16 and NOT libxml2.so.2 — and because opkg deletes
+# the old version's files on upgrade, and the file it would delete is the one
+# that clobbered the OEM symlink, the upgrade leaves the device with no
+# libxml2.so.2 at all and ipacm stops loading. Nothing is bought in exchange:
+# no package in this feed depends on libxml2 at runtime (gettext-full lists it
+# only as PKG_BUILD_DEPENDS, and gettext-full is not selected).
+#
+# So: do not move to 2.14/2.15 as a version bump. Retiring the package
+# altogether, so the device keeps its own untouched 2.9.1, is a coherent
+# alternative — but that is a removal decision, not an upgrade.
 
 include $(TOPDIR)/rules.mk
 
