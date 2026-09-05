@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=miniupnpd
 PKG_VERSION:=2.3.11
-PKG_RELEASE:=2
+PKG_RELEASE:=3
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_URL:=https://miniupnp.tuxfamily.org/files/
@@ -11,8 +11,6 @@ PKG_HASH:=91994b127da735b2c97f19992e34420648c0e8c4ace8a4bcb0596e7685c48678
 PKG_LICENSE:=BSD-3-Clause
 PKG_BUILD_PARALLEL:=1
 PKG_BUILD_FLAGS:=lto gc-sections
-# Build-time only: libmnl.a is linked statically (see Build/Compile). This
-# guarantees libmnl is staged first without adding a runtime Depends.
 PKG_BUILD_DEPENDS:=libmnl
 
 include $(INCLUDE_DIR)/package.mk
@@ -21,7 +19,7 @@ define Package/miniupnpd
   SECTION:=net
   CATEGORY:=Network
   TITLE:=UPnP/NAT-PMP/PCP daemon
-  DEPENDS:=+libc +iptables +libnfnetlink +libnetfilter-conntrack
+  DEPENDS:=+libc +iptables +libnfnetlink +libnetfilter-conntrack +libmnl
   PROVIDES:=miniupnpd-iptables
   URL:=http://miniupnp.free.fr/
 endef
@@ -36,17 +34,29 @@ define Build/Configure
 	$(SED) '/lcap/d' $(PKG_BUILD_DIR)/config.mk
 endef
 
-# libmnl is linked statically on purpose. configure defines USE_NFCT when it
-# finds libnetfilter_conntrack + libmnl in staging, which compiles
-# netfilter/nfct_get.c and makes mnl_* a direct dependency of the daemon.
-# The device has no libmnl.so.0 anywhere: the opkg entry for libmnl is a
-# pre-registered stub with an empty file list (SYSTEM_PKGS in
-# opkg/build_entware.sh), and the stock libnetfilter_conntrack.so.3 does not
-# pull it in either. Adding +libmnl to DEPENDS would not help — opkg already
-# believes the stub is installed, so nothing would be fetched. Linking the
-# ~30 KB libmnl.a in removes libmnl.so.0 from DT_NEEDED and makes the binary
-# start on both fresh and already-provisioned devices.
-# After building, verify: readelf -d miniupnpd | grep NEEDED  →  no libmnl.
+# configure defines USE_NFCT when it finds libnetfilter_conntrack + libmnl in
+# staging, which compiles netfilter/nfct_get.c and makes mnl_* a direct
+# dependency of the daemon. So the daemon needs libmnl at RUNTIME, and
+# +libmnl in DEPENDS above is what supplies it.
+#
+# It used to try to avoid that with `-Wl,-Bstatic -lmnl -Wl,-Bdynamic` below,
+# on the reasoning that +libmnl could not help because opkg already believed a
+# pre-registered stub was installed. Both halves are now wrong:
+#
+#   - The static link never worked. Measured, not assumed: after a full
+#     `miniupnpd/clean` and rebuild, `readelf -d miniupnpd | grep NEEDED` still
+#     lists libmnl.so.0. upstream's own link line appends -lmnl after ours,
+#     by which point -Bdynamic is back in effect. This Makefile even told the
+#     reader to run that exact check, and nobody ran it — the shipped
+#     2.3.11-2 binary has libmnl.so.0 in DT_NEEDED and the daemon cannot start
+#     on a device that has no libmnl.
+#   - libmnl is no longer pre-registered. It is absent from the stock firmware
+#     manifest, so the reconciliation refuses to claim it, and the real
+#     libmnl_1.0.5 in the feed gets installed like any other dependency.
+#
+# The -Bstatic flags are kept only because dropping them changes nothing
+# measurable; the dependency is what makes it work. If you ever remove them,
+# re-run the readelf check rather than trusting this comment.
 define Build/Compile
 	$(MAKE) -C $(PKG_BUILD_DIR) \
 		CC="$(TARGET_CC)" \
