@@ -7,6 +7,17 @@
 
 # Entware specifics: remove deps USE_GLIBC:libcrypt-compat
 # EE71: /opt → /usr paths, custom SysV init script
+#
+# patches/ tracks OpenWrt's copies verbatim, with two deliberate exceptions.
+# Do not re-add either when syncing from upstream:
+#   600-allow-blank-root-password — lets root in with an empty password and no
+#     -B. It serves OpenWrt's first-boot flow (image ships passwordless, user
+#     sets a password through the UI). We set a root password at install and
+#     authenticate with keys, so it enables nothing here and leaves a
+#     passwordless-root path guarded only by root's password field.
+#   910-signkey-fix-use-of-rsa-sha2-256-pubkeys — obsolete since upstream took
+#     both sides of the buf_verify comparison from the wire, and harmful with
+#     DROPBEAR_RSA_SHA1 0: it skips the type check and reaches assert(0).
 
 include $(TOPDIR)/rules.mk
 
