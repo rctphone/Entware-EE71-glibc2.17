@@ -53,6 +53,15 @@ FW_TOOLS="iptables ip6tables"
 set -e
 
 test ! -r /etc/default/dropbear || . /etc/default/dropbear
+
+# The firewall rules need a BARE port number. dropbear's -p accepts
+# [address:]port, so DROPBEAR_PORT may legitimately be "192.168.88.1:2222" -
+# and `iptables --dport 192.168.88.1:2222` is rejected. It would be rejected
+# silently, because every firewall call below sends stderr to /dev/null and
+# tolerates failure, leaving SSH with no ACCEPT rule at all under an INPUT
+# policy of DROP. Strip any address prefix for the rules only; the daemon
+# still gets the full value.
+DROPBEAR_FW_PORT="${DROPBEAR_PORT##*:}"
 test "$NO_START" = "0" || exit 0
 test -x "$DAEMON" || exit 0
 test ! -h /var/service/dropbear || exit 0
@@ -105,13 +114,13 @@ fw_open() {
   for FW in $FW_TOOLS; do
     # Established traffic. Insert first so these end up BELOW the SYN rules.
     for IFACE in $ALLOW_SSH_INTERFACES; do
-      "$FW" -I INPUT -i "$IFACE" -p tcp --dport "$DROPBEAR_PORT" -j ACCEPT 2>/dev/null || true
+      "$FW" -I INPUT -i "$IFACE" -p tcp --dport "$DROPBEAR_FW_PORT" -j ACCEPT 2>/dev/null || true
     done
 
     # Catch-all for new connections. Inserted before the per-interface accepts
     # below, so it ends up underneath them and only sees SYN packets that
     # arrived on an interface not in ALLOW_SSH_INTERFACES — i.e. the WAN.
-    "$FW" -I INPUT -p tcp --dport "$DROPBEAR_PORT" --syn -j DROP 2>/dev/null || true
+    "$FW" -I INPUT -p tcp --dport "$DROPBEAR_FW_PORT" --syn -j DROP 2>/dev/null || true
 
     # DHEat DoS mitigation (CVE-2002-20001): rate-limit new SSH SYN packets,
     # burst 5 then 10/minute, PER LAN INTERFACE.
@@ -119,7 +128,7 @@ fw_open() {
     # above the DROP: SSH answered on the carrier-facing rmnet_data0 with
     # password auth enabled and a root password set. Keep the -i.
     for IFACE in $ALLOW_SSH_INTERFACES; do
-      "$FW" -I INPUT -i "$IFACE" -p tcp --dport "$DROPBEAR_PORT" --syn \
+      "$FW" -I INPUT -i "$IFACE" -p tcp --dport "$DROPBEAR_FW_PORT" --syn \
         -m limit --limit 10/minute --limit-burst 5 -j ACCEPT 2>/dev/null || true
     done
   done
@@ -128,19 +137,19 @@ fw_open() {
 fw_close() {
   for FW in $FW_TOOLS; do
     for IFACE in $ALLOW_SSH_INTERFACES; do
-      while "$FW" -D INPUT -i "$IFACE" -p tcp --dport "$DROPBEAR_PORT" -j ACCEPT 2>/dev/null; do :; done
+      while "$FW" -D INPUT -i "$IFACE" -p tcp --dport "$DROPBEAR_FW_PORT" -j ACCEPT 2>/dev/null; do :; done
     done
     # Rate-limiting rules, current per-interface form
     for IFACE in $ALLOW_SSH_INTERFACES; do
-      while "$FW" -D INPUT -i "$IFACE" -p tcp --dport "$DROPBEAR_PORT" --syn \
+      while "$FW" -D INPUT -i "$IFACE" -p tcp --dport "$DROPBEAR_FW_PORT" --syn \
         -m limit --limit 10/minute --limit-burst 5 -j ACCEPT 2>/dev/null; do :; done
     done
     # ...and the pre-2026.91-2 unbound form, so upgrading over a running daemon
     # does not leave the WAN-facing ACCEPT behind. It only ever existed in
     # iptables; on ip6tables the delete simply finds nothing.
-    while "$FW" -D INPUT -p tcp --dport "$DROPBEAR_PORT" --syn \
+    while "$FW" -D INPUT -p tcp --dport "$DROPBEAR_FW_PORT" --syn \
       -m limit --limit 10/minute --limit-burst 5 -j ACCEPT 2>/dev/null; do :; done
-    while "$FW" -D INPUT -p tcp --dport "$DROPBEAR_PORT" --syn -j DROP 2>/dev/null; do :; done
+    while "$FW" -D INPUT -p tcp --dport "$DROPBEAR_FW_PORT" --syn -j DROP 2>/dev/null; do :; done
   done
 }
 

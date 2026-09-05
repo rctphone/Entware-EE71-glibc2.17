@@ -139,15 +139,36 @@ save)
         fi
     fi
 
-    # Update dropbear init with new port/listen
-    if [ -f /etc/init.d/dropbear ]; then
-        sed -i "s/-p [^ ]*/-p $LISTEN_ARG/" /etc/init.d/dropbear 2>/dev/null
+    # The port belongs in /etc/default/dropbear, which the init script sources.
+    #
+    # This used to `sed -i "s/-p [^ ]*/-p $LISTEN_ARG/"` the init script itself,
+    # which was destructive in three ways at once. sed replaces the FIRST match
+    # per line, and the script's first `-p ` is rarely the daemon's: on the
+    # gen_keys line it is `mkdir -p "$DROPBEAR_KEYDIR"`, and on every firewall
+    # line it is `-p tcp`. Saving once would have turned the key directory into
+    # a directory named after the port and every iptables rule into
+    # `-p <port>`, an invalid protocol - so under an INPUT policy of DROP the
+    # device would have had no SSH ACCEPT rule at all. It also never survived a
+    # package upgrade, since the init script is package-owned.
+    #
+    # Stop BEFORE writing the new port, so fw_close still sees the old one and
+    # removes the rules it actually installed; then start with the new port so
+    # fw_open opens it. Doing it in the other order strands an ACCEPT for the
+    # old port and never opens the new one.
+    if [ -x /etc/init.d/dropbear ]; then
+        run_timeout 15 /etc/init.d/dropbear stop >/dev/null 2>&1
     fi
 
-    # Restart dropbear on new port (safe: start new first, then stop old).
+    DEF=/etc/default/dropbear
+    touch "$DEF" 2>/dev/null
+    DEF_TMP="${DEF}.new"
+    grep -v '^[[:space:]]*DROPBEAR_PORT=' "$DEF" 2>/dev/null > "$DEF_TMP"
+    printf 'DROPBEAR_PORT="%s"\n' "$LISTEN_ARG" >> "$DEF_TMP"
+    mv -f "$DEF_TMP" "$DEF"
+
     # Bounded: dropbear generates host keys on first run and can block on
     # a starved entropy pool, which would freeze the whole server.
-    run_timeout 15 dropbear -p "$LISTEN_ARG" 2>/dev/null
+    run_timeout 15 /etc/init.d/dropbear start >/dev/null 2>&1
     DB_RC=$?
     if [ "$DB_RC" -eq 124 ]; then
         json_err "dropbear did not start on $LISTEN_ARG within 15s"
