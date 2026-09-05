@@ -147,6 +147,10 @@ case "$1" in
 	chains removeall
 	;;
   restart|reload|force-reload)
+	# Sweeps here too. core_app calls `restart` far more often than `start` -
+	# it re-runs the init script on every UPnP settings change - so hanging
+	# the tidy-up on `start` alone means it effectively never runs.
+	sweep_stale_conf_temps
 	start-stop-daemon --stop --retry 5 --quiet --pidfile "$PIDFILE"
 	chains removeall
 	chains init
