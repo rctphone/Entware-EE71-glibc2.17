@@ -85,9 +85,12 @@ ext_if() {
 }
 
 # chains <init|removeall>
-# The vendor ships these scripts mode 0644, so they must be run through sh
-# rather than executed. $0 inside them still resolves to $ETCPATH, which is
-# where they look for miniupnpd_functions.sh.
+# Run through `sh` rather than executed. Not because of the mode - the comment
+# here used to say the vendor ships them 0644, which is stale: the Makefile
+# installs them with INSTALL_BIN and they are 0755 on the device. It is
+# harmless either way, and going through sh keeps it independent of how they
+# were installed. $0 inside them still resolves to $ETCPATH, which is where
+# they look for miniupnpd_functions.sh.
 # Complains through logger as well as stdout. An init script's stdout at boot
 # goes nowhere anybody reads, which is how "the chain scripts are not installed
 # at all" survived every release up to 2.3.11-3: the daemon came up, the

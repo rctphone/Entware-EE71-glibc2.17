@@ -49,6 +49,29 @@ would_lock_out() {
 	grep -q '^[[:space:]]*DROPBEAR_EXTRA_ARGS=.*-s' /etc/default/dropbear 2>/dev/null
 }
 
+# Is something LISTENING on the SSH port?
+#
+# `pidof dropbear` is not the right question: it matches the per-session child
+# processes too, so an old connection that survived a stop makes it succeed for
+# a listener that never came up. Ask about the socket instead - that is the
+# thing "SSH works" actually means.
+ssh_listening() {
+	_port="$1"
+	_out=$(netstat -ltn 2>/dev/null)
+	if [ -n "$_out" ]; then
+		# netstat answered: trust it, including when it says no.
+		printf '%s\n' "$_out" | grep -qE "[:.]${_port}[[:space:]]"
+		return $?
+	fi
+	# Only when netstat is missing or produced nothing at all: fall back to the
+	# weaker test rather than reporting a failure that may not be one.
+	#
+	# The first version fell back whenever the GREP failed, which is precisely
+	# the "not listening" case - so it answered "listening" for every port, and
+	# my own test caught it saying that about 2222.
+	pidof dropbear >/dev/null 2>&1
+}
+
 # --- Parse action ---
 case "$REQUEST_METHOD" in
 GET)
@@ -244,6 +267,11 @@ save)
     # the device.
     DEF_BAK="${DEF}.rollback"
     cp -f "$DEF" "$DEF_BAK" 2>/dev/null
+    # The port we are rolling back TO, so the error can name it. 22 is the
+    # init script's own default when the file says nothing.
+    OLD_PORT=$(sed -n 's/^[[:space:]]*DROPBEAR_PORT="\{0,1\}\([^"]*\)"\{0,1\}.*/\1/p' "$DEF" 2>/dev/null | tail -1)
+    OLD_PORT="${OLD_PORT##*:}"
+    case "$OLD_PORT" in ''|*[!0-9]*) OLD_PORT=22 ;; esac
     DEF_TMP="${DEF}.new"
     grep -v '^[[:space:]]*DROPBEAR_PORT=' "$DEF" 2>/dev/null > "$DEF_TMP"
     printf 'DROPBEAR_PORT="%s"\n' "$LISTEN_ARG" >> "$DEF_TMP"
@@ -262,15 +290,15 @@ save)
     # and exited immediately still produced {"ok":true} - the UI reported
     # success while SSH was gone and the firewall had no rule for either port.
     # Check the daemon is actually there before saying so.
-    if ! pidof dropbear >/dev/null 2>&1; then
+    if ! ssh_listening "$PORT"; then
         # Put the old configuration back and try again, rather than reporting a
         # failure and leaving the owner locked out of their own router.
         if [ -f "$DEF_BAK" ]; then
             mv -f "$DEF_BAK" "$DEF"
             run_timeout 15 /etc/init.d/dropbear start >/dev/null 2>&1
         fi
-        if pidof dropbear >/dev/null 2>&1; then
-            json_err "dropbear refused $LISTEN_ARG - the previous setting has been restored and SSH is back up"
+        if ssh_listening "$OLD_PORT"; then
+            json_err "dropbear refused $LISTEN_ARG - the previous setting has been restored and SSH is back up on port $OLD_PORT"
         else
             json_err "dropbear refused $LISTEN_ARG and did not come back on the previous setting - SSH is down; reconnect over ADB and run /etc/init.d/dropbear start"
         fi
