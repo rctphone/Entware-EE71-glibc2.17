@@ -4,7 +4,7 @@ PKG_NAME:=ee71-kmod-wlan
 # qcacld-2.0 QWLAN_VERSIONSTR of the source this was built from - the same
 # version string the stock module on the device carries.
 PKG_VERSION:=4.2.25.8
-PKG_RELEASE:=2
+PKG_RELEASE:=3
 
 include $(INCLUDE_DIR)/package.mk
 
@@ -44,6 +44,34 @@ define Package/ee71-kmod-wlan/description
   present, and ol_cfg_rx_host_defrag_timeout_duplicate_check - the single
   pre-2021 function those commits split into two - is gone, which is how you
   tell the pick landed rather than merely applied.
+
+  WPA3-Personal (SAE) is dispatched to userspace. The 2016 LIM answers any
+  authentication algorithm it does not recognise with status 13, so SAE frames
+  were refused inside the driver and never reached hostapd. Patch 0003 adds the
+  early dispatch the LNX.LE.5.2 branch head uses: SAE is recognised ahead of
+  limIsAuthAlgoSupported() and forwarded up the management-frame indication
+  path that already exists - limSendSmeMgmtFrameInd() -> eWNI_SME_MGMT_FRM_IND
+  -> sme_mgmtFrmInd() -> eSAP_INDICATE_MGMT_FRAME -> hdd_indicateMgmtFrame(),
+  the same path P2P action frames use. AP-mode SAE needs no offload; hostapd
+  runs the exchange itself.
+
+  This needs hostapd built with CONFIG_SAE (the -4 package or later). With the
+  older hostapd the driver will hand up frames nothing can process.
+
+  RXMGMT_FLAG_EXTERNAL_AUTH is not passed and cannot be: on kernel 3.10
+  cfg80211_rx_mgmt() has no flags argument at all. Nothing depends on it -
+  hostapd reads the algorithm out of the frame body.
+
+  The feature is behind CONFIG_WLAN_FEATURE_SAE (on by default). Building with
+  CONFIG_WLAN_FEATURE_SAE=n gives a module of identical size with an identical
+  symbol set and none of the SAE strings; it is not byte-identical only because
+  the patch shifts __LINE__ values that FL() compiles into log calls - 127 bytes
+  of 3.6 MB, all accounted for. See docs/kernel-source-provenance.md.
+
+  Diagnosing it on the device: dmesg lines prefixed "SAE:" mean the driver saw
+  the frame and forwarded it. The line "received Authentication frame for
+  unsupported auth algorithm 3" means the dispatch is NOT in effect - wrong
+  module, or built with SAE off. Full table in docs/wpa3-feasibility.md.
 
   ONE KNOWN DIFFERENCE REMAINS. The vendor module defines ol_pktlog_init and
   this one does not, because that function is not in 4.2.25.8 at all - it is
