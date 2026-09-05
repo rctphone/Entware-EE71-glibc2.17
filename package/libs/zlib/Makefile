@@ -11,6 +11,28 @@ PKG_NAME:=zlib
 PKG_VERSION:=1.3.2
 PKG_RELEASE:=1
 
+# OpenWrt's three ARM patches (002/003/004) are deliberately NOT imported.
+#
+# They are not idle here for want of hardware: their own probe answers ON for
+# this toolchain, because arm-openwrt-linux-gnueabi-gcc defines __ARM_NEON__ by
+# default for cortex-a7+neon-vfpv4 softfp. They apply cleanly to 1.3.2. So this
+# is a choice, not a limitation.
+#
+# What 004's ARMv8 branch installs is a fork of a PRE-1.3.0 inflate that
+# upstream has never resynced: its inflateCopy does
+# zmemcpy(window, state->window, wsize) across the whole 1U << wbits window,
+# where 1.3.2 copies only state->whave. That is exactly the uninitialised-heap
+# read this version bump was taken for, put back — and 004 swaps only inflate.c
+# and inffast.c, so crc32.c and gzwrite.c stay stock and the CVE-2026-27171
+# crc32_combine64 loop and the gzprintf overflow are unaffected either way.
+#
+# So the real trade is a NEON inflate speedup against re-opening a fixed heap
+# read, on a device whose inflate is almost entirely opkg unpacking and HTTPS
+# response bodies — neither of which is throughput-bound. Not worth it.
+#
+# Revisit only if someone rebases the chunkcopy work onto 1.3.2's inflate
+# upstream. Do not rebase it here: that is writing a patch from scratch.
+
 # Release tarball rather than a git checkout: PKG_MIRROR_HASH for a git source
 # is the hash of a tarball this build system rolls itself, which cannot be
 # checked against anything upstream publishes. The signed release tarball has a
