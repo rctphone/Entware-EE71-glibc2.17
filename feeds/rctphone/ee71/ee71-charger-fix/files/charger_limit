@@ -132,6 +132,38 @@ target_ma() {
 	echo "$t"
 }
 
+# Silence the DPM interrupts our own cap provokes.
+#
+# Lowering IINLIM to what the port offers has a cost nobody would guess: the
+# charge current (480 mA) plus the system draw sits right ON the 500 mA input
+# limit, so the chip oscillates in and out of input-current regulation and
+# raises an interrupt on every transition. Measured on the device, 10-second
+# samples:
+#
+#     REG00=0x64 (our 500 mA)     charger 104/s   i2c 192/s   pinctrl 104/s
+#     REG00=0x6e (stock 1500 mA)  charger  22/s   i2c  53/s   pinctrl  22/s
+#
+# The charger's IRQ line is a GPIO, so each one is counted twice - at the
+# charger and at pinctrl - and each drives a pair of i2c transactions. That is
+# roughly 370 extra interrupts per second, about half of all interrupt activity
+# on the device, and it shows up as kernel-worker CPU and as heat. Our fix
+# caused it.
+#
+# REG0A bits 1 and 0 are VINDPM_INT_MASK and IINDPM_INT_MASK, which exist for
+# exactly this. Setting them took all three counters to 0/s with REG08 and
+# REG01 unchanged and the battery still Full: the regulation still happens, the
+# chip just stops announcing every transition. Bits are only ever SET here,
+# never cleared, and no other bit in REG0A is touched.
+mask_dpm_interrupts() {
+	cur=$(i2c_get "$CHG_BUS" "$CHG_ADDR" 0x0a)
+	case "$cur" in 0x*) ;; *) return 1 ;; esac
+	[ $(( cur & 0x03 )) -eq 3 ] && return 0
+	new=$(printf '0x%02x' $(( cur | 0x03 )))
+	i2c_set "$CHG_BUS" "$CHG_ADDR" 0x0a "$new" || return 1
+	logger -t "$NAME" "masked VINDPM/IINDPM interrupts (REG0A $cur -> $new)" 2>/dev/null || true
+	return 0
+}
+
 # REG00 is EN_HIZ[7] | STAT_CTRL[6:5] | IINLIM[4:0], and we are not its only
 # writer: the vendor's bq25601-charger driver owns this chip, and i2c_get /
 # i2c_set use -f to reach past that claim. So this is a read-modify-write race
@@ -168,6 +200,9 @@ apply_limit() {
 	# Only ever lower. If the vendor driver has already programmed something
 	# at or below the cap, leave it alone - it may know something we do not.
 	if [ "$cur_code" -le "$want_code" ]; then
+		# Already capped - but the mask can have been cleared by the vendor
+		# driver reprogramming the chip, so keep it applied.
+		mask_dpm_interrupts
 		LIMIT_STATE="holding at $(code_to_ma $cur_code)mA"
 		return 0
 	fi
@@ -187,6 +222,9 @@ apply_limit() {
 	fi
 	LIMIT_STATE="input limit $(code_to_ma $cur_code)mA -> $(code_to_ma $want_code)mA (REG00 $cur -> $new)"
 	logger -t "$NAME" "$LIMIT_STATE" 2>/dev/null || true
+	# Do this AFTER the cap, not before: it is the cap that creates the
+	# oscillation these masks suppress.
+	mask_dpm_interrupts
 	return 0
 }
 
@@ -282,6 +320,13 @@ case "$1" in
 		echo "REG00:      $cur  -> input limit $(code_to_ma $(( cur & 0x1F )))mA"
 		echo "port says:  $(port_limit_ma 2>/dev/null || echo '?')mA"
 		echo "cap:        $(target_ma)mA"
+		_r0a=$(i2c_get "$CHG_BUS" "$CHG_ADDR" 0x0a)
+		if [ $(( _r0a & 0x03 )) -eq 3 ] 2>/dev/null; then
+			echo "DPM ints:   masked (REG0A $_r0a) - without this the cap"
+			echo "            provokes ~370 extra interrupts/s"
+		else
+			echo "DPM ints:   NOT masked (REG0A $_r0a)"
+		fi
 		# A live pid is not a working watcher. This reported "running" for a
 		# loop that had been calling i2cget with empty arguments since boot and
 		# had never once reached the chip, so it now reports the heartbeat the
