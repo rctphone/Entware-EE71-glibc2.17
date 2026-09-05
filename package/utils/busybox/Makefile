@@ -10,6 +10,28 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=busybox
+# Held at 1.36.1 deliberately. Do NOT "just bump" this.
+#
+# 1.38.0 carries CVE-2026-38754: a heap buffer overflow in ifsbreakup() in the
+# ash shell, reachable from crafted input. Red Hat's analysis is explicit that
+# "the flaw is present only in BusyBox version 1.38.0" — 1.36.1 does not
+# contain the affected code — and as of 2026-09-05 there is no fixed release.
+# On this device ash IS /bin/sh: every init script and all 378 applet symlinks
+# run through it. Upgrading would introduce a live vulnerability in the shell
+# that runs everything.
+#
+# What the upgrade would buy, checked on the device rather than assumed:
+#   - CVE-2026-29004 (udhcpc6): the applet is compiled in but NOTHING RUNS IT.
+#     IPv6 on rmnet_data0 comes from the modem stack (netmgrd/QCMAP), and
+#     `ps` shows no udhcpc or udhcpc6 process at all.
+#   - CVE-2023-42363..42366 (awk): need an attacker-supplied awk *program*.
+#   - CVE-2026-26157/26158 (archive path traversal): need us to extract an
+#     untrusted archive; LAN DHCP is dnsmasq, not busybox udhcpd.
+# So: nothing reachable gained, one reachable DoS added.
+#
+# For context, the gap worth closing already was: stock firmware ships
+# BusyBox v1.20.2 (2024-07-09 build of a 2012 release), and 1.36.1 replaced it.
+# Revisit when a release after 1.38.0 fixes ifsbreakup().
 PKG_VERSION:=1.36.1
 PKG_RELEASE:=1
 PKG_FLAGS:=essential
