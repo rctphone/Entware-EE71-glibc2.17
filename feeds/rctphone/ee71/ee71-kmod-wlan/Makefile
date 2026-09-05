@@ -4,7 +4,7 @@ PKG_NAME:=ee71-kmod-wlan
 # qcacld-2.0 QWLAN_VERSIONSTR of the source this was built from - the same
 # version string the stock module on the device carries.
 PKG_VERSION:=4.2.25.8
-PKG_RELEASE:=4
+PKG_RELEASE:=6
 
 include $(INCLUDE_DIR)/package.mk
 
@@ -107,6 +107,18 @@ define Package/ee71-kmod-wlan/description
       /etc/init.d/ee71-wlan-rebuilt status
       dmesg | grep wlan_load                    # which driver actually loaded
 
+  Upgrading the package keeps whichever driver you chose. Up to 4.2.25.8-4 it
+  did not: opkg runs the old package's prerm on an upgrade as well as on a
+  removal, so every `opkg install` of a newer build put the stock driver back
+  in the boot path - and since nothing here re-enables at boot, it stayed
+  there. The upgrade reported success while the driver under test quietly
+  stopped being the one that loaded. Now prerm records the choice, postrm
+  leaves that record alone on an upgrade, and postinst restores it.
+
+  `opkg install --force-reinstall` is the exception, and deliberately so: opkg
+  implements it as a removal followed by an install, the removal genuinely is
+  one, and the stock driver comes back. Re-run `enable` afterwards.
+
   The stock /usr/lib/modules/3.10.49/extra/wlan.ko is never touched, moved or
   overwritten - so restoring it needs no backup of it. What `enable` changes is
   one line of the vendor's /etc/init.d/wlan (the only caller of insmod for this
@@ -182,17 +194,75 @@ define Package/ee71-kmod-wlan/install
 	$(INSTALL_BIN) ./files/ee71-wlan-rebuilt $(1)/etc/init.d/
 endef
 
-# No postinst: installing must not switch the WiFi driver. Activation is
-# `/etc/init.d/ee71-wlan-rebuilt enable`, run by a human who is watching.
+# Where an upgrade's choice is remembered between prerm and postinst. Inside
+# the package's own directory so removing the package cannot leave it behind.
+UPGRADE_MARKER:=$(MODULE_DIR)/.reenable-after-upgrade
 
 define Package/ee71-kmod-wlan/prerm
 #!/bin/sh
 # Put the stock driver back in the boot path BEFORE the script that knows how
 # to do that is deleted. Skipped during offline image builds.
 [ -n "$${IPKG_INSTROOT}" ] && exit 0
+rm -f $(UPGRADE_MARKER)
 if [ -x /etc/init.d/ee71-wlan-rebuilt ]; then
+	# opkg runs this on an UPGRADE too, not only on removal - verified on
+	# this device (opkg 80503d94), which calls it as
+	#     prerm upgrade <new-version>
+	# So up to 4.2.25.8-4 every `opkg install` of a newer build silently put
+	# the stock driver back in the boot path and left it there: unlike
+	# ee71-qcmap-fix and ee71-core-app-wifi-fix, whose rcS.d scripts
+	# re-apply their patch at the next boot, nothing here ever re-enables by
+	# itself - that is deliberate, and it is what made the loss permanent.
+	# The symptom is the worst kind: the upgrade succeeds, and the driver
+	# you are testing is not the one that loads.
+	#
+	# Still revert rather than skip, so the new package's `enable` writes the
+	# current substitution rather than leaving whatever line an older release
+	# put there; postinst puts it back. The full hook order on an upgrade,
+	# measured on the device rather than assumed:
+	#     prerm upgrade <new>   (old pkg)  <- marker written here
+	#     ...new files unpacked...
+	#     postrm upgrade <new>  (old pkg)  <- must NOT touch the marker
+	#     postinst              (new pkg)  <- marker consumed here
+	if [ "$$1" = upgrade ] \
+	   && /etc/init.d/ee71-wlan-rebuilt status 2>/dev/null \
+	      | grep -q 'boot path: *rebuilt'; then
+		mkdir -p $(MODULE_DIR)
+		: > $(UPGRADE_MARKER)
+	fi
 	/etc/init.d/ee71-wlan-rebuilt disable || true
 fi
+exit 0
+endef
+
+# Installing must not switch the WiFi driver: activation stays
+# `/etc/init.d/ee71-wlan-rebuilt enable`, run by a human who is watching.
+# A fresh install has no marker, so this does nothing - it only restores a
+# choice that was already made before the upgrade started.
+define Package/ee71-kmod-wlan/postinst
+#!/bin/sh
+[ -n "$${IPKG_INSTROOT}" ] && exit 0
+if [ -f $(UPGRADE_MARKER) ]; then
+	rm -f $(UPGRADE_MARKER)
+	/etc/init.d/ee71-wlan-rebuilt enable || true
+fi
+exit 0
+endef
+
+# On a real removal, drop the marker so it cannot re-enable a driver at some
+# unrelated later install.
+#
+# NOT on an upgrade. opkg runs the OLD package's postrm there too - as
+# `postrm upgrade <new-version>`, between prerm and the new postinst - so an
+# unguarded `rm` here deletes the marker prerm just wrote and the upgrade still
+# lands on the stock driver. That is exactly what 4.2.25.8-5 did: the prerm
+# guard alone looked right and fixed nothing, because the deletion had moved
+# one hook to the right.
+define Package/ee71-kmod-wlan/postrm
+#!/bin/sh
+[ -n "$${IPKG_INSTROOT}" ] && exit 0
+[ "$$1" = upgrade ] && exit 0
+rm -f $(UPGRADE_MARKER)
 exit 0
 endef
 
