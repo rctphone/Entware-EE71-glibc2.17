@@ -124,19 +124,45 @@ sessions)
 save)
     PORT=$(echo "$BODY" | jq -r '.port // empty')
     LISTEN=$(echo "$BODY" | jq -r '.listen // empty')
-    if [ -z "$PORT" ] || [ "$PORT" -lt 1 ] 2>/dev/null || [ "$PORT" -gt 65535 ] 2>/dev/null; then
-        printf '{"error":"port must be 1-65535"}'
+    # Digits FIRST, with a glob, before any arithmetic test touches the value.
+    #
+    # The previous guard was
+    #     [ -z "$PORT" ] || [ "$PORT" -lt 1 ] 2>/dev/null || [ "$PORT" -gt 65535 ] 2>/dev/null
+    # and it accepted everything that was not a number. On a non-numeric operand
+    # ash's `[` exits 2, not 1; inside an || chain any non-zero status is false,
+    # so the chain fell through to the else branch and the value was taken. The
+    # `2>/dev/null` that was there to hide the "Illegal number" noise is exactly
+    # what turned the error into an accept. Confirmed on the device's own ash:
+    # `[ "abc" -lt 1 ] 2>/dev/null; echo $?` prints 2, and the whole guard
+    # accepted both "abc" and a string containing a quote and a semicolon.
+    #
+    # That matters more than a malformed port, because the value is written to
+    # /etc/default/dropbear, which the init script SOURCES as root at every
+    # boot. An unvalidated port is a persistent root-command sink, reachable by
+    # anyone who can authenticate to the web API.
+    case "$PORT" in
+        ''|*[!0-9]*)
+            json_err "port must be a number between 1 and 65535"
+            exit 0 ;;
+    esac
+    if [ "$PORT" -lt 1 ] || [ "$PORT" -gt 65535 ]; then
+        json_err "port must be a number between 1 and 65535"
         exit 0
     fi
 
     # Build listen arg: -p [addr:]port
     LISTEN_ARG="$PORT"
     if [ -n "$LISTEN" ]; then
-        # Validate: alphanumeric, dots, colons only
-        CLEAN=$(printf '%s' "$LISTEN" | tr -cd 'a-zA-Z0-9.:')
-        if [ "$CLEAN" = "$LISTEN" ]; then
-            LISTEN_ARG="${LISTEN}:${PORT}"
-        fi
+        # An address may only be hex digits, dots and colons - enough for IPv4,
+        # IPv6 and nothing else. Rejecting loudly rather than silently dropping
+        # the address: quietly binding every interface when the caller asked for
+        # one is the wrong direction to fail in.
+        case "$LISTEN" in
+            *[!0-9A-Fa-f.:]*)
+                json_err "listen address may contain only hex digits, dots and colons"
+                exit 0 ;;
+        esac
+        LISTEN_ARG="${LISTEN}:${PORT}"
     fi
 
     # The port belongs in /etc/default/dropbear, which the init script sources.
@@ -172,6 +198,16 @@ save)
     DB_RC=$?
     if [ "$DB_RC" -eq 124 ]; then
         json_err "dropbear did not start on $LISTEN_ARG within 15s"
+        exit 0
+    fi
+
+    # Only 124 used to be inspected, so a dropbear that refused the arguments
+    # and exited immediately still produced {"ok":true} - the UI reported
+    # success while SSH was gone and the firewall had no rule for either port.
+    # Check the daemon is actually there before saying so.
+    if ! pidof dropbear >/dev/null 2>&1; then
+        json_err "dropbear did not come up on $LISTEN_ARG - SSH is down; \
+reconnect over ADB and run /etc/init.d/dropbear start"
         exit 0
     fi
     jq -n --argjson port "$PORT" --arg listen "$LISTEN" \

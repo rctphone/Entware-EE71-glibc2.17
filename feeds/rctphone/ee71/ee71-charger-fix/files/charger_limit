@@ -123,9 +123,32 @@ target_ma() {
 	echo "$t"
 }
 
+# REG00 is EN_HIZ[7] | STAT_CTRL[6:5] | IINLIM[4:0], and we are not its only
+# writer: the vendor's bq25601-charger driver owns this chip, and i2c_get /
+# i2c_set use -f to reach past that claim. So this is a read-modify-write race
+# against a live kernel driver, and it is handled rather than hoped about.
+#
+# EN_HIZ is the dangerous bit. Set, it suspends input current entirely and the
+# device runs off the battery. A naive read-modify-write can RE-SET it: read a
+# value while the driver has it set, the driver clears it, we write our copy
+# back with the stale bit. Worse, it could not self-correct - the next pass
+# would find IINLIM already at the cap and return early, leaving EN_HIZ set
+# until the battery went flat. Which looks exactly like the fault this package
+# exists to fix.
+#
+# So: never write while EN_HIZ is set (say so instead - it is the driver's
+# decision, possibly thermal, and not ours to clear), and re-read immediately
+# before writing, skipping the pass if anything moved. A skipped pass costs ten
+# seconds.
 apply_limit() {
 	cur=$(i2c_get "$CHG_BUS" "$CHG_ADDR" 0x00)
 	case "$cur" in 0x*) ;; *) return 1 ;; esac
+
+	if [ $(( (cur & 0x80) >> 7 )) -eq 1 ]; then
+		logger -t "$NAME" "EN_HIZ is set (REG00 $cur) - input suspended by the driver, not touching it" 2>/dev/null
+		return 0
+	fi
+
 	cur_code=$(( cur & 0x1F ))
 	want_code=$(ma_to_code "$(target_ma)")
 
@@ -133,7 +156,14 @@ apply_limit() {
 	# at or below the cap, leave it alone - it may know something we do not.
 	[ "$cur_code" -le "$want_code" ] && return 0
 
-	new=$(printf '0x%02x' $(( (cur & 0xE0) | want_code )))
+	# Compare and swap: if the register moved between the read above and here,
+	# our idea of bits 7:5 is stale. Drop this pass rather than write it.
+	recheck=$(i2c_get "$CHG_BUS" "$CHG_ADDR" 0x00)
+	if [ "$recheck" != "$cur" ]; then
+		return 0
+	fi
+
+	new=$(printf '0x%02x' $(( (cur & 0x60) | want_code )))
 	i2c_set "$CHG_BUS" "$CHG_ADDR" 0x00 "$new" || return 1
 	logger -t "$NAME" "input limit $(code_to_ma $cur_code)mA -> $(code_to_ma $want_code)mA (REG00 $cur -> $new)"
 	return 0
@@ -159,7 +189,13 @@ case "$1" in
 			echo "$NAME already watching"
 			exit 0
 		fi
-		watch_loop &
+		# Detached from the caller's stdin/stdout/stderr. Without this the
+		# watcher inherits opkg's descriptors and holds them open forever, so
+		# `opkg install ee71-charger-fix` never returns - its postinst starts
+		# us, and anything reading opkg's output waits on a pipe this loop is
+		# still holding. That is not hypothetical: an install wedged for over
+		# an hour on the device before it was found.
+		watch_loop </dev/null >/dev/null 2>&1 &
 		echo $! > "$PIDFILE"
 		echo "$NAME: capped at $(target_ma)mA, watching every ${CHARGER_POLL_SECONDS}s"
 		;;
