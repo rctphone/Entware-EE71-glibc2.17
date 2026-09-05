@@ -19,9 +19,26 @@
 # no package in this feed depends on libxml2 at runtime (gettext-full lists it
 # only as PKG_BUILD_DEPENDS, and gettext-full is not selected).
 #
-# So: do not move to 2.14/2.15 as a version bump. Retiring the package
-# altogether, so the device keeps its own untouched 2.9.1, is a coherent
-# alternative — but that is a removal decision, not an upgrade.
+# So: do not move to 2.14/2.15 as a version bump.
+#
+# Retiring the package is a coherent alternative, but NOT on the wording above:
+# on the live router the OEM library is already gone. Checked there rather than
+# assumed — /usr/lib/libxml2.so.2 is a regular 999232-byte file dated
+# 2026-02-16 (our build), there is no libxml2.so.2.9.1 beside it, and the
+# firmware dump's own copy is 1140156 bytes. So removing the package does not
+# hand the device back "its own untouched 2.9.1"; that would take restoring the
+# file out of the firmware image.
+#
+# Worse, opkg cannot do it either way: the device's libxml2 entry is one of the
+# pre-registered claims — Essential: yes with a ZERO-BYTE .list — so opkg owns
+# no files to delete and refuses a same-version reinstall. The library was put
+# there outside opkg's tracking. /usr/bin/ipacm is running against it right now.
+#
+# That also makes this the sharpest worked example for the pre-registered
+# package mechanism: the claim "the firmware already provides libxml2.so.2" is
+# TRUE of the firmware and the file is present on the device — but the file
+# present is ours, not the firmware's. A detector that asks "does this path
+# exist on the device" answers yes for the wrong reason.
 
 include $(TOPDIR)/rules.mk
 
