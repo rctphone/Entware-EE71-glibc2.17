@@ -4,7 +4,7 @@ PKG_NAME:=ee71-kmod-wlan
 # qcacld-2.0 QWLAN_VERSIONSTR of the source this was built from - the same
 # version string the stock module on the device carries.
 PKG_VERSION:=4.2.25.8
-PKG_RELEASE:=7
+PKG_RELEASE:=8
 
 include $(INCLUDE_DIR)/package.mk
 
@@ -194,16 +194,32 @@ define Package/ee71-kmod-wlan/install
 	$(INSTALL_BIN) ./files/ee71-wlan-rebuilt $(1)/etc/init.d/
 endef
 
-# Where an upgrade's choice is remembered between prerm and postinst. Inside
-# the package's own directory so removing the package cannot leave it behind.
-UPGRADE_MARKER:=$(MODULE_DIR)/.reenable-after-upgrade
+# Where an upgrade's choice is remembered between prerm and postinst.
+#
+# In /var/run, which is tmpfs here (4 MB), NOT in the package's own directory
+# on usrfs. That is the whole point: this opkg has no abort-upgrade hook -
+# the string does not appear in the binary at all - so if an upgrade dies
+# between prerm and postinst nothing unwinds it and the marker is simply left
+# behind. On usrfs it would sit there across reboots, and a FRESH install
+# months later would find it and switch the WiFi driver, which is exactly what
+# the package promises never to do. On tmpfs it lasts until the next boot,
+# which is the window in which restoring the choice is what you want.
+UPGRADE_MARKER:=/var/run/ee71-kmod-wlan.reenable
+# The pre-4.2.25.8-8 location, cleaned up wherever the new one is touched.
+OLD_UPGRADE_MARKER:=$(MODULE_DIR)/.reenable-after-upgrade
 
 define Package/ee71-kmod-wlan/prerm
 #!/bin/sh
 # Put the stock driver back in the boot path BEFORE the script that knows how
 # to do that is deleted. Skipped during offline image builds.
 [ -n "$${IPKG_INSTROOT}" ] && exit 0
-rm -f $(UPGRADE_MARKER)
+rm -f $(OLD_UPGRADE_MARKER)
+# NOT an unconditional `rm` of the marker. It used to be, above this guard, and
+# that quietly undid the whole mechanism on the one path it was meant to cover:
+# after an aborted upgrade the marker is on disk and the boot path is already
+# stock, so the next attempt deleted the marker, saw `status` say stock, wrote
+# nothing, and the choice was lost for good. Keep an existing marker and let
+# the condition below decide.
 if [ -x /etc/init.d/ee71-wlan-rebuilt ]; then
 	# opkg runs this on an UPGRADE too, not only on removal - verified on
 	# this device (opkg 80503d94), which calls it as
@@ -224,11 +240,16 @@ if [ -x /etc/init.d/ee71-wlan-rebuilt ]; then
 	#     ...new files unpacked...
 	#     postrm upgrade <new>  (old pkg)  <- must NOT touch the marker
 	#     postinst              (new pkg)  <- marker consumed here
-	if [ "$$1" = upgrade ] \
-	   && /etc/init.d/ee71-wlan-rebuilt status 2>/dev/null \
-	      | grep -q 'boot path: *rebuilt'; then
-		mkdir -p $(MODULE_DIR)
+	# "or a marker is already there" is what makes a retry after an aborted
+	# upgrade work: the boot path is stock by then, so the status test alone
+	# would say there was nothing to restore.
+	if [ "$$1" = upgrade ] && { \
+		/etc/init.d/ee71-wlan-rebuilt status 2>/dev/null \
+			| grep -q 'boot path: *rebuilt' \
+		|| [ -f $(UPGRADE_MARKER) ]; }; then
 		: > $(UPGRADE_MARKER)
+	else
+		[ "$$1" = upgrade ] || rm -f $(UPGRADE_MARKER)
 	fi
 	/etc/init.d/ee71-wlan-rebuilt disable || true
 fi
@@ -237,8 +258,12 @@ endef
 
 # Installing must not switch the WiFi driver: activation stays
 # `/etc/init.d/ee71-wlan-rebuilt enable`, run by a human who is watching.
-# A fresh install has no marker, so this does nothing - it only restores a
-# choice that was already made before the upgrade started.
+#
+# The honest version of "a fresh install has no marker", which is what this
+# said before and is not quite true: a fresh install performed after an aborted
+# upgrade AND BEFORE A REBOOT does find one, and does enable. That is the right
+# outcome - it restores the choice the abort lost - and the marker living on
+# tmpfs is what bounds it to that window instead of forever.
 define Package/ee71-kmod-wlan/postinst
 #!/bin/sh
 [ -n "$${IPKG_INSTROOT}" ] && exit 0
@@ -261,6 +286,7 @@ endef
 define Package/ee71-kmod-wlan/postrm
 #!/bin/sh
 [ -n "$${IPKG_INSTROOT}" ] && exit 0
+rm -f $(OLD_UPGRADE_MARKER)
 [ "$$1" = upgrade ] && exit 0
 rm -f $(UPGRADE_MARKER)
 exit 0
