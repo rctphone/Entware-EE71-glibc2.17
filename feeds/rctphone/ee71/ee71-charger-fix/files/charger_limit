@@ -182,6 +182,11 @@ watch_loop() {
 }
 
 case "$1" in
+	# Internal: the body start-stop-daemon re-execs. Not in the usage line
+	# because it is not something to run by hand.
+	__watch)
+		watch_loop
+		;;
 	start)
 		precheck || exit 1
 		apply_limit || { echo "[ERR] could not program REG00" >&2; exit 1; }
@@ -189,14 +194,23 @@ case "$1" in
 			echo "$NAME already watching"
 			exit 0
 		fi
-		# Detached from the caller's stdin/stdout/stderr. Without this the
-		# watcher inherits opkg's descriptors and holds them open forever, so
-		# `opkg install ee71-charger-fix` never returns - its postinst starts
-		# us, and anything reading opkg's output waits on a pipe this loop is
-		# still holding. That is not hypothetical: an install wedged for over
-		# an hour on the device before it was found.
-		watch_loop </dev/null >/dev/null 2>&1 &
-		echo $! > "$PIDFILE"
+		# start-stop-daemon -b, not `watch_loop &`.
+		#
+		# The plain background job made `opkg install ee71-charger-fix` hang
+		# forever: the postinst starts us, and the watcher held opkg's pipe
+		# open, so anything reading opkg's output never saw EOF. An install sat
+		# wedged on the device for over an hour before that was noticed.
+		#
+		# Redirecting 0/1/2 to /dev/null was not enough, and the device said so
+		# - the watcher's /proc/<pid>/fd still listed pipe entries on fds 11
+		# and 12. A background job is a FORK of this shell that never execs, so
+		# it keeps every descriptor the shell had open, including the ones ash
+		# uses for its own bookkeeping. Only an exec clears those.
+		#
+		# start-stop-daemon -b re-execs, so nothing is inherited, and -m writes
+		# the pidfile for the real process rather than for a shell that is
+		# about to disappear.
+		start-stop-daemon -S -b -m -p "$PIDFILE" -x /bin/sh -- "$0" __watch
 		echo "$NAME: capped at $(target_ma)mA, watching every ${CHARGER_POLL_SECONDS}s"
 		;;
 	stop)

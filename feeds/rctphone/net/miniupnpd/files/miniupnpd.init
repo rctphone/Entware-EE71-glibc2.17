@@ -100,6 +100,14 @@ say() {
 
 chains() {
 	_extif=$(ext_if)
+	# ext_if cannot return empty - it falls back through the config, then the
+	# default route, then a hardcoded rmnet_data0 - so there is no empty-string
+	# case to guard. What there IS is a silent wrong answer: if the config has
+	# no ext_ifname and there is no default route yet (UPnP gets enabled while
+	# the WAN is down), the hardcoded fallback is used and the chains are built
+	# against an interface nobody chose. Say which one, once, so that is
+	# visible in the log instead of being deduced from iptables output later.
+	say "$1: external interface $_extif"
 	for _fam in iptables ip6tables; do
 		_s="$ETCPATH/${_fam}_$1.sh"
 		if [ ! -f "$_s" ]; then
