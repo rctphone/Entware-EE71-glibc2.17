@@ -154,10 +154,67 @@ WRAPPER
     echo "  /usr/bin/wget wrapper installed (curl-based HTTPS)"
 fi
 
+# --- Local offline feed (install bundled .ipk with no network) ---
+# Copies every .ipk pushed to /tmp into a persistent feed dir on usrfs and adds
+# a file:// source. usrfs is the SAME volume whether reached as /usr (normal) or
+# /system/usr (recovery), so the feed URL is always the normal-mode path and
+# keeps working after a reboot. Lets `opkg install dropbear` run fully offline.
+#
+# usrfs is small - about 4.9 MB free on a device with our packages already on
+# it - so this must never fill it. Size the copy first and skip the whole feed
+# if it does not fit with room to spare, because a PARTIAL copy is worse than
+# no feed at all: the Packages index would then list packages whose .ipk is not
+# there, and opkg would fail at install time instead of at setup time.
+#
+# /cache is deliberately not used as a fallback despite having ~38 MB free: it
+# is a partition we clean, and a feed that disappears when someone tidies up is
+# worse than one that was never created. Without the feed, `opkg install
+# /tmp/<file>.ipk` still works for whatever is still in /tmp.
+FEED_RESERVE_KB=1024
+if ls /tmp/*.ipk >/dev/null 2>&1; then
+    echo "[*] Setting up local offline feed..."
+    FEED_DIR="$PREFIX/usr/lib/opkg/ee71-local"
+    FEED_URL="file:///usr/lib/opkg/ee71-local"
+
+    # Deliberately does not subtract .ipk files already in FEED_DIR that the
+    # copy would merely overwrite. That makes the check conservative, never
+    # optimistic, which is the safe direction on a partition this small.
+    need_kb=$(du -ck /tmp/*.ipk 2>/dev/null | awk 'END {print $1}')
+    avail_kb=$(df -k "$PREFIX/usr" 2>/dev/null | awk 'NR==2 {print $4}')
+    case "$need_kb$avail_kb" in
+        *[!0-9]*|"") need_kb=""; avail_kb="" ;;
+    esac
+
+    if [ -z "$need_kb" ] || [ -z "$avail_kb" ]; then
+        echo "  [WARN] cannot size /usr — skipping the local feed"
+        echo "         install from /tmp directly: opkg install /tmp/<file>.ipk"
+    elif [ "$avail_kb" -lt "$((need_kb + FEED_RESERVE_KB))" ]; then
+        echo "  [WARN] not enough room on /usr for the local feed:"
+        echo "         need ${need_kb} KB + ${FEED_RESERVE_KB} KB reserve, have ${avail_kb} KB"
+        echo "         skipping it rather than half-filling the partition"
+        echo "         install from /tmp directly: opkg install /tmp/<file>.ipk"
+    else
+        mkdir -p "$FEED_DIR"
+        if cp /tmp/*.ipk "$FEED_DIR/"; then
+            [ -f /tmp/Packages.gz ] && cp /tmp/Packages.gz "$FEED_DIR/Packages.gz"
+            [ -f /tmp/Packages ]    && cp /tmp/Packages    "$FEED_DIR/Packages"
+            if ! grep -q "ee71-local" "$PREFIX/etc/opkg.conf" 2>/dev/null; then
+                echo "src/gz ee71-local $FEED_URL" >> "$PREFIX/etc/opkg.conf"
+            fi
+            echo "  feed: $FEED_URL ($(ls "$FEED_DIR"/*.ipk 2>/dev/null | wc -l | tr -d ' ') packages)"
+        else
+            # Ran out of space or hit an I/O error mid-copy. Take the feed back
+            # out rather than leaving a partial one, and do not add the src line.
+            echo "  [WARN] copy failed — removing the partial feed"
+            rm -rf "$FEED_DIR"
+        fi
+    fi
+fi
+
 # --- Clean up ---
-rm -f /tmp/Packages /tmp/opkg-status /tmp/opkg_*.ipk /tmp/data.tar.gz
+rm -f /tmp/Packages /tmp/Packages.gz /tmp/opkg-status /tmp/opkg_*.ipk /tmp/data.tar.gz
 rm -f /tmp/patch_usb_kernel
-rm -f /tmp/curl_*.ipk /tmp/libcurl_*.ipk /tmp/ca-bundle_*.ipk
+rm -f /tmp/curl_*.ipk /tmp/libcurl_*.ipk /tmp/ca-bundle_*.ipk /tmp/dropbear_*.ipk
 rm -rf /tmp/usr
 
 # --- Test (normal mode only — recovery has no network) ---
