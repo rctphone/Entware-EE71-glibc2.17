@@ -4,7 +4,7 @@ PKG_NAME:=ee71-kmod-wlan
 # qcacld-2.0 QWLAN_VERSIONSTR of the source this was built from - the same
 # version string the stock module on the device carries.
 PKG_VERSION:=4.2.25.8
-PKG_RELEASE:=6
+PKG_RELEASE:=7
 
 include $(INCLUDE_DIR)/package.mk
 

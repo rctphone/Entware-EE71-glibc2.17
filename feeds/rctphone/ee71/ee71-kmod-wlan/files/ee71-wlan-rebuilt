@@ -56,6 +56,53 @@ apply_hint() {
 	echo "  or reboot.  Check with: dmesg | grep wlan_load"
 }
 
+# Is the shipped module actually intact?
+#
+# Enabling rewrites the ONE line in /etc/init.d/wlan that loads the WiFi
+# driver, so a corrupt payload does not degrade WiFi, it removes it: the stock
+# insmod is no longer there to fall back to, and the device boots with no 2.4
+# and no 5 GHz at all. Recovery is ADB with the case open.
+#
+# The path that makes this more than paranoia is an aborted upgrade. prerm
+# writes .reenable-after-upgrade and disables; if opkg then dies before
+# postinst - out of space on a 89%-full /usr, a killed process - the marker
+# survives on usrfs across reboots, and the NEXT successful install re-enables
+# the boot path pointing at whatever half-written .ko.gz was left behind.
+#
+# Two checks, cheapest first. gunzip -t catches truncation and a file that is
+# not gzip at all (verified: rc=1 for both, rc=0 for the real one). Then the
+# sha256 of the INFLATED module against the one the build recorded, streamed so
+# nothing is written to disk. This runs on enable, not at boot, so it costs
+# nothing on the path that matters.
+verify_module() {
+	if ! gunzip -t "${GZ}" 2>/dev/null; then
+		echo "[ERR] ${GZ} is not a complete gzip file" >&2
+		echo "[ERR] refusing to put a corrupt module in the boot path - the" >&2
+		echo "[ERR] stock driver would not load either, leaving no WiFi at all." >&2
+		echo "[ERR] reinstall the package: opkg install --force-reinstall ee71-kmod-wlan" >&2
+		return 1
+	fi
+
+	want=$(sed -n 's/^sha256 *//p' "${BUILDINFO}" 2>/dev/null | head -n 1)
+	if [ -z "${want}" ]; then
+		echo "[!] ${BUILDINFO} records no sha256 - gzip integrity only" >&2
+		return 0
+	fi
+	got=$(gunzip -c "${GZ}" 2>/dev/null | sha256sum 2>/dev/null | cut -d' ' -f1)
+	if [ -z "${got}" ]; then
+		echo "[!] cannot compute sha256 (no sha256sum?) - gzip integrity only" >&2
+		return 0
+	fi
+	if [ "${want}" != "${got}" ]; then
+		echo "[ERR] module does not match what the build recorded:" >&2
+		echo "[ERR]   buildinfo ${want}" >&2
+		echo "[ERR]   actual    ${got}" >&2
+		echo "[ERR] refusing to enable it." >&2
+		return 1
+	fi
+	return 0
+}
+
 do_enable() {
 	if [ ! -f "${GZ}" ]; then
 		echo "[ERR] ${GZ} missing - is ee71-kmod-wlan installed?" >&2
@@ -65,6 +112,7 @@ do_enable() {
 		echo "[ERR] ${LOADER} missing or not executable" >&2
 		exit 1
 	fi
+	verify_module || exit 1
 
 	if is_patched; then
 		echo "already enabled - it takes effect at the next WiFi start"
