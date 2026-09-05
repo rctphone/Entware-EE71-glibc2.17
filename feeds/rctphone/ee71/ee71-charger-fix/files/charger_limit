@@ -1,0 +1,199 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          charger_limit
+# Required-Start:
+# Default-Start:     2 3 4 5
+# Short-Description: Cap the BQ25601 input current limit to what the port offers
+### END INIT INFO
+#
+# The stock firmware programs the charger's input current limit to 1500 mA on
+# every USB attach, even when it has just recognised the port as a plain USB
+# host port. The device's own log says both things in the same breath:
+#
+#   bq25601-charger 3-006b: Warning: USB TYPE POWER_SUPPLY_TYPE_USB
+#   bq25601-charger 3-006b: set input limit to 1500mA !!!
+#
+# On a 500 mA port the inrush at the next recharge attempt trips the host's
+# over-current protection: VBUS disappears entirely (power_good 0 AND
+# vbus_stat 0, not merely sagging), USB re-enumerates, and the cycle repeats
+# every few minutes. The visible symptom is a router that looks like it is
+# rebooting, and a host that keeps asking to re-attach the device.
+#
+# This lowers that one register field to what the port actually advertises.
+# It only ever LOWERS it - see apply_limit - so the worst case is slower
+# charging, never more current than the vendor asked for.
+#
+# The charge current itself (REG02 ICHG) and the charge voltage (REG04 VREG)
+# are not touched. Nothing here can overcharge a battery.
+
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+NAME=charger_limit
+PIDFILE=/var/run/charger_limit.pid
+
+# Defaults, overridable in /etc/default/charger_limit
+CHARGER_INPUT_LIMIT_MA=500
+CHARGER_POLL_SECONDS=10
+CHARGER_FOLLOW_PORT=1
+
+[ -r /etc/default/charger_limit ] && . /etc/default/charger_limit
+
+# BusyBox carries the i2c applets from 1.26 onward. The stock firmware's
+# BusyBox is 1.20.2, which does NOT have them, so this cannot be expressed as
+# an opkg dependency: `busybox` is registered as stock-provided. Call the
+# applets through `busybox` rather than through /usr/bin symlinks that may or
+# may not exist.
+BB=busybox
+
+i2c_get() { $BB i2cget -y -f "$1" "$2" "$3" 2>/dev/null; }
+i2c_set() { $BB i2cset -y -f "$1" "$2" "$3" "$4" 2>/dev/null; }
+
+# Locate the charger by NAME, never by a hardcoded bus/address. Writing an
+# arbitrary register to whatever happens to sit at 3-006b on some other build
+# is not a risk worth taking for a convenience feature.
+find_charger() {
+	CHG_BUS=""
+	CHG_ADDR=""
+	for d in /sys/bus/i2c/devices/*/; do
+		[ -r "${d}name" ] || continue
+		[ "$(cat "${d}name" 2>/dev/null)" = "bq25601-charger" ] || continue
+		b=$(basename "$d")            # e.g. 3-006b
+		CHG_BUS="${b%%-*}"
+		CHG_ADDR="0x${b#*-}"
+		# 3-006b -> 0x006b; i2cget wants 0x6b
+		CHG_ADDR="0x$(printf '%x' $((CHG_ADDR)))"
+		return 0
+	done
+	return 1
+}
+
+precheck() {
+	if ! $BB i2cget --help 2>&1 | grep -qi i2c; then
+		echo "[ERR] this BusyBox has no i2c applets" >&2
+		echo "      the stock 1.20.2 predates them - install ours (1.36.1)" >&2
+		return 1
+	fi
+	if ! find_charger; then
+		echo "[ERR] no i2c device named bq25601-charger found" >&2
+		echo "      refusing to write registers to an unidentified chip" >&2
+		return 1
+	fi
+	if [ ! -c "/dev/i2c-${CHG_BUS}" ]; then
+		echo "[ERR] /dev/i2c-${CHG_BUS} missing (CONFIG_I2C_CHARDEV)" >&2
+		return 1
+	fi
+	return 0
+}
+
+# mA -> REG00 IINLIM code. Base 100 mA, 100 mA per step, field is 5 bits.
+ma_to_code() {
+	c=$(( ($1 - 100) / 100 ))
+	[ "$c" -lt 0 ] && c=0
+	[ "$c" -gt 31 ] && c=31
+	echo "$c"
+}
+code_to_ma() { echo $(( $1 * 100 + 100 )); }
+
+# What the port says it can supply, in mA. Absent or nonsense -> empty.
+port_limit_ma() {
+	v=$(cat /sys/class/power_supply/usb/current_max 2>/dev/null)
+	case "$v" in ''|*[!0-9]*) return 1 ;; esac
+	[ "$v" -gt 0 ] || return 1
+	echo $(( v / 1000 ))
+}
+
+# CHARGER_INPUT_LIMIT_MA is a CEILING, not a target. The enforced value is the
+# lower of it and what the port advertises:
+#
+#   port says 500, ceiling 500  -> 500
+#   port says 500, ceiling 1500 -> 500   (honour the weaker port)
+#   port says 2040, ceiling 500 -> 500   (do NOT trust a port that claims to be
+#                                         a 2 A charger; this device has been
+#                                         seen classifying a laptop port as
+#                                         USB_DCP with current_max 2040000,
+#                                         which is how the fault presents)
+#   port unreadable, ceiling 500 -> 500
+#
+# On a genuine 2 A wall charger, raise the ceiling in /etc/default/charger_limit
+# rather than teaching this to trust the port's own claim.
+target_ma() {
+	t="$CHARGER_INPUT_LIMIT_MA"
+	if [ "$CHARGER_FOLLOW_PORT" = "1" ]; then
+		p=$(port_limit_ma) && [ "$p" -lt "$t" ] && t="$p"
+	fi
+	echo "$t"
+}
+
+apply_limit() {
+	cur=$(i2c_get "$CHG_BUS" "$CHG_ADDR" 0x00)
+	case "$cur" in 0x*) ;; *) return 1 ;; esac
+	cur_code=$(( cur & 0x1F ))
+	want_code=$(ma_to_code "$(target_ma)")
+
+	# Only ever lower. If the vendor driver has already programmed something
+	# at or below the cap, leave it alone - it may know something we do not.
+	[ "$cur_code" -le "$want_code" ] && return 0
+
+	new=$(printf '0x%02x' $(( (cur & 0xE0) | want_code )))
+	i2c_set "$CHG_BUS" "$CHG_ADDR" 0x00 "$new" || return 1
+	logger -t "$NAME" "input limit $(code_to_ma $cur_code)mA -> $(code_to_ma $want_code)mA (REG00 $cur -> $new)"
+	return 0
+}
+
+# The vendor driver reprograms REG00 on USB ATTACH, not on every recharge -
+# measured: a recharge event fired with our value in place and did not disturb
+# it. So a one-shot write survives until the cable is replugged, and a slow
+# poll is enough to cover that. Ten seconds of one i2c byte read is not
+# something this device will notice.
+watch_loop() {
+	while :; do
+		apply_limit
+		sleep "$CHARGER_POLL_SECONDS"
+	done
+}
+
+case "$1" in
+	start)
+		precheck || exit 1
+		apply_limit || { echo "[ERR] could not program REG00" >&2; exit 1; }
+		if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null; then
+			echo "$NAME already watching"
+			exit 0
+		fi
+		watch_loop &
+		echo $! > "$PIDFILE"
+		echo "$NAME: capped at $(target_ma)mA, watching every ${CHARGER_POLL_SECONDS}s"
+		;;
+	stop)
+		if [ -f "$PIDFILE" ]; then
+			kill "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null
+			rm -f "$PIDFILE"
+		fi
+		# The register is deliberately left as it is. Restoring 1500 mA would
+		# re-create the fault, and the vendor driver reprograms it on the next
+		# USB attach anyway.
+		echo "$NAME stopped (register left as-is)"
+		;;
+	status)
+		if ! precheck; then exit 1; fi
+		cur=$(i2c_get "$CHG_BUS" "$CHG_ADDR" 0x00)
+		echo "charger:    bq25601 on i2c-${CHG_BUS} at ${CHG_ADDR}"
+		echo "REG00:      $cur  -> input limit $(code_to_ma $(( cur & 0x1F )))mA"
+		echo "port says:  $(port_limit_ma 2>/dev/null || echo '?')mA"
+		echo "cap:        $(target_ma)mA"
+		if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null; then
+			echo "watcher:    running (pid $(cat "$PIDFILE"))"
+		else
+			echo "watcher:    not running"
+		fi
+		echo "VBUS drops: $(dmesg | grep -c 'power_good is 0') since boot"
+		;;
+	restart)
+		"$0" stop
+		"$0" start
+		;;
+	*)
+		echo "Usage: $0 {start|stop|restart|status}" >&2
+		exit 1
+		;;
+esac
+exit 0

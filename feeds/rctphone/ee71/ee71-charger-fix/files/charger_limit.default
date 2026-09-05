@@ -1,0 +1,22 @@
+# Configuration for /etc/init.d/charger_limit
+#
+# Ceiling for the charger's input current limit, in mA. The enforced value is
+# the LOWER of this and what the USB port advertises, so raising it does not by
+# itself make the device draw more - it only stops this from holding the limit
+# down on a port that can genuinely supply more.
+#
+# 500 is the safe default: it is what a plain USB host port offers, and the
+# fault this package exists for is the stock firmware programming 1500 mA on
+# such a port regardless.
+#
+# On a real 2 A wall charger, 1500 is reasonable. Values are rounded down to
+# the chip's 100 mA steps and clamped to 100..3200.
+CHARGER_INPUT_LIMIT_MA=500
+
+# Honour a port that advertises LESS than the ceiling. Turn off only if the
+# port's advertised value is untrustworthy in your setup.
+CHARGER_FOLLOW_PORT=1
+
+# How often to re-check the register, in seconds. The stock driver reprograms
+# it on USB attach, so this only has to be fast enough to catch a replug.
+CHARGER_POLL_SECONDS=10
