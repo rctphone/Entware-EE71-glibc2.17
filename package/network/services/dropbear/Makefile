@@ -8,22 +8,34 @@
 # Entware specifics: remove deps USE_GLIBC:libcrypt-compat
 # EE71: /opt → /usr paths, custom SysV init script
 #
-# patches/ tracks OpenWrt's copies verbatim, with two deliberate exceptions.
-# Do not re-add either when syncing from upstream:
-#   600-allow-blank-root-password — lets root in with an empty password and no
-#     -B. It serves OpenWrt's first-boot flow (image ships passwordless, user
-#     sets a password through the UI). We set a root password at install and
-#     authenticate with keys, so it enables nothing here and leaves a
-#     passwordless-root path guarded only by root's password field.
+# patches/ tracks OpenWrt's copies verbatim, with ONE deliberate exception.
+# Do not re-add it when syncing from upstream:
 #   910-signkey-fix-use-of-rsa-sha2-256-pubkeys — obsolete since upstream took
 #     both sides of the buf_verify comparison from the wire, and harmful with
 #     DROPBEAR_RSA_SHA1 0: it skips the type check and reaches assert(0).
+#
+# 600-allow-blank-root-password was dropped earlier and is BACK, by the owner's
+# decision, for parity with OpenWrt. What it does is unchanged: root takes the
+# AUTH_METHOD_NONE path without the -B that upstream requires. Be clear about
+# what now guards it, because one of the two guards has gone:
+#
+#   - `!svr_opts.noauthpass` — no longer a guard. Password authentication is
+#     allowed here by policy, so -s is not passed and this is always true.
+#   - `pw_passwd[0] == '\0'` — the only remaining guard. Root has a real hash
+#     on this device, so the path is closed; it opens the moment that field is
+#     emptied, and github/dropbear/install.sh only WARNS when setting the
+#     password fails.
+#
+# So: with passwords enabled, a device whose root password never got set is
+# reachable as root with no password at all. The firewall in files/dropbear.init
+# binds SSH to the LAN interfaces and DROPs it on the WAN, which is what keeps
+# that from being reachable from the carrier.
 
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=dropbear
 PKG_VERSION:=2026.94
-PKG_RELEASE:=3
+PKG_RELEASE:=4
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.bz2
 PKG_SOURCE_URL:= \
