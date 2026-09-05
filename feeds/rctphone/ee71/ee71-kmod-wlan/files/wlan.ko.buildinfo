@@ -1,10 +1,10 @@
 source     qcacld-2.0 c26933bef5225b3f7b65753cc852b46ac8d878bd
-patches    9a4bb9ee94c60d25 0001-fragattacks-pn-continuity.patch 0002-fragattacks-eapol-intra-bss.patch 0003-sae-dispatch-to-userspace.patch 
+patches    16bf19b937c77b81 0001-fragattacks-pn-continuity.patch 0002-fragattacks-eapol-intra-bss.patch 0003-sae-dispatch-to-userspace.patch 0004-warn-not-panic-on-driver-assert.patch 
 version    QWLAN_VERSIONSTR 4.2.25.8
 kernel     3.10.49 (config from the device's /proc/config.gz)
 kernel src LNX.LE.5.1 0527bff80a2a99644af3496d996bf31b8923dc2a
 compiler   gcc 4.9.4
 vermagic   3.10.49 preempt mod_unload ARMv7 
 options    none (stock: every flag derived from the kernel .config)
-size       3632556 bytes
-sha256     b3d92d6abba0f73eb25b925d805986f1e50011be4bdb148b9b31d6f92f05362b
+size       3630644 bytes
+sha256     8ef360a93ff41125db1519a77da4b6864297a2109cbd58b8af8090801c79a515

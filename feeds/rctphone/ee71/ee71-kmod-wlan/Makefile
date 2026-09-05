@@ -4,7 +4,7 @@ PKG_NAME:=ee71-kmod-wlan
 # qcacld-2.0 QWLAN_VERSIONSTR of the source this was built from - the same
 # version string the stock module on the device carries.
 PKG_VERSION:=4.2.25.8
-PKG_RELEASE:=3
+PKG_RELEASE:=4
 
 include $(INCLUDE_DIR)/package.mk
 
@@ -72,6 +72,25 @@ define Package/ee71-kmod-wlan/description
   the frame and forwarded it. The line "received Authentication frame for
   unsupported auth algorithm 3" means the dispatch is NOT in effect - wrong
   module, or built with SAE off. Full table in docs/wpa3-feasibility.md.
+
+  A driver assertion warns instead of panicking. VOS_BUG() with PANIC_ON_BUG
+  set is a KERN_CRIT printk followed by BUG_ON(1), so a failed assertion takes
+  the whole kernel down rather than just WiFi. Patch 0004 turns that into
+  WARN_ON(1): the function, the line and a stack trace still reach dmesg and
+  the router stays up. On a device that is someone's only internet connection,
+  a WiFi fault that recovers beats a hang.
+
+  This is not a softening of the vendor's safety model. VOS_ASSERT() - same
+  header, 402 call sites against VOS_BUG()'s 26 - already expands to
+  printk + WARN_ON(1); this gives the rare variant the body the common one
+  always had. All 26 VOS_BUG() sites were checked: 7 return immediately,
+  16 are the last statement in their function, and of the 3 that continue one
+  can never fire (it asserts a constant true) while the other two propagate an
+  error status rather than dereferencing what they just asserted about.
+
+  Given up: a panic triggers a ramdump, a warning does not. There is no
+  established ramdump-collection path for this device. Restore the panic for
+  debugging with QCACLD_KBUILD_EXTRA="PANIC_ON_BUG=1".
 
   ONE KNOWN DIFFERENCE REMAINS. The vendor module defines ol_pktlog_init and
   this one does not, because that function is not in 4.2.25.8 at all - it is
