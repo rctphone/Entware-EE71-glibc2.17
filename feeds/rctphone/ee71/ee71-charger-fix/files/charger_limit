@@ -337,6 +337,15 @@ case "$1" in
 	start)
 		precheck || exit 1
 		apply_limit || { echo "[ERR] could not program REG00" >&2; exit 1; }
+		allow_charging
+		# Stamp here, from the synchronous pass `start` has just done, not only
+		# from inside the loop. Otherwise there is a window of up to
+		# CHARGER_POLL_SECONDS after every start - including the restart that an
+		# `opkg install` performs - in which `status` finds no stamp and reports
+		# "alive but has NEVER completed a pass ... it is not reaching the chip".
+		# That is an alarming diagnosis for a watcher that is two seconds old,
+		# and it was printed on this device immediately after an upgrade.
+		date +%s > "$STAMPFILE" 2>/dev/null || true
 		if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null; then
 			echo "$NAME already watching"
 			exit 0
