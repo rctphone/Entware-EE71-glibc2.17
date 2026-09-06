@@ -20,3 +20,17 @@ CHARGER_FOLLOW_PORT=1
 # How often to re-check the register, in seconds. The stock driver reprograms
 # it on USB attach, so this only has to be fast enough to catch a replug.
 CHARGER_POLL_SECONDS=10
+
+# Undo core_app's charge inhibit when the vendor's own thresholds all say
+# charging is safe. Without this the router slowly DISCHARGES while plugged in:
+# core_app writes 1 to parameters/disable_charging, battery_core then computes a
+# charge current of zero, and the battery drifts down while the driver logs
+# "recharging!" every twenty seconds and gets nowhere. Measured: 100% to 93%
+# over twenty hours on a live device.
+#
+# The override is gated on the vendor's own limits - adapter present,
+# temperature inside temp_low/high_disable_charge, voltage below
+# recharge_voltage so a full cell is never topped up, and no charger fault. If
+# any of those is missing or unreadable it does nothing. Set to 0 to leave the
+# vendor entirely in charge.
+CHARGER_KEEP_CHARGING_ENABLED=1

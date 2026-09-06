@@ -36,6 +36,7 @@ LIMIT_STATE=""
 CHARGER_INPUT_LIMIT_MA=500
 CHARGER_POLL_SECONDS=10
 CHARGER_FOLLOW_PORT=1
+CHARGER_KEEP_CHARGING_ENABLED=1
 
 [ -r /etc/default/charger_limit ] && . /etc/default/charger_limit
 
@@ -130,6 +131,65 @@ target_ma() {
 		p=$(port_limit_ma) && [ "$p" -lt "$t" ] && t="$p"
 	fi
 	echo "$t"
+}
+
+BATT=/sys/class/power_supply/battery
+BATTP=$BATT/parameters
+
+# Read a positive integer from a file, or fail. Everything below feeds
+# arithmetic, and `[ "$x" -lt N ]` on a non-number exits 2, which an `if` reads
+# as false - the trap that has bitten this project three times.
+read_int() {
+	_v=$(cat "$1" 2>/dev/null)
+	case "$_v" in ''|*[!0-9-]*) return 1 ;; esac
+	echo "$_v"
+}
+
+# Undo the vendor's charge inhibit - but only when the vendor's OWN thresholds
+# all say charging is safe.
+#
+# core_app writes 1 to parameters/disable_charging (the string
+# "echo %d > /sys/class/power_supply/battery/parameters/disable_charging" is in
+# its binary), and battery_core then computes a charge current of zero:
+#
+#     if (bat->disable_chg != 0) mA=0; else mA=bat->current_max/1000;
+#
+# from battery_core_external_power_changed(), readable in the published vendor
+# source at forth32/kernel-Y900. The result on this device was a router that
+# slowly DISCHARGED while plugged in - 100% to 93% over twenty hours - while
+# the driver logged "recharging!" every twenty seconds and got nowhere.
+#
+# Overriding a vendor's battery management is not something to do casually, so
+# this refuses unless every gate the vendor itself defines is satisfied:
+# adapter present, temperature inside temp_low_disable_charge ..
+# temp_high_disable_charge, voltage below recharge_voltage (so a full battery is
+# never topped up - that is the vendor's own hysteresis, and it is good for the
+# cell), and the charger reporting no fault. If any gate is missing or
+# unreadable, we do nothing at all.
+allow_charging() {
+	[ "$CHARGER_KEEP_CHARGING_ENABLED" = "1" ] || return 0
+	[ -w "$BATTP/disable_charging" ] || return 0
+	_dis=$(read_int "$BATTP/disable_charging") || return 0
+	[ "$_dis" = "1" ] || return 0
+
+	[ "$(cat /sys/class/power_supply/usb/online 2>/dev/null)" = "1" ] || return 0
+
+	_t=$(read_int "$BATT/temp")                       || return 0
+	_lo=$(read_int "$BATTP/temp_low_disable_charge")  || return 0
+	_hi=$(read_int "$BATTP/temp_high_disable_charge") || return 0
+	[ "$_t" -gt "$_lo" ] && [ "$_t" -lt "$_hi" ]      || return 0
+
+	_uv=$(read_int "$BATT/voltage_now")               || return 0
+	_mv=$(( _uv / 1000 ))
+	_rv=$(read_int "$BATTP/recharge_voltage")         || return 0
+	[ "$_mv" -lt "$_rv" ]                             || return 0
+
+	_f=$(i2c_get "$CHG_BUS" "$CHG_ADDR" 0x09)
+	[ "$_f" = "0x00" ]                                || return 0
+
+	echo 0 > "$BATTP/disable_charging" 2>/dev/null || return 0
+	logger -t "$NAME" "cleared disable_charging (${_mv}mV < ${_rv}mV recharge, ${_t}C in ${_lo}..${_hi}, no faults)" 2>/dev/null || true
+	return 0
 }
 
 # Silence the DPM interrupts our own cap provokes.
@@ -245,6 +305,7 @@ watch_loop() {
 	_last=""
 	while :; do
 		apply_limit
+		allow_charging
 		_now="$LIMIT_STATE"
 		if [ "$_now" != "$_last" ]; then
 			logger -t "$NAME" "$_now" 2>/dev/null || true
@@ -356,7 +417,10 @@ case "$1" in
 		_pg=$(dmesg | grep -c 'power_good is 0')
 		_any=$(dmesg | grep -ci bq25601)
 		if [ "$_any" -eq 0 ]; then
-			echo "VBUS drops: unknown - no charger lines left in the dmesg ring"
+			_dc=$(cat "$BATTP/disable_charging" 2>/dev/null)
+		echo "charging:   $(cat $BATT/status 2>/dev/null), $(cat $BATT/capacity 2>/dev/null)%, $(( $(cat $BATT/voltage_now 2>/dev/null) / 1000 ))mV"
+		echo "            vendor disable_charging=${_dc:-?}, recharge below $(cat $BATTP/recharge_voltage 2>/dev/null)mV"
+		echo "VBUS drops: unknown - no charger lines left in the dmesg ring"
 			echo "            (it has wrapped; 'logread | grep charger_limit'"
 			echo "             shows what this watcher itself has done)"
 		else
