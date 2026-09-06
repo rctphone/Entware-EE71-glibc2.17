@@ -35,7 +35,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=dropbear
 PKG_VERSION:=2026.94
-PKG_RELEASE:=4
+PKG_RELEASE:=5
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.bz2
 PKG_SOURCE_URL:= \
@@ -103,6 +103,7 @@ endef
 
 define Package/dropbear/conffiles
 /etc/dropbear
+/etc/default/dropbear
 endef
 
 define Package/dropbearconvert
@@ -281,6 +282,13 @@ define Package/dropbear/install
 	$(LN) ../sbin/dropbear $(1)/usr/bin/dropbearkey
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./files/dropbear.init $(1)/etc/init.d/dropbear
+	# The init script has always sourced /etc/default/dropbear but the package
+	# never shipped it, so the file was whatever someone had left on the device
+	# by hand - which is how password authentication came to be enabled here by
+	# a manual edit rather than by anything reproducible. A conffile: opkg keeps
+	# a version the admin has changed.
+	$(INSTALL_DIR) $(1)/etc/default
+	$(INSTALL_CONF) ./files/dropbear.default $(1)/etc/default/dropbear
 	$(INSTALL_DIR) $(1)/etc/dropbear
 	# OpenSSH sftp-server for modern scp (SFTP protocol)
 	$(INSTALL_DIR) $(1)/usr/libexec

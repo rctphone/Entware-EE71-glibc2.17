@@ -1,0 +1,31 @@
+# Options for /etc/init.d/dropbear. Sourced by the init script.
+#
+# DROPBEAR_EXTRA_ARGS is appended to the daemon's command line. It is the one
+# place dropbear options belong: the init script has always sourced this file,
+# and an earlier attempt to add a separate DROPBEAR_DISABLE_PASSWORD_AUTH
+# variable was removed for being a second mechanism for a flag the script could
+# already pass (see the commit "drop the invented password-auth switch").
+#
+# EMPTY MEANS PASSWORD LOGINS ARE ALLOWED, and that is deliberate here. A
+# freshly flashed or factory-reset device has no authorized_keys, so shipping
+# `-s` would install a package and leave SSH unreachable with no way in. The
+# security that does NOT depend on this is in the init script itself: the
+# port-22 accept is bound to the LAN interfaces (bridge0, ecm0, wlan0, wlan1)
+# and new connections are DROPped everywhere else, so the carrier cannot reach
+# it either way.
+#
+# For key-only authentication once you have a key installed:
+#     DROPBEAR_EXTRA_ARGS="-s"
+#
+# Note what -s also does, because it is not obvious: it sets svr_opts.noauthpass,
+# which is one of the guards on 600-allow-blank-root-password. With passwords
+# allowed, root's password field is the only thing standing between a device
+# whose install-time password step failed and a passwordless root login. See the
+# note at the top of this package's Makefile.
+DROPBEAR_EXTRA_ARGS=""
+
+# Port, or [address:]port. /etc/init.d/dropbear derives the firewall rules from
+# this too, stripping any address prefix. The web UI writes it here rather than
+# editing the init script, which it used to do with a `sed` that corrupted the
+# script - see ee71-webui's ssh.cgi.
+#DROPBEAR_PORT=22
