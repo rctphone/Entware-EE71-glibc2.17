@@ -414,13 +414,20 @@ case "$1" in
 		# line survived, so the count read 0 whether the fix was working or the
 		# evidence had simply scrolled away. Report whether the evidence is
 		# still there before reporting the number.
+		# Outside the dmesg branch below: this is the charging state, and it
+		# is worth seeing whether or not the kernel ring has wrapped. The
+		# first version of these two lines was indented into the `if` and so
+		# only ever printed when the ring HAD wrapped - which is the one case
+		# where the rest of the block says it knows nothing.
+		_dc=$(cat "$BATTP/disable_charging" 2>/dev/null)
+		_mv=$(read_int "$BATT/voltage_now") && _mv=$(( _mv / 1000 )) || _mv="?"
+		echo "charging:   $(cat $BATT/status 2>/dev/null), $(cat $BATT/capacity 2>/dev/null)%, ${_mv}mV"
+		echo "            vendor disable_charging=${_dc:-?}, recharge below $(cat $BATTP/recharge_voltage 2>/dev/null)mV"
+
 		_pg=$(dmesg | grep -c 'power_good is 0')
 		_any=$(dmesg | grep -ci bq25601)
 		if [ "$_any" -eq 0 ]; then
-			_dc=$(cat "$BATTP/disable_charging" 2>/dev/null)
-		echo "charging:   $(cat $BATT/status 2>/dev/null), $(cat $BATT/capacity 2>/dev/null)%, $(( $(cat $BATT/voltage_now 2>/dev/null) / 1000 ))mV"
-		echo "            vendor disable_charging=${_dc:-?}, recharge below $(cat $BATTP/recharge_voltage 2>/dev/null)mV"
-		echo "VBUS drops: unknown - no charger lines left in the dmesg ring"
+			echo "VBUS drops: unknown - no charger lines left in the dmesg ring"
 			echo "            (it has wrapped; 'logread | grep charger_limit'"
 			echo "             shows what this watcher itself has done)"
 		else
